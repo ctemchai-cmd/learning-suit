@@ -32,12 +32,12 @@ type Gesture =
   | { kind: "erasing"; pointerId: number; path: Point[]; hits: Set<string> }
   | { kind: "panning"; pointerId: number; screen: Point; camera: Camera }
   /**
-   * Text/shape tools. Shapes: a click places a point (`hadPending` = this press is the second click);
-   * pressing and dragging draws from `start` (then `dragging`).
+   * Text/shape tools. Shapes are drawn click → move → click only (teacher's choice 2026-09-26): the first
+   * click places `start`, the second one (`hadPending`) finishes — however much the pointer wobbles.
    */
-  | { kind: "click"; pointerId: number; screen: Point; start: Point; dragging: boolean; hadPending: boolean };
+  | { kind: "click"; pointerId: number; screen: Point; start: Point; hadPending: boolean };
 
-type StepDraft = { slideId: string; tool: StepTool; toolVersion: number; start: Point; current: Point; drag?: true };
+type StepDraft = { slideId: string; tool: StepTool; toolVersion: number; start: Point; current: Point };
 type MovePreview = { ids: string[]; dx: number; dy: number; clone: boolean } | null;
 
 const boundsCache = new WeakMap<CanvasNode, Bounds>();
@@ -74,9 +74,6 @@ function withGitDraft(node: CanvasNode, edit: PendingEdit | null): CanvasNode {
   const projection = projectState(node.state, edit.machine, edit.draft);
   return projection.state === node.state ? node : { ...node, state: projection.state };
 }
-
-/** Shorter drags with a shape tool count as clicks (a trackpad click often moves a few pixels). */
-const DRAG_DRAW_MIN_PX = 12;
 
 /** Minor grid spacing (world units) at 100%; every GRID_MAJOR-th line is a major line. */
 const GRID_MINOR = 20;
@@ -126,12 +123,14 @@ function GridLayer({ camera, size }: { camera: Camera; size: { width: number; he
   </Layer>;
 }
 
-export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPosition, onToolbarPositionChange, onImageFiles, onRequestImagePicker, onWidgetSelected }: {
+export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPosition, onToolbarPositionChange, onImageFiles, onRequestImagePicker, onWidgetSelected, onContextMenu }: {
   slide: SlideDocument;
   /** A teaching widget was clicked: show its panel (the editor knows where the panel lives in this layout). */
   onWidgetSelected: () => void;
   favorites: EditorTool[];
   onFavoritesReorder: (order: EditorTool[]) => void;
+  /** Right-click (or Ctrl+click on a Mac) on the board, at this window position. */
+  onContextMenu?: (at: { x: number; y: number }) => void;
   toolbarPosition: ToolbarPosition;
   onToolbarPositionChange: (position: ToolbarPosition) => void;
   onImageFiles: (files: File[], world: Point | null) => void;
@@ -384,6 +383,8 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     trace(`down ${event.pointerType} b${event.button} ${tool}${gesture.current ? ` (busy: ${gesture.current.kind})` : ""}${event.target !== event.currentTarget && !(event.target instanceof HTMLCanvasElement) ? " (on overlay)" : ""}`);
     if (event.target !== event.currentTarget && !(event.target instanceof HTMLCanvasElement)) return;
     if (gesture.current || (event.button !== 0 && event.button !== 1)) return;
+    // Ctrl+click is the Mac right-click: it opens the board menu, it must not draw a dot.
+    if (event.button === 0 && event.ctrlKey) return;
     // Any open Text/Git DOM draft is flushed (or refuses) before the canvas changes selection.
     if (!useEditorStore.getState().flushPendingEdits()) return;
     const screen = pointerOf(event);
@@ -437,7 +438,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       return;
     }
     const pending = stepDraft && stepDraft.slideId === slide.id && stepDraft.tool === tool && stepDraft.toolVersion === toolVersion ? stepDraft : null;
-    beginGesture({ kind: "click", pointerId: event.pointerId, screen, start: pending?.start ?? world, dragging: false, hadPending: Boolean(pending) }, event);
+    beginGesture({ kind: "click", pointerId: event.pointerId, screen, start: pending?.start ?? world, hadPending: Boolean(pending) }, event);
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -505,13 +506,10 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
         return;
       }
       case "click": {
-        // Press-drag-release also draws a shape (like most drawing apps); the two-click way still works.
-        if (!isStepTool(tool) || !writable) return;
-        if (!current.dragging && Math.hypot(screen.x - current.screen.x, screen.y - current.screen.y) <= 6) return;
-        if (!current.dragging) { current.dragging = true; setSelectedIds([]); }
+        // Pressed for the second click: the preview keeps following until the release.
+        if (!isStepTool(tool) || !current.hadPending) return;
         const point = event.shiftKey ? constrainPoint(tool, current.start, world) : world;
-        const start = current.start;
-        schedule(() => setStepDraft({ slideId: slide.id, tool, toolVersion, start, current: point, drag: true }));
+        schedule(() => setStepDraft((draft) => draft ? { ...draft, current: point } : draft));
         return;
       }
     }
@@ -587,9 +585,8 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
         const moved = Math.hypot(screen.x - current.screen.x, screen.y - current.screen.y);
         if (isStepTool(tool)) {
           const point = event.shiftKey ? constrainPoint(tool, current.start, world) : world;
-          // A real drag draws the shape at once. A small wobble while clicking (trackpads move a few
-          // pixels) is still a click: the first click places the start, the second one finishes.
-          if (current.dragging && moved >= DRAG_DRAW_MIN_PX) { setStepDraft(null); finishStep(tool, current.start, point); return; }
+          // Movement while pressed never matters (trackpads wobble; a habit of dragging still works):
+          // the first click places the start, the second one finishes.
           if (current.hadPending) { finishStep(tool, current.start, point); return; }
           setSelectedIds([]);
           setStepDraft({ slideId: slide.id, tool, toolVersion, start: current.start, current: world });
@@ -617,6 +614,21 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   };
 
   const onPointerCancel = () => { trace("pointercancel"); interruptGesture(); };
+
+  const onBoardContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
+    // DOM editors on the board (text, Git file) keep the browser's own menu (copy/paste text).
+    if (event.target !== event.currentTarget && !(event.target instanceof HTMLCanvasElement)) return;
+    event.preventDefault();
+    if (gesture.current || !onContextMenu) return;
+    setStepDraft(null);
+    if (tool === "select") {
+      // Like most editors: right-clicking an object selects it (unless it is already in the selection).
+      const hit = nodeAt(pointerOf(event));
+      if (!hit) setSelectedIds([]);
+      else if (!useEditorStore.getState().selectedIds.includes(hit.id)) setSelectedIds([hit.id]);
+    }
+    onContextMenu({ x: event.clientX, y: event.clientY });
+  };
 
   const onDoubleClick = (event: React.MouseEvent<HTMLDivElement>) => {
     // Pointer capture retargets the click/dblclick to the viewport container.
@@ -716,7 +728,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
 
   return <div ref={containerRef} data-testid="canvas-viewport" className="relative h-full w-full touch-none select-none overflow-hidden outline-none"
     style={{ background: slide.background, cursor }}
-    onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel}
+    onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onContextMenu={onBoardContextMenu}
     onLostPointerCapture={(event) => { if (gesture.current?.pointerId === event.pointerId) { trace("lostpointercapture"); interruptGesture(); } }}
     onPointerLeave={() => laserRef.current?.hide()}
     onDoubleClick={onDoubleClick}
@@ -775,7 +787,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     </div>}
     {/* The file editor is for the Select tool; with pen/shapes/text/eraser the board underneath takes the clicks. */}
     {selectedGit && tool === "select" && <GitCanvasOverlay node={selectedGit} slideId={slide.id} camera={camera} writable={writable} />}
-    {activeStep && <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full border border-slate-300 bg-white/95 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">{activeStep.drag ? "ปล่อยเพื่อจบ" : "คลิกจุดที่ 2 เพื่อจบ"} · Shift จัดมุม · Esc ยกเลิก</div>}
+    {activeStep && <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full border border-slate-300 bg-white/95 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">คลิกจุดที่ 2 เพื่อจบ · Shift จัดมุม · Esc ยกเลิก</div>}
     {textSession && <TextEditorOverlay session={textSession} camera={camera}
       onChange={(draft) => {
         const next = { ...textSession, draft };

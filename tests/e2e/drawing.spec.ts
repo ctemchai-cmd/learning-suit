@@ -1,5 +1,5 @@
 import { test, expect } from "playwright/test";
-import { createProject, objectRows, readDraft, stageBox } from "./helpers";
+import { createProject, drawRect, objectRows, readDraft, stageBox } from "./helpers";
 
 test("CAN-04: pen point, long pen stroke and highlighter; eraser removes whole strokes and Undo restores", async ({ page }) => {
   await createProject(page, "ปากกาและยางลบ");
@@ -144,24 +144,29 @@ test("CAN-13: laser pointer (K) shows a dot with a fading trail and never draws,
   await expect(laser).toHaveCount(0);
 });
 
-test("CAN-14: shapes draw by press-drag-release too; “วาดต่อเนื่อง” is remembered; the pen draws over a selected Git widget", async ({ page }) => {
-  await createProject(page, "ลากวาด");
+test("CAN-14: shapes are click → move → click only (a drag just places the first point); “วาดต่อเนื่อง” is remembered; the pen draws over a selected Git widget", async ({ page }) => {
+  await createProject(page, "คลิกสองครั้ง");
   const box = await stageBox(page);
   await page.getByRole("button", { name: "สี่เหลี่ยม", exact: true }).click();
+  // An old habit of dragging does not draw: the press only places the first point…
   await page.mouse.move(box.cx - 300, box.cy - 200);
   await page.mouse.down();
-  await page.mouse.move(box.cx - 150, box.cy - 100, { steps: 8 });
-  await expect(page.getByText("ปล่อยเพื่อจบ")).toBeVisible();
+  await page.mouse.move(box.cx - 250, box.cy - 170, { steps: 8 });
   await page.mouse.up();
+  await expect(page.getByText(/คลิกจุดที่ 2 เพื่อจบ/)).toBeVisible();
   const rows = await objectRows(page);
+  await expect(rows).toHaveCount(0);
+  // …and the second click finishes from that first point.
+  await page.mouse.move(box.cx - 150, box.cy - 100, { steps: 4 });
+  await page.mouse.click(box.cx - 150, box.cy - 100);
   await expect(rows).toHaveText(["rectangle"]);
   const rect = (await readDraft(page))!.content.document.slides[0].nodes[0] as { width: number; height: number };
-  expect(rect.width).toBeGreaterThan(100);
-  expect(rect.height).toBeGreaterThan(60);
+  expect(rect.width).toBeGreaterThan(140);
+  expect(rect.height).toBeGreaterThan(90);
   // Default: back to Select with the new shape selected.
   await expect(page.getByRole("button", { name: "เลือก", exact: true }).first()).toHaveAttribute("aria-pressed", "true");
 
-  // “วาดต่อเนื่อง” survives a reload; then two drags make two shapes without re-picking the tool.
+  // “วาดต่อเนื่อง” survives a reload; then two shapes in a row without re-picking the tool.
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "วงกลม", exact: true }).click();
   await page.getByRole("tab", { name: "Properties" }).click();
@@ -171,10 +176,9 @@ test("CAN-14: shapes draw by press-drag-release too; “วาดต่อเน
   await page.getByRole("tab", { name: "Properties" }).click();
   await expect(page.getByRole("checkbox", { name: /วาดต่อเนื่อง/ })).toBeChecked();
   for (const dy of [0, 140]) {
-    await page.mouse.move(box.cx + 100, box.cy - 200 + dy);
-    await page.mouse.down();
-    await page.mouse.move(box.cx + 220, box.cy - 120 + dy, { steps: 6 });
-    await page.mouse.up();
+    await page.mouse.click(box.cx + 100, box.cy - 200 + dy);
+    await page.mouse.move(box.cx + 220, box.cy - 120 + dy, { steps: 4 });
+    await page.mouse.click(box.cx + 220, box.cy - 120 + dy);
   }
   await expect(await objectRows(page)).toHaveText(["ellipse", "ellipse", "rectangle"]);
   await expect(page.getByRole("button", { name: "วงกลม", exact: true }).first()).toHaveAttribute("aria-pressed", "true");
@@ -225,4 +229,55 @@ test("CAN-15: keys 1–8 pick favorites in toolbar order; dragging a favorite re
   await page.reload();
   await expect(toolbar).toBeVisible();
   expect(await order()).toEqual(["ข้อความ", "เลือก", "ปากกา", "สี่เหลี่ยม", "ลูกศร", "วงกลม"]);
+});
+
+test("CAN-17: right-click menu — clear pen strokes or all drawings in one Undo step; locked objects stay; object actions", async ({ page }) => {
+  await createProject(page, "คลิกขวา");
+  const box = await stageBox(page);
+  const stroke = async (x: number, y: number) => {
+    await page.mouse.move(x, y); await page.mouse.down();
+    await page.mouse.move(x + 60, y + 30, { steps: 4 }); await page.mouse.up();
+  };
+  await page.getByRole("button", { name: "ปากกา", exact: true }).click();
+  await stroke(box.cx - 200, box.cy - 100);
+  await stroke(box.cx - 100, box.cy - 100);
+  await drawRect(page, box.cx + 60, box.cy + 40, box.cx + 200, box.cy + 140);
+  // Lock the rectangle: it must survive every “clear”.
+  await page.keyboard.press("Meta+l");
+  await page.getByRole("button", { name: "ปากกา", exact: true }).click();
+  await stroke(box.cx - 200, box.cy + 100);
+  const rows = await objectRows(page);
+  await expect(rows).toHaveCount(4);
+
+  // With the pen still active, a right-click opens the board menu.
+  await page.mouse.click(box.cx, box.cy - 200, { button: "right" });
+  const menu = page.getByRole("menu", { name: "เมนูคลิกขวา" });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "วาง" })).toBeFocused();
+  await expect(menu.getByRole("menuitem", { name: /ล้างเส้นปากกา\/ไฮไลต์ \(3\)/ })).toBeEnabled();
+  await menu.getByRole("menuitem", { name: /ล้างเส้นปากกา\/ไฮไลต์/ }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(rows).toHaveText(["rectangle"]);
+  // One Undo brings all three strokes back.
+  await page.getByRole("button", { name: "เลิกทำ" }).click();
+  await expect(rows).toHaveCount(4);
+
+  // Keyboard: Escape closes; arrows move; Enter runs.
+  await page.mouse.click(box.cx, box.cy - 200, { button: "right" });
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+
+  // Right-click on an object (Select tool) selects it and offers object actions.
+  await page.keyboard.press("v");
+  await drawRect(page, box.cx - 300, box.cy + 150, box.cx - 220, box.cy + 210);
+  await page.keyboard.press("Escape");
+  await page.mouse.click(box.cx - 260, box.cy + 180, { button: "right" });
+  await expect(menu.getByRole("menuitem", { name: "ทำสำเนา" })).toBeVisible();
+  await menu.getByRole("menuitem", { name: "ทำสำเนา" }).click();
+  await expect(rows).toHaveCount(6);
+  await page.mouse.click(box.cx + 300, box.cy - 220, { button: "right" });
+  await menu.getByRole("menuitem", { name: /ล้างสิ่งที่วาดทั้งหมด \(5\)/ }).click();
+  await expect(rows).toHaveText(["rectangle"]);
+  const locked = (await readDraft(page))!.content.document.slides[0].nodes as { type: string; locked: boolean }[];
+  expect(locked).toEqual([expect.objectContaining({ type: "rectangle", locked: true })]);
 });

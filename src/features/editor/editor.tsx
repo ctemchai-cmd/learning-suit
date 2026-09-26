@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import * as Dialog from "@radix-ui/react-dialog";
-import { ArrowLeft, ChevronLeft, ChevronRight, Download, Expand, GraduationCap, Keyboard, PanelRightClose, PanelRightOpen, Pencil, Redo2, Save, Undo2, X } from "lucide-react";
+import { ArrowLeft, BringToFront, ChevronLeft, ChevronRight, ClipboardPaste, Copy, CopyPlus, Download, Eraser, Expand, GraduationCap, Keyboard, Lock, PanelRightClose, PanelRightOpen, Pencil, Redo2, Save, SendToBack, SquareDashedMousePointer, Trash2, Undo2, X } from "lucide-react";
 import Canvas from "@/features/canvas/canvas";
 import { ImageCache, ImageCacheContext } from "@/features/canvas/image-cache";
 import { konvaFontMetrics } from "@/features/canvas/font-metrics";
@@ -38,6 +38,7 @@ import PropertiesPanel from "./properties-panel";
 import ExportDialog, { type ArchiveExporter } from "./export-dialog";
 import { copyToClipboard, preparePaste } from "./clipboard";
 import ShortcutHelp from "./shortcut-help";
+import ContextMenu, { type MenuEntry } from "./context-menu";
 
 export type CloudUi = {
   useCloudVersion: () => Promise<void>;
@@ -79,6 +80,12 @@ function reorderSelection(action: ZOrderAction) {
   if (orderedIds.every((id, index) => id === slide.nodes[index].id)) return;
   state.transact({ label: "จัดลำดับวัตถุ", affectedSlideId: slide.id, commands: [{ type: "nodes.reorder", slideId: slide.id, orderedIds }] });
 }
+
+/** What “ล้าง…” in the board menu removes (locked objects always stay). */
+const CLEARABLE: Record<"freehand" | "drawings", ReadonlySet<CanvasNode["type"]>> = {
+  freehand: new Set(["pen", "highlighter"]),
+  drawings: new Set(["pen", "highlighter", "rectangle", "ellipse", "line", "arrow", "text"]),
+};
 
 const FAVORITES_KEY = "learning-suit-favorites-v1";
 const THUMBNAIL_NODE_LIMIT = 1500;
@@ -323,6 +330,29 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
     if (current.id === state.activeSlideId) state.setSelectedIds(nodes.map((node) => node.id));
     return true;
   }, []);
+  const duplicateSelected = useCallback(() => {
+    const state = useEditorStore.getState();
+    const current = state.history?.content.document.slides.find((item) => item.id === state.activeSlideId);
+    const source = current?.nodes.filter((node) => state.selectedIds.includes(node.id) && !node.locked) ?? [];
+    if (!source.length) return;
+    const copies = source.map((node) => ({ ...structuredClone(node), id: crypto.randomUUID(), x: node.x + DEFAULTS.pasteOffset, y: node.y + DEFAULTS.pasteOffset }) as CanvasNode);
+    insertNodes(copies, [], "ทำสำเนาวัตถุ");
+  }, [insertNodes]);
+  /**
+   * Clears what was drawn on this slide in one Undo step: `freehand` = pen/highlighter strokes only,
+   * `drawings` = strokes + shapes + lines/arrows + text. Locked objects, images and simulators stay.
+   */
+  const clearSlide = useCallback((what: "freehand" | "drawings") => {
+    const state = useEditorStore.getState();
+    const current = state.history?.content.document.slides.find((item) => item.id === state.activeSlideId);
+    if (!current) return;
+    const ids = current.nodes.filter((node) => !node.locked && CLEARABLE[what].has(node.type)).map((node) => node.id);
+    if (!ids.length) return;
+    if (state.transact({ label: what === "freehand" ? "ล้างเส้นปากกา/ไฮไลต์" : "ล้างสิ่งที่วาดทั้งหมด", affectedSlideId: current.id, commands: [{ type: "nodes.remove", slideId: current.id, ids }] })) {
+      state.setSelectedIds([]);
+    }
+  }, []);
+
   /** Opens the right panel on the simulator tab, wherever it lives in this layout (docked, overlay, teaching mode). */
   const showWidgetPanel = () => {
     setRightPanel("git");
@@ -394,6 +424,16 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
   }, [ownerId, projectId, insertNodes]);
 
   const [copied, setCopied] = useState<number | null>(null);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const closeMenu = useCallback(() => setMenuAt(null), [setMenuAt]);
+  const copySelected = useCallback(() => {
+    const state = useEditorStore.getState();
+    const current = state.history?.content.document.slides.find((item) => item.id === state.activeSlideId);
+    if (!current || !state.selectedIds.length) return;
+    const count = copyToClipboard(ownerId, projectId, current.nodes.filter((node) => state.selectedIds.includes(node.id) && !node.locked), state.history!.content.document.assets);
+    state.setNotice(null);
+    if (count) setCopied(count);
+  }, [ownerId, projectId]);
   useEffect(() => {
     if (copied === null) return;
     const timer = setTimeout(() => setCopied(null), 1600);
@@ -421,21 +461,8 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
         if (key === "a" && current) { event.preventDefault(); state.setSelectedIds(current.nodes.filter((node) => !node.locked).map((node) => node.id)); return; }
         if (event.code === "BracketRight" || event.code === "BracketLeft") { event.preventDefault(); reorderSelection(event.code === "BracketRight" ? event.shiftKey ? "front" : "forward" : event.shiftKey ? "back" : "backward"); return; }
         if (key === "l" && current && state.selectedIds.length) { event.preventDefault(); lockSelected(); return; }
-        if (key === "c" && current && state.selectedIds.length) {
-          event.preventDefault();
-          const count = copyToClipboard(ownerId, projectId, current.nodes.filter((node) => state.selectedIds.includes(node.id) && !node.locked), state.history!.content.document.assets);
-          state.setNotice(null);
-          if (count) setCopied(count);
-          return;
-        }
-        if (key === "d" && current) {
-          event.preventDefault();
-          const source = current.nodes.filter((node) => state.selectedIds.includes(node.id) && !node.locked);
-          if (!source.length) return;
-          const copies = source.map((node) => ({ ...structuredClone(node), id: crypto.randomUUID(), x: node.x + DEFAULTS.pasteOffset, y: node.y + DEFAULTS.pasteOffset }) as CanvasNode);
-          insertNodes(copies, [], "ทำสำเนาวัตถุ");
-          return;
-        }
+        if (key === "c" && current && state.selectedIds.length) { event.preventDefault(); copySelected(); return; }
+        if (key === "d" && current) { event.preventDefault(); duplicateSelected(); return; }
         if (key === "v") {
           // Let the native paste event deliver system images; fall back to the in-app clipboard.
           if (pasteTimer.current) clearTimeout(pasteTimer.current);
@@ -483,7 +510,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("paste", onPaste);
     return () => { window.removeEventListener("keydown", onKeyDown); window.removeEventListener("paste", onPaste); };
-  }, [ownerId, projectId, insertImages, insertNodes, pasteInternal, removeSelected, lockSelected]);
+  }, [ownerId, projectId, insertImages, insertNodes, pasteInternal, removeSelected, lockSelected, copySelected, duplicateSelected]);
 
 
   // Some browsers keep a navigated-away page alive (bfcache) with its Web Lock; release it explicitly.
@@ -524,6 +551,34 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
     else { setRightOpenPreference(open); store(RIGHT_PANEL_KEY, String(open)); }
     if (open && !rightPanel) setRightPanel("properties");
   };
+  /** Right-click menu: object actions for the selection, then clearing what was drawn on this slide. */
+  const boardMenu = (current: SlideDocument): MenuEntry[] => {
+    const state = useEditorStore.getState();
+    const chosen = current.nodes.filter((node) => state.selectedIds.includes(node.id) && !node.locked);
+    const count = (what: "freehand" | "drawings") => current.nodes.filter((node) => !node.locked && CLEARABLE[what].has(node.type)).length;
+    const freehand = count("freehand"), drawings = count("drawings");
+    const edit = !state.writable;
+    const objectItems: MenuEntry[] = chosen.length ? [
+      { kind: "item", label: chosen.length > 1 ? `ทำสำเนา ${chosen.length} ชิ้น` : "ทำสำเนา", icon: <CopyPlus size={15} />, shortcut: "⌘D", disabled: edit, onSelect: duplicateSelected },
+      { kind: "item", label: "คัดลอก", icon: <Copy size={15} />, shortcut: "⌘C", onSelect: copySelected },
+      { kind: "item", label: "นำขึ้นหน้าสุด", icon: <BringToFront size={15} />, shortcut: "⌘⇧]", disabled: edit, onSelect: () => reorderSelection("front") },
+      { kind: "item", label: "ส่งไปหลังสุด", icon: <SendToBack size={15} />, shortcut: "⌘⇧[", disabled: edit, onSelect: () => reorderSelection("back") },
+      { kind: "item", label: "ล็อก (ล้างแล้วไม่หาย)", icon: <Lock size={15} />, shortcut: "⌘L", disabled: edit, onSelect: lockSelected },
+      { kind: "item", label: chosen.length > 1 ? `ลบ ${chosen.length} ชิ้น` : "ลบ", icon: <Trash2 size={15} />, shortcut: "⌫", disabled: edit, danger: true, onSelect: removeSelected },
+      { kind: "separator" },
+    ] : [
+      { kind: "item", label: "วาง", icon: <ClipboardPaste size={15} />, shortcut: "⌘V", disabled: edit, onSelect: () => void pasteInternal() },
+      { kind: "item", label: "เลือกทั้งหมด", icon: <SquareDashedMousePointer size={15} />, shortcut: "⌘A",
+        disabled: !current.nodes.some((node) => !node.locked), onSelect: () => state.setSelectedIds(current.nodes.filter((node) => !node.locked).map((node) => node.id)) },
+      { kind: "separator" },
+    ];
+    return [
+      ...objectItems,
+      { kind: "item", label: `ล้างเส้นปากกา/ไฮไลต์ (${freehand})`, icon: <Eraser size={15} />, disabled: edit || !freehand, danger: true, onSelect: () => clearSlide("freehand") },
+      { kind: "item", label: `ล้างสิ่งที่วาดทั้งหมด (${drawings})`, icon: <Eraser size={15} />, disabled: edit || !drawings, danger: true, onSelect: () => clearSlide("drawings") },
+    ];
+  };
+
   const panelContent = <>
     <div className="flex border-b border-slate-200 p-2" role="tablist" aria-label="แผงด้านขวา">
       {(["properties", "objects", "git"] as const).map((tab) => <button key={tab} role="tab" aria-selected={panelTab === tab}
@@ -613,7 +668,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
           onInsertGit={() => insertWidget("git")} onInsertData={() => insertWidget("data")} onInsertDeploy={() => insertWidget("deploy")} onInsertAi={() => insertWidget("ai")} onImage={() => fileInput.current?.click()} />}
         <div className="min-w-0 flex-1">{slide
           ? <Canvas key={slide.id} slide={slide} favorites={favorites} onFavoritesReorder={setFavorites} toolbarPosition={toolbarPosition} onToolbarPositionChange={setToolbarPosition}
-            onImageFiles={(files, world) => void insertImages(files, world)} onRequestImagePicker={() => fileInput.current?.click()} onWidgetSelected={showWidgetPanel} />
+            onImageFiles={(files, world) => void insertImages(files, world)} onRequestImagePicker={() => fileInput.current?.click()} onWidgetSelected={showWidgetPanel} onContextMenu={setMenuAt} />
           : <div className="flex h-full items-center justify-center muted">กำลังโหลดกระดาน…</div>}</div>
         {rightVisible && <aside aria-label="แผงคุณสมบัติ" className={`w-[280px] shrink-0 overflow-y-auto border-l border-slate-200 bg-white ${narrowLayout || teachingMode ? "absolute right-0 top-0 z-40 h-full shadow-2xl" : ""}`}>{panelContent}</aside>}
         {teachingMode && overlayPanel && <aside aria-label="แผงชั่วคราวระหว่างสอน" className="absolute right-0 top-0 z-40 h-full w-[280px] overflow-y-auto border-l border-slate-200 bg-white shadow-2xl">
@@ -628,6 +683,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
         getSnapshot={() => useEditorStore.getState().history?.content ?? null}
         activeSlideId={activeSlideId} selectedIds={selectedIds} images={images} exportArchive={exportArchive} />}
       <ShortcutHelp open={helpOpen} onOpenChange={setHelpOpen} />
+      {menuAt && slide && <ContextMenu at={menuAt} onClose={closeMenu} entries={boardMenu(slide)} />}
       <Dialog.Root open={dialog !== null} onOpenChange={(open) => { if (!open) setDialog(null); }}>
         <Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><Dialog.Content className="dialog-content">
           <Dialog.Title className="text-xl font-semibold">{dialog?.kind === "rename-project" ? "เปลี่ยนชื่อบทเรียน" : dialog?.kind === "rename-slide" ? "เปลี่ยนชื่อสไลด์" : "ลบสไลด์"}</Dialog.Title>
