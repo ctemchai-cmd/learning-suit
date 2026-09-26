@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowUpRight, Bot, ChevronDown, ChevronsDown, ChevronsUp, ChevronUp, Circle, Database, GitBranch, Rocket, Highlighter, Image as ImageIcon, Lock, PenLine, Slash, Square, Type, Unlock } from "lucide-react";
+import { ArrowUpRight, Bot, PanelTop, Table, ChevronDown, ChevronsDown, ChevronsUp, ChevronUp, Circle, Database, GitBranch, Rocket, Highlighter, Image as ImageIcon, Lock, PenLine, Slash, Square, Type, Unlock } from "lucide-react";
 import type { CanvasNode, SlideDocument } from "@/domain/document/model";
 import type { DocumentTransaction } from "@/domain/document/commands";
 import { hasZOrderChange, type ZOrderAction } from "@/domain/document/z-order";
+import { stencilSpec } from "@/domain/document/stencils";
+import { STENCIL_DOM_ICON } from "./stencil-picker";
 
 export function nodeLabel(node: CanvasNode): string {
   if (node.type === "text") return `text: ${[...(node.text.split("\n")[0] ?? "")].slice(0, 28).join("")}`;
@@ -12,6 +14,8 @@ export function nodeLabel(node: CanvasNode): string {
   if (node.type === "data-simulator") return "data-simulator";
   if (node.type === "deploy-simulator") return "deploy-simulator";
   if (node.type === "ai-simulator") return "ai-simulator";
+  if (node.type === "table") return `${node.variant === "class" ? "กล่องคลาส" : "ตาราง"}: ${[...(node.rows[0]?.cells.join(" · ") ?? "")].slice(0, 28).join("")}`;
+  if (node.type === "stencil") return `${stencilSpec(node.kind).name}${node.label && node.label !== stencilSpec(node.kind).name ? `: ${node.label}` : ""}`;
   return node.type;
 }
 function NodeIcon({ node }: { node: CanvasNode }) {
@@ -25,6 +29,8 @@ function NodeIcon({ node }: { node: CanvasNode }) {
     case "highlighter": return <Highlighter {...props} />;
     case "text": return <Type {...props} />;
     case "image": return <ImageIcon {...props} />;
+    case "table": return node.variant === "class" ? <PanelTop {...props} /> : <Table {...props} />;
+    case "stencil": { const Icon = STENCIL_DOM_ICON[node.kind]; return <Icon {...props} />; }
     case "git-simulator": return <GitBranch {...props} />;
     case "data-simulator": return <Database {...props} />;
     case "deploy-simulator": return <Rocket {...props} />;
@@ -70,6 +76,7 @@ export default function ObjectsPanel({ slide, selectedIds, setSelectedIds, writa
             title={node.locked ? "ปลดล็อกก่อนเลือกวัตถุ" : "คลิกเพื่อเลือก · Shift+คลิกเพื่อเลือกเพิ่ม"} disabled={node.locked}
             onClick={(event) => setSelectedIds(event.shiftKey ? selectedIds.includes(node.id) ? selectedIds.filter((id) => id !== node.id) : [...selectedIds, node.id] : [node.id])}>
             <NodeIcon node={node} /><span className="truncate">{label}</span>
+            {node.groupId && <span className="ml-auto shrink-0 rounded bg-slate-100 px-1.5 text-[10px] text-slate-500" title="อยู่ในกลุ่ม (คลิกขวา → แยกกลุ่ม)">กลุ่ม</span>}
           </button>
           <button className="app-button icon-button !h-7 !w-7 shrink-0" title={node.locked ? "ปลดล็อก" : "ล็อก"} aria-label={node.locked ? `ปลดล็อก ${label}` : `ล็อก ${label}`} disabled={!writable}
             onClick={() => {

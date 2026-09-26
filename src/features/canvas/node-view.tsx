@@ -11,6 +11,8 @@ import { GitWidgetView } from "@/features/git-simulator/git-widget-view";
 import type { GitPreview, GitTab, GitTransferAnimation } from "@/features/git-simulator/session-store";
 import { CANVAS_FONT } from "./font-metrics";
 import { useAssetImage } from "./image-cache";
+import { StencilBody } from "./stencil-view";
+import { TableBody } from "./table-view";
 
 // Shared node renderer (ADR 0002): the editor and the offscreen export draw the same views
 // from Drawing info. Selection chrome is never drawn here.
@@ -61,6 +63,10 @@ export function NodeBody({ node, hitWidth = 8, git, flow }: { node: CanvasNode; 
         fill={node.color} align={node.align} wrap="word" />;
     case "image":
       return <ImageBody node={node} hitWidth={hitWidth} />;
+    case "stencil":
+      return <StencilBody node={node} />;
+    case "table":
+      return <TableBody node={node} />;
     case "git-simulator":
       return <GitWidgetView node={node} activeTab={git?.activeTab ?? null} transfer={git?.transfer ?? null} preview={git?.preview ?? null} fontFamily={CANVAS_FONT} />;
     case "data-simulator":

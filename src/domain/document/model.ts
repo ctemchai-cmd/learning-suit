@@ -2,6 +2,7 @@ import type { DataState, DataView } from "../data/model";
 import type { DeployState, DeployView } from "../deploy/model";
 import type { AiState, AiView } from "../ai/model";
 import type { GitSimulationState } from "../git/model";
+import { withFreshGroups } from "./groups";
 
 export type Point = { x: number; y: number };
 export type Bounds = { x: number; y: number; width: number; height: number };
@@ -17,6 +18,8 @@ export type NodeBase = {
   rotation: number;
   opacity: number;
   locked: boolean;
+  /** Objects sharing a group ID are selected, moved and scaled together (one level, no nesting). */
+  groupId?: string;
 };
 export type RectNode = NodeBase & StrokeStyle & {
   type: "rectangle";
@@ -59,6 +62,39 @@ export type ImageNode = NodeBase & {
   assetId: string;
   width: number;
   height: number;
+};
+/** Ready-made pictures for diagrams: device/window frames to draw in, and captioned icons (plan 03 §stencils). */
+export const STENCIL_FRAMES = ["browser", "phone", "laptop", "window", "terminal", "editor"] as const;
+export const STENCIL_ICONS = [
+  "server", "database", "cloud", "internet", "user", "users", "computer", "mobile",
+  "file", "folder", "code", "git", "lock", "key", "ai", "api",
+] as const;
+export type StencilKind = (typeof STENCIL_FRAMES)[number] | (typeof STENCIL_ICONS)[number];
+/** `color` = the frame/icon colour; `label` = address bar, window title or icon caption (may be empty). */
+export type StencilNode = NodeBase & {
+  type: "stencil";
+  kind: StencilKind;
+  width: number;
+  height: number;
+  color: string;
+  label: string;
+};
+/** One table row; `divider` draws a section line above it (class boxes: attributes | methods). */
+export type TableRow = { cells: string[]; divider: boolean };
+/**
+ * Table on the board (plan 03 §tables). `grid` = a normal table (optional header row); `class` = one-column box
+ * whose first row is the title (class diagram / database table). Row heights follow the wrapped text.
+ */
+export type TableNode = NodeBase & {
+  type: "table";
+  variant: "grid" | "class";
+  columns: number[];
+  rows: TableRow[];
+  header: boolean;
+  headerFill: string;
+  stroke: string;
+  color: string;
+  fontSize: number;
 };
 /**
  * Lesson step shown by a Git widget (display only; the full state is always kept):
@@ -127,7 +163,7 @@ export function widgetNodeSize(node: WidgetNode): { width: number; height: numbe
 
 export type CanvasNode =
   | RectNode | EllipseNode | LineNode | ArrowNode
-  | FreehandNode | TextNode | ImageNode | GitSimulatorNode | DataSimulatorNode | DeploySimulatorNode | AiSimulatorNode;
+  | FreehandNode | TextNode | ImageNode | StencilNode | TableNode | GitSimulatorNode | DataSimulatorNode | DeploySimulatorNode | AiSimulatorNode;
 
 export type SlideDocument = {
   id: string;
@@ -194,11 +230,11 @@ export function duplicateSlide(slide: SlideDocument): SlideDocument {
     ...structuredClone(slide),
     id: crypto.randomUUID(),
     name: withSuffix(slide.name, " สำเนา"),
-    nodes: slide.nodes.map((node) => ({ ...structuredClone(node), id: crypto.randomUUID() })),
+    nodes: withFreshGroups(slide.nodes.map((node) => ({ ...structuredClone(node), id: crypto.randomUUID() }))),
   };
 }
 
 /** Deep copies nodes with fresh IDs and an offset; Git state is copied independently. */
 export function cloneNodes(nodes: CanvasNode[], dx: number, dy: number): CanvasNode[] {
-  return nodes.map((node) => ({ ...structuredClone(node), id: crypto.randomUUID(), x: node.x + dx, y: node.y + dy }));
+  return withFreshGroups(nodes.map((node) => ({ ...structuredClone(node), id: crypto.randomUUID(), x: node.x + dx, y: node.y + dy })));
 }

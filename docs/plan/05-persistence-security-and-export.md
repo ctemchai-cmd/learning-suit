@@ -327,6 +327,15 @@ Validate/freeze content → collect referenced assets → resolve bytes ทั�
 
 Semantic round trip เปรียบเทียบ document หลัง normalizeIDs/storage paths/exporttime ต้องตรง geometry,styles,lock,z-order,slideorder,ข้อความและ Git state ทุกค่า Bytes ของภาพเดิมต้อง sha256 ตรง
 
+## 9b. PWA และการเปิดแอปตอนเน็ตหลุด (เพิ่ม 2026-09-26)
+
+- Manifest `src/app/manifest.ts` (`/manifest.webmanifest`): standalone, start_url `/projects`, ไอคอน 192/512 + maskable 512 (`public/icons/`, สร้างจาก `src/app/icon.svg` ด้วย `scripts/build-pwa-icons.mjs`), `apple-icon.png` + `appleWebApp` สำหรับ iOS
+- Service worker `public/sw.js` ลงทะเบียนเฉพาะ production (dev ถอนทิ้งเสมอ): `/_next/static/*` cache-first (ชื่อไฟล์มี hash จึงไม่เก่า, เก็บ ≤ 400 รายการ); การเปิดหน้า network-first (ออนไลน์ได้ build ใหม่เสมอ) เก็บสำเนาหน้าที่โหลดสำเร็จ 200 ของ URL นั้นตรงๆ ใช้เมื่อออฟไลน์หรือเน็ตช้าเกิน 4 วินาที; ไม่เก็บ `/login`, `/change-password`, `/auth/*`, redirect, RSC, POST และคำขอข้าม origin (Supabase ผ่านตรง); หน้าที่ไม่เคยเปิดได้หน้า “ยังไม่ได้เชื่อมต่อ” ภาษาไทย
+- หน้าเป็น shell ไม่มีข้อมูลผู้ใช้ (งานโหลดฝั่ง client จาก IndexedDB/Cloud ตามสิทธิ์เดิม) cache ของ service worker จึงไม่เก็บข้อมูลส่วนตัว
+- การเปลี่ยนหน้าแบบ client-side ไม่โหลด HTML เอง หน้าจึงส่ง message `warm` บอก worker ให้เก็บหน้าปัจจุบันและไฟล์ที่โหลดไปแล้ว (เฉพาะ same-origin) ครั้งแรกที่เปิดก็ใช้ออฟไลน์ได้
+- `sw.js` ส่งด้วย `Cache-Control: no-cache, no-store, must-revalidate` และ CSP `default-src 'self'` ; proxy ไม่แตะ `sw.js`/manifest
+- ปุ่ม “ติดตั้งแอป” แสดงเมื่อ browser ส่ง `beforeinstallprompt` (Chromium) เท่านั้น Safari ติดตั้งจากเมนูแชร์
+
 ## 10. ลำดับ implement และ acceptance
 
 1. Local repositories+ownerkeys+writerlock+recovery

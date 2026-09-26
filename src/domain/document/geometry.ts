@@ -1,4 +1,5 @@
 import { isWidgetNode, widgetNodeSize, type Bounds, type CanvasNode, type Point, type TextNode } from "./model";
+import { tableLayout } from "./table";
 
 export interface FontMetrics { measureText(node: TextNode): { width: number; height: number } }
 export const fallbackFontMetrics: FontMetrics = {
@@ -28,11 +29,16 @@ function aabb(points: Point[], padding: number): Bounds {
 export function getNodeBounds(node: CanvasNode, metrics: FontMetrics = fallbackFontMetrics): Bounds {
   let points: Point[];
   let pad = 0;
-  if (node.type === "rectangle" || node.type === "ellipse" || node.type === "image") {
+  if (node.type === "rectangle" || node.type === "ellipse" || node.type === "image" || node.type === "stencil") {
     // Expand by half the stroke BEFORE rotating: rotated miter corners reach the expanded box corners
-    // (a conservative AABB that never crops the stroke).
-    const half = node.type === "image" ? 0 : node.strokeWidth / 2;
+    // (a conservative AABB that never crops the stroke). Stencils draw their outline inside the box.
+    const half = node.type === "image" || node.type === "stencil" ? 0 : node.strokeWidth / 2;
     points = [{ x: -half, y: -half }, { x: node.width + half, y: -half }, { x: node.width + half, y: node.height + half }, { x: -half, y: node.height + half }];
+  } else if (node.type === "table") {
+    const { width, height } = tableLayout(node, metrics);
+    // The border is drawn on the edge: half of its width lies outside.
+    points = [{ x: 0, y: 0 }, { x: width, y: 0 }, { x: width, y: height }, { x: 0, y: height }];
+    pad = 1;
   } else if (node.type === "text") {
     const { height } = metrics.measureText(node);
     points = [{ x: 0, y: 0 }, { x: node.width, y: 0 }, { x: node.width, y: height }, { x: 0, y: height }];

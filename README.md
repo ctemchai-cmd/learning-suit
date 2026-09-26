@@ -37,6 +37,13 @@ Migration, RLS, private bucket และ RPC อยู่ใน `supabase/migrat
 2. Vercel: Import repository → ตั้ง `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (Preview/Production แยกกัน) **ก่อน** build ครั้งแรก → Deploy
 3. Smoke: login → สร้างโปรเจกต์ → วาด → เปิดจากอีกเครื่อง → เปลี่ยนรหัสผ่าน
 
+### ติดตั้งเป็นแอป (PWA)
+
+- Chrome/Edge: ปุ่ม “ติดตั้งแอป” ในหน้าโปรเจกต์ (หรือไอคอนติดตั้งในแถบที่อยู่) → เปิดเป็นหน้าต่างของตัวเอง
+- iPad/iPhone (Safari): ปุ่มแชร์ → “เพิ่มไปยังหน้าจอโฮม”
+- เน็ตหลุดระหว่างสอน: หน้าที่เคยเปิดตอนออนไลน์ (รายการโปรเจกต์ และโปรเจกต์ที่เปิดแล้ว) ยังเปิด/รีโหลดได้ งานที่วาดเก็บในเครื่องก่อนแล้ว sync เมื่อกลับมาออนไลน์ Service worker (`public/sw.js`) ทำงานเฉพาะ production build
+- เปลี่ยนไอคอน: แก้ `src/app/icon.svg` แล้วรัน `node scripts/build-pwa-icons.mjs`
+
 ## คำสั่งตรวจ
 
 ```sh

@@ -9,6 +9,7 @@ const ICONS = {
   repeat: "repeat", user: "user", bot: "bot", clipboard: "clipboard-list", hand: "hand", wrench: "wrench", pencil: "pencil",
   note: "notebook-pen", check: "circle-check", fail: "circle-x", empty: "circle-dashed", server: "server", database: "database", wind: "wind",
   code: "code-xml", shield: "shield-check", alert: "triangle-alert",
+  cloud: "cloud", users: "users", monitor: "monitor", gitBranch: "git-branch", webhook: "webhook", folderClosed: "folder",
 };
 
 const n = (value) => Number(value);

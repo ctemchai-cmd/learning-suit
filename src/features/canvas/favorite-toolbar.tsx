@@ -16,13 +16,13 @@ const REORDER_THRESHOLD = 6;
  * order: drag a tool sideways to move it (a plain click still picks it), or Alt+←/→ on a focused tool.
  * The first eight carry their number key.
  */
-export default function FavoriteToolbar({ favorites, position, viewport, onPositionChange, onReorder, onImage }: {
+export default function FavoriteToolbar({ favorites, position, viewport, onPositionChange, onReorder, onAction }: {
   favorites: EditorTool[];
   position: ToolbarPosition;
   viewport: { width: number; height: number };
   onPositionChange: (position: ToolbarPosition) => void;
   onReorder: (order: EditorTool[]) => void;
-  onImage: () => void;
+  onAction: (tool: EditorTool) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const drag = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
@@ -103,7 +103,7 @@ export default function FavoriteToolbar({ favorites, position, viewport, onPosit
   };
   const cancelTool = () => { reorder.current = null; setDraggingId(null); setPreview(null); };
   const pick = (item: ToolItem) => {
-    if (isActionTool(item.id)) { if (writable) onImage(); } else setTool(item.id);
+    if (isActionTool(item.id)) { if (writable) onAction(item.id); } else setTool(item.id);
   };
   const keyTool = (event: KeyboardEvent<HTMLButtonElement>, item: ToolItem, index: number) => {
     if (!event.altKey || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;

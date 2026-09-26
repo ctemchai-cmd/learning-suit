@@ -4,9 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as Dialog from "@radix-ui/react-dialog";
-import { BookOpen, Copy, FileUp, FolderOpen, KeyRound, LogOut, Pencil, Plus, Trash2, X } from "lucide-react";
+import { BookOpen, Copy, FileUp, FolderOpen, KeyRound, LogOut, MonitorDown, Pencil, Plus, Trash2, X } from "lucide-react";
 import { LIMITS } from "@/domain/document/limits";
 import { useRuntime } from "@/services/runtime";
+import { installApp, useCanInstall } from "@/features/pwa/pwa";
 import type { ProjectCard, ProjectService } from "@/services/projects/local-project-service";
 
 function Thumbnail({ service, project }: { service: ProjectService; project: ProjectCard }) {
@@ -35,6 +36,7 @@ type DialogState = { kind: "rename" | "delete"; project: ProjectCard } | null;
 export default function Dashboard() {
   const runtime = useRuntime();
   const router = useRouter();
+  const canInstall = useCanInstall();
   const [projects, setProjects] = useState<ProjectCard[] | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,6 +106,7 @@ export default function Dashboard() {
       <div className="flex items-center gap-3"><div className="rounded-xl bg-slate-900 p-2 text-white"><BookOpen size={22} /></div><div><div className="text-lg font-bold tracking-tight">Learning Suit</div><div className="text-xs muted">พื้นที่เตรียมบทเรียนของคุณ</div></div></div>
       {service && <div className="flex flex-wrap items-center gap-2">
         {email && <span className="text-sm muted">{email}</span>}
+        {canInstall && <button className="app-button" onClick={() => void installApp()} title="ติดตั้ง Learning Suit เป็นแอปในเครื่องนี้ (เปิดเป็นหน้าต่างของตัวเอง)"><MonitorDown size={16} /> ติดตั้งแอป</button>}
         {signOut && <Link className="app-button" href="/change-password" title="เปลี่ยนรหัสผ่านของบัญชีนี้"><KeyRound size={16} /> เปลี่ยนรหัสผ่าน</Link>}
         {signOut && <button className="app-button" onClick={() => void signOut().then(() => router.replace("/login?notice=signed-out"))} title="ออกจากระบบเฉพาะเบราว์เซอร์นี้ (งานที่ยังไม่ sync เก็บไว้ในเครื่องสำหรับบัญชีนี้)"><LogOut size={16} /> ออกจากระบบ</button>}
         <button className="app-button" disabled={busy} onClick={() => fileInput.current?.click()} title="นำเข้าไฟล์ .learning-suit เป็นโปรเจกต์ใหม่"><FileUp size={17} /> Import</button>

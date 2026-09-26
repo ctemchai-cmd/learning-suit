@@ -56,13 +56,15 @@ test("CAN-07: Option+drag below threshold does not clone; above threshold clones
   await page.keyboard.press("Escape");
   await page.mouse.up();
   await expect(rows).toHaveCount(1);
-  // Releasing Option mid-gesture still clones exactly once.
+  // Releasing Option mid-gesture still clones exactly once. (⌘/Ctrl held after the press = no snapping.)
   await page.mouse.move(box.cx - 20, box.cy + 10);
   await page.mouse.down();
+  await page.keyboard.down("ControlOrMeta");
   await page.mouse.move(box.cx + 20, box.cy + 50, { steps: 5 });
   await page.keyboard.up("Alt");
   await page.mouse.move(box.cx + 60, box.cy + 80, { steps: 3 });
   await page.mouse.up();
+  await page.keyboard.up("ControlOrMeta");
   await expect(rows).toHaveCount(2);
   const nodes = await nodesOf(page);
   expect(nodes[1].x - nodes[0].x).toBeCloseTo(80, 0);

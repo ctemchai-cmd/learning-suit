@@ -3,6 +3,7 @@
 import type { AssetReference, CanvasNode } from "@/domain/document/model";
 import { storagePathFor } from "@/domain/document/assets";
 import { DEFAULTS } from "@/domain/document/limits";
+import { withFreshGroups } from "@/domain/document/groups";
 import { getLocalAsset, putLocalAsset } from "@/services/persistence/local-db";
 
 // In-app object clipboard (plan03 §6). Lives in memory for the browser session only; it never
@@ -38,7 +39,7 @@ export async function preparePaste(target: { ownerId: string; projectId: string 
   if (!source || !source.nodes.length || source.ownerId !== target.ownerId) return null;
   source.pasteCount++;
   const offset = DEFAULTS.pasteOffset * source.pasteCount;
-  const nodes = source.nodes.map((node) => ({ ...structuredClone(node), id: crypto.randomUUID(), x: node.x + offset, y: node.y + offset, locked: false }) as CanvasNode);
+  const nodes = withFreshGroups(source.nodes.map((node) => ({ ...structuredClone(node), id: crypto.randomUUID(), x: node.x + offset, y: node.y + offset, locked: false }) as CanvasNode));
   if (source.projectId === target.projectId) return { nodes, assets: [] };
   const remap = new Map<string, AssetReference>();
   for (const asset of source.assets) {

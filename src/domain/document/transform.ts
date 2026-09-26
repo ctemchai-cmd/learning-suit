@@ -1,6 +1,7 @@
 import { getContentBounds, type FontMetrics } from "./geometry";
 import { LIMITS } from "./limits";
-import { isWidgetNode, widgetNodeSize, type CanvasNode, type Point, type WidgetNode } from "./model";
+import { isWidgetNode, widgetNodeSize, type CanvasNode, type Point, type TableNode, type WidgetNode } from "./model";
+import { setTableWidth, tableLayout } from "./table";
 
 /**
  * Pure transform geometry for the selection overlay (plan 03 §5, plan 02 §2 invariants).
@@ -83,10 +84,15 @@ function localBox(node: CanvasNode, metrics: FontMetrics): LocalBox {
     case "rectangle":
     case "ellipse":
     case "image":
+    case "stencil":
       return { minX: 0, minY: 0, maxX: node.width, maxY: node.height };
     case "text": {
       const height = metrics.measureText(node).height;
       return { minX: 0, minY: 0, maxX: node.width, maxY: Number.isFinite(height) && height > 0 ? height : 0 };
+    }
+    case "table": {
+      const { width, height } = tableLayout(node, metrics);
+      return { minX: 0, minY: 0, maxX: width, maxY: height };
     }
     case "git-simulator":
     case "data-simulator":
@@ -134,11 +140,13 @@ function singleHandleIds(node: CanvasNode, box: LocalBox): TransformHandleId[] {
   switch (node.type) {
     case "rectangle":
     case "ellipse":
+    case "stencil":
       return [...BOX_HANDLES, "rotate"];
     case "line":
     case "arrow":
       return ["start", "end", "rotate"];
     case "text":
+    case "table":
       return ["e", "w", "rotate"];
     case "image":
       return [...CORNER_HANDLES, "rotate"];
@@ -314,7 +322,8 @@ export function transformSingle(
   const pointer = clampPoint(pointerWorld);
   switch (start.type) {
     case "rectangle":
-    case "ellipse": {
+    case "ellipse":
+    case "stencil": {
       if (!isBoxHandle(handle)) return { ...start };
       const box = localBox(start, metrics);
       const next = resizeBox(box, handle, toLocal(start, pointer), opts.keepAspect && isCornerHandle(handle),
@@ -332,6 +341,15 @@ export function transformSingle(
     case "deploy-simulator":
     case "ai-simulator":
       return isCornerHandle(handle) ? scaleWidgetFromCorner(start, handle, pointer, metrics) : { ...start };
+    case "table": {
+      // Width only (rows follow the text); every column keeps its share, "w" keeps the right edge anchored.
+      if (handle !== "e" && handle !== "w") return { ...start };
+      const box = localBox(start, metrics);
+      const next = resizeBox(box, handle, toLocal(start, pointer), false, {
+        minWidth: LIMITS.tableColumnMin * start.columns.length, minHeight: 0, maxWidth: MAX_COORDINATE, maxHeight: Infinity, minFactor: 0, maxFactor: Infinity,
+      });
+      return setTableWidth(withOrigin(start, toWorld(start, { x: next.minX, y: 0 })) as TableNode, next.maxX - next.minX);
+    }
     case "text": {
       if (handle !== "e" && handle !== "w") return { ...start };
       const box = localBox(start, metrics);
@@ -447,8 +465,13 @@ function selectionFactorRange(nodes: CanvasNode[], anchor: Point, frameSize: num
       case "rectangle":
       case "ellipse":
       case "image":
+      case "stencil":
         min = Math.max(min, MIN_SIZE / node.width, MIN_SIZE / node.height);
         max = Math.min(max, MAX_COORDINATE / node.width, MAX_COORDINATE / node.height);
+        break;
+      case "table":
+        min = Math.max(min, LIMITS.tableColumnMin / Math.min(...node.columns), LIMITS.tableFontMin / node.fontSize);
+        max = Math.min(max, LIMITS.tableFontMax / node.fontSize, MAX_COORDINATE / node.columns.reduce((sum, width) => sum + width, 0));
         break;
       case "text":
         min = Math.max(min, MIN_TEXT_WIDTH / node.width, MIN_FONT_SIZE / node.fontSize);
@@ -483,10 +506,17 @@ function scaleNodeAbout(node: CanvasNode, anchor: Point, factor: number): Canvas
     case "rectangle":
     case "ellipse":
     case "image":
+    case "stencil":
       return {
         ...node, x, y,
         width: scaleWithin(node.width, factor, MIN_SIZE, MAX_COORDINATE),
         height: scaleWithin(node.height, factor, MIN_SIZE, MAX_COORDINATE),
+      };
+    case "table":
+      return {
+        ...node, x, y,
+        columns: node.columns.map((width) => scaleWithin(width, factor, LIMITS.tableColumnMin, MAX_COORDINATE)),
+        fontSize: scaleWithin(node.fontSize, factor, LIMITS.tableFontMin, LIMITS.tableFontMax),
       };
     case "text":
       return {

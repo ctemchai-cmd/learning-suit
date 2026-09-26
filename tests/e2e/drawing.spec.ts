@@ -281,3 +281,183 @@ test("CAN-17: right-click menu — clear pen strokes or all drawings in one Undo
   const locked = (await readDraft(page))!.content.document.slides[0].nodes as { type: string; locked: boolean }[];
   expect(locked).toEqual([expect.objectContaining({ type: "rectangle", locked: true })]);
 });
+
+test("CAN-18: ready-made pictures — I opens the picker, a pick lands selected in the middle, the label is edited in Properties, Undo and reload behave", async ({ page }) => {
+  await createProject(page, "ภาพประกอบ");
+  const box = await stageBox(page);
+  await page.mouse.move(box.cx, box.cy);
+  await page.keyboard.press("i");
+  const picker = page.getByRole("dialog", { name: "ภาพประกอบ" });
+  await expect(picker).toBeVisible();
+  await picker.getByRole("button", { name: "หน้าต่าง Browser", exact: true }).click();
+  await expect(picker).toBeHidden();
+  await expect(page.getByText("เลือก 1 วัตถุ")).toBeVisible();
+  await expect.poll(async () => (await readDraft(page))!.content.document.slides[0].nodes).toEqual([
+    expect.objectContaining({ type: "stencil", kind: "browser", label: "example.com", width: 560, height: 360 }),
+  ]);
+
+  const url = page.getByRole("textbox", { name: "ที่อยู่เว็บ (URL)" });
+  await url.fill("localhost:3000");
+  await url.press("Enter");
+  await expect.poll(async () => (await readDraft(page))!.content.document.slides[0].nodes[0]).toMatchObject({ label: "localhost:3000" });
+  await page.getByRole("button", { name: "เลิกทำ" }).click();
+  await expect.poll(async () => (await readDraft(page))!.content.document.slides[0].nodes[0]).toMatchObject({ label: "example.com" });
+
+  // The tool entry in the left panel opens the same picker; icons carry their Thai caption.
+  await page.getByRole("button", { name: "ภาพประกอบ (มือถือ, Browser, ไอคอน)", exact: true }).first().click();
+  await picker.getByRole("button", { name: "ฐานข้อมูล", exact: true }).click();
+  await expect(await objectRows(page)).toHaveCount(2);
+  await expect.poll(async () => (await readDraft(page))!.content.document.slides[0].nodes.map((node) => [node.kind, node.label]))
+    .toEqual([["browser", "example.com"], ["database", "ฐานข้อมูล"]]);
+
+  await page.reload();
+  await expect(await objectRows(page)).toHaveCount(2);
+  await expect(page.getByText("หน้าต่าง Browser: example.com")).toBeVisible();
+});
+
+test("CAN-19: tables — type across cells with Tab, each cell is one Undo step, double-click / right-click a cell, drag a column border; class boxes add lines with Enter", async ({ page }) => {
+  await createProject(page, "ตาราง");
+  const nodes = async () => (await readDraft(page))!.content.document.slides[0].nodes as unknown as { kind?: string; variant?: string; columns: number[]; rows: { cells: string[] }[] }[];
+  await page.getByRole("button", { name: "ตาราง", exact: true }).first().click();
+  const cell = page.getByRole("textbox", { name: /^แก้ข้อความในตาราง/ });
+  await expect(cell).toHaveAttribute("aria-label", "แก้ข้อความในตาราง แถว 1 คอลัมน์ 1");
+  await expect(cell).toBeFocused();
+  // The placeholder header is selected: typing replaces it; Tab selects the next cell the same way.
+  for (const [text, key] of [["เมนู", "Tab"], ["ราคา", "Tab"], ["หมวด", "Tab"], ["ลาเต้", "Tab"], ["60", "ControlOrMeta+Enter"]]) {
+    await page.keyboard.type(text);
+    await page.keyboard.press(key);
+  }
+  await expect(cell).toHaveCount(0);
+  await expect.poll(async () => (await nodes())[0].rows.map((row) => row.cells)).toEqual([["เมนู", "ราคา", "หมวด"], ["ลาเต้", "60", ""], ["", "", ""]]);
+  await page.getByRole("button", { name: "เลิกทำ" }).click();
+  await expect.poll(async () => (await nodes())[0].rows[1].cells).toEqual(["ลาเต้", "", ""]);
+
+  // Column borders: drag the first one 60 px to the right (zoom 100%).
+  const border = page.getByRole("separator", { name: "ปรับความกว้างคอลัมน์ 1" });
+  const box = (await border.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 60, box.y + 10, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await nodes())[0].columns).toEqual([220, 100, 160]);
+
+  // Double-click the second row, second column; right-click the last row to add one below.
+  const border1 = (await border.boundingBox())!;
+  await page.mouse.dblclick(border1.x + 40, border1.y + 57);
+  await expect(cell).toHaveAttribute("aria-label", "แก้ข้อความในตาราง แถว 2 คอลัมน์ 2");
+  await page.keyboard.type("65");
+  await page.keyboard.press("Escape");
+  await expect(cell).toHaveCount(0);
+  expect((await nodes())[0].rows[1].cells).toEqual(["ลาเต้", "", ""]);
+  await page.mouse.click(border1.x - 40, border1.y + 95, { button: "right" });
+  await page.getByRole("menuitem", { name: "เพิ่มแถวด้านล่าง" }).click();
+  await expect.poll(async () => (await nodes())[0].rows).toHaveLength(4);
+
+  // Class box: Enter from the title goes to the first line, then adds a new line under the current one.
+  await page.keyboard.press("i");
+  await page.getByRole("dialog", { name: "ภาพประกอบ" }).getByRole("button", { name: "กล่องคลาส / ตารางฐานข้อมูล" }).click();
+  await expect(cell).toBeFocused();
+  for (const [text, key] of [["Order", "Enter"], ["id: uuid", "Enter"], ["total: number", "ControlOrMeta+Enter"]]) {
+    await page.keyboard.type(text);
+    await page.keyboard.press(key);
+  }
+  await expect.poll(async () => (await nodes())[1].rows.map((row) => row.cells[0])).toEqual(["Order", "id: uuid", "total: number", "name: string", "login()"]);
+
+  await page.reload();
+  await expect(await objectRows(page)).toHaveCount(2);
+  await expect(page.getByText("กล่องคลาส: Order")).toBeVisible();
+});
+
+test("CAN-20: groups — right-click groups the selection, a click selects and moves the whole group, double-click picks one piece, ungroup; ⌘G works too", async ({ page }) => {
+  await createProject(page, "กลุ่ม");
+  const box = await stageBox(page);
+  await drawRect(page, box.cx - 200, box.cy - 50, box.cx - 100, box.cy + 50);
+  await drawRect(page, box.cx + 100, box.cy - 50, box.cx + 200, box.cy + 50);
+  const nodes = async () => (await readDraft(page))!.content.document.slides[0].nodes as unknown as { id: string; x: number; groupId?: string }[];
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.mouse.click(box.cx - 150, box.cy - 50, { button: "right" });
+  await page.getByRole("menuitem", { name: "จับกลุ่ม 2 ชิ้น" }).click();
+  await expect.poll(async () => new Set((await nodes()).map((node) => node.groupId)).size).toBe(1);
+  expect((await nodes())[0].groupId).toBeTruthy();
+
+  // A click on one member selects both; dragging moves both.
+  await page.keyboard.press("Escape");
+  await page.mouse.click(box.cx + 150, box.cy - 50);
+  await expect(page.getByText("เลือก 2 วัตถุ")).toBeVisible();
+  const before = (await nodes()).map((node) => node.x);
+  await page.mouse.move(box.cx + 150, box.cy - 50);
+  await page.mouse.down();
+  await page.mouse.move(box.cx + 190, box.cy - 50, { steps: 6 });
+  await page.mouse.up();
+  // Both move by the same amount (snapped to the grid, so about 40).
+  await expect.poll(async () => (await nodes()).map((node, index) => node.x - before[index])).toEqual([expect.any(Number), expect.any(Number)]);
+  const moved = (await nodes()).map((node, index) => node.x - before[index]);
+  expect(moved[0]).toBeCloseTo(moved[1], 5);
+  expect(Math.abs(moved[0] - 40)).toBeLessThanOrEqual(10);
+
+  // Double-click picks the one piece inside the group.
+  await page.mouse.dblclick(box.cx + 170, box.cy - 50);
+  await expect(page.getByText("เลือก 1 วัตถุ")).toBeVisible();
+  // Off the top-centre resize handle of the now single selection.
+  await page.mouse.click(box.cx + 170, box.cy - 50, { button: "right" });
+  await page.getByRole("menuitem", { name: "แยกกลุ่ม" }).click();
+  await expect.poll(async () => (await nodes()).every((node) => !node.groupId)).toBe(true);
+  await page.keyboard.press("Escape");
+  await page.mouse.click(box.cx + 170, box.cy - 50);
+  await expect(page.getByText("เลือก 1 วัตถุ")).toBeVisible();
+
+  // Keyboard: ⌘A then ⌘G groups again; Undo ungroups.
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("ControlOrMeta+g");
+  await expect.poll(async () => (await nodes()).every((node) => Boolean(node.groupId))).toBe(true);
+  await page.getByRole("button", { name: "เลิกทำ" }).click();
+  await expect.poll(async () => (await nodes()).every((node) => !node.groupId)).toBe(true);
+});
+
+test("CAN-21: dragging snaps — edges line up with a nearby object (pink guide), otherwise to the grid; ⌘ held moves freely", async ({ page }) => {
+  await createProject(page, "แนว");
+  const box = await stageBox(page);
+  await drawRect(page, box.cx - 200, box.cy - 60, box.cx - 100, box.cy + 20);
+  await drawRect(page, box.cx + 50, box.cy + 40, box.cx + 150, box.cy + 120);
+  const nodes = async () => (await readDraft(page))!.content.document.slides[0].nodes as unknown as { x: number; y: number }[];
+  const guides = () => page.evaluate(() => {
+    const stage = (window as unknown as { Konva: { stages: { find: (selector: string) => { attrs: { stroke?: string } }[] }[] } }).Konva.stages[0];
+    return stage.find("Line").filter((line) => line.attrs.stroke === "#EC4899").length;
+  });
+  const [first, second] = await nodes();
+  await page.keyboard.press("Escape");
+
+  // Grab the second one on its top edge and bring its top 3 px below the first one's top: it snaps level, a guide shows.
+  let grab = { x: box.cx + 80, y: box.cy + 40 };
+  await page.mouse.move(grab.x, grab.y);
+  await page.mouse.down();
+  await page.mouse.move(grab.x, grab.y - 50, { steps: 4 });
+  await page.mouse.move(grab.x, grab.y - 97, { steps: 4 });
+  await expect.poll(guides).toBeGreaterThan(0);
+  await page.mouse.up();
+  await expect.poll(guides).toBe(0);
+  await expect.poll(async () => (await nodes())[1].y).toBeCloseTo(first.y, 5);
+  let current = (await nodes())[1];
+  // Where the grabbed point ended up after the snap.
+  grab = { x: grab.x + (current.x - second.x), y: grab.y + (current.y - second.y) };
+
+  // Far from anything: the position lands on the grid (10 board units at 100%; the box includes the 1 px half stroke).
+  await page.mouse.move(grab.x, grab.y);
+  await page.mouse.down();
+  await page.mouse.move(grab.x + 137, grab.y + 223, { steps: 6 });
+  await page.mouse.up();
+  await expect.poll(async () => (await nodes())[1].y).not.toBe(current.y);
+  const snapped = (await nodes())[1];
+  for (const value of [snapped.x - 1, snapped.y - 1]) expect(Math.abs(Math.round(value / 10) * 10 - value)).toBeLessThan(1e-6);
+  grab = { x: grab.x + (snapped.x - current.x), y: grab.y + (snapped.y - current.y) };
+  current = snapped;
+
+  // ⌘/Ctrl held after the press: exact pointer movement.
+  await page.mouse.move(grab.x, grab.y);
+  await page.mouse.down();
+  await page.keyboard.down("ControlOrMeta");
+  await page.mouse.move(grab.x + 7, grab.y + 3, { steps: 4 });
+  await page.mouse.up();
+  await page.keyboard.up("ControlOrMeta");
+  await expect.poll(async () => (await nodes())[1].x - current.x).toBeCloseTo(7, 5);
+});

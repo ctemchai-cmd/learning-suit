@@ -94,7 +94,7 @@ export function TransformOverlay({ nodes, camera, metrics, containerRef, onPrevi
   return <>
     {handles.map(({ id, world }) => {
       const screen = worldToScreen(world, camera);
-      return <button key={id} type="button" aria-label={LABELS[id]} title={LABELS[id]}
+      return <button key={id} type="button" aria-label={LABELS[id]} title={LABELS[id]} data-board-chrome
         className={`absolute z-20 h-3.5 w-3.5 touch-none border-2 border-blue-600 bg-white shadow-sm ${id === "rotate" ? "rounded-full" : "rounded-[3px]"}`}
         style={{ left: screen.x, top: screen.y, transform: "translate(-50%, -50%)", cursor: CURSORS[id] }}
         onPointerDown={(event) => {

@@ -3,7 +3,7 @@ import { DATA_LIMITS } from "../data/model";
 import { DEPLOY_LIMITS } from "../deploy/model";
 import { AI_LIMITS } from "../ai/model";
 import { LIMITS } from "./limits";
-import type { ProjectContent } from "./model";
+import { STENCIL_FRAMES, STENCIL_ICONS, type ProjectContent } from "./model";
 
 const codePoints = (value: string) => [...value].length;
 const uuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
@@ -20,6 +20,7 @@ const base = {
   rotation: z.number().finite(),
   opacity: z.number().finite().min(0.05).max(1),
   locked: z.boolean(),
+  groupId: uuid.optional(),
 };
 const stroke = {
   stroke: color,
@@ -39,6 +40,24 @@ const text = z.strictObject({
   color, align: z.enum(["left", "center", "right"]),
 });
 const image = z.strictObject({ ...base, type: z.literal("image"), assetId: uuid, width: size, height: size });
+const tableRow = z.strictObject({
+  cells: z.array(z.string().refine((v) => codePoints(v) <= LIMITS.tableCellCodePoints, "Cell text is at most 500 characters")),
+  divider: z.boolean(),
+});
+const table = z.strictObject({
+  ...base, type: z.literal("table"), variant: z.enum(["grid", "class"]),
+  columns: z.array(z.number().finite().min(LIMITS.tableColumnMin).max(LIMITS.coordinate)).min(1).max(LIMITS.tableColumns),
+  rows: z.array(tableRow).min(1).max(LIMITS.tableRows),
+  header: z.boolean(), headerFill: color, stroke: color, color,
+  fontSize: z.number().finite().min(LIMITS.tableFontMin).max(LIMITS.tableFontMax),
+}).superRefine((node, ctx) => {
+  if (node.rows.some((row) => row.cells.length !== node.columns.length)) ctx.addIssue({ code: "custom", message: "Every row needs one cell per column" });
+  if (node.variant === "class" && node.columns.length !== 1) ctx.addIssue({ code: "custom", message: "A class box has one column" });
+});
+const stencil = z.strictObject({
+  ...base, type: z.literal("stencil"), kind: z.enum([...STENCIL_FRAMES, ...STENCIL_ICONS]), width: size, height: size, color,
+  label: z.string().refine((v) => codePoints(v) <= LIMITS.stencilLabelCodePoints && !/[\r\n\u2028\u2029]/.test(v), "Label is one line of at most 60 characters"),
+});
 
 const fileSnapshot = z.strictObject({
   name: z.string().refine((v) => v === v.trim() && codePoints(v) >= 1 && codePoints(v) <= 120 && !/[\\/\x00-\x1F\x7F-\x9F]/.test(v)),
@@ -191,7 +210,7 @@ const aiSimulator = z.strictObject({
   scale: z.number().finite().min(0.5).max(4), view: z.enum(["history", "thinking", "memory", "agent", "ccMemory"]), state: aiState,
 });
 
-export const canvasNodeSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, arrow, pen, highlighter, text, image, gitSimulator, dataSimulator, deploySimulator, aiSimulator]);
+export const canvasNodeSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, arrow, pen, highlighter, text, image, stencil, table, gitSimulator, dataSimulator, deploySimulator, aiSimulator]);
 export const slideSchema = z.strictObject({ id: uuid, name: title, background: color, nodes: z.array(canvasNodeSchema) });
 export const assetSchema = z.strictObject({
   id: uuid, mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]),

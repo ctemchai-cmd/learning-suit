@@ -1,31 +1,39 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlignCenter, AlignLeft, AlignRight, Lock, Trash2 } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, BetweenHorizontalEnd, BetweenVerticalEnd, Lock, Trash2 } from "lucide-react";
 import { isWidgetNode, type CanvasNode, type SlideDocument } from "@/domain/document/model";
 import { DEFAULTS, LIMITS } from "@/domain/document/limits";
 import { useEditorStore, type EditorTool } from "./store";
 import { getNodeFrame } from "@/domain/document/transform";
 import { konvaFontMetrics } from "@/features/canvas/font-metrics";
 import type { ToolDefaults } from "./tool-defaults";
+import { insertColumn, insertRow } from "@/domain/document/table";
 
-type Field = "opacity" | "stroke" | "strokeWidth" | "strokeStyle" | "fill" | "headLength" | "headWidth" | "color" | "fontSize" | "align" | "rotation";
+type Field = "opacity" | "stroke" | "strokeWidth" | "strokeStyle" | "fill" | "headLength" | "headWidth" | "color" | "fontSize" | "align" | "rotation" | "label" | "headerFill" | "header";
 
 const STROKED = new Set(["rectangle", "ellipse", "line", "arrow", "pen", "highlighter"]);
 const supports = (node: CanvasNode, field: Field): boolean => {
   switch (field) {
     case "opacity": return true;
     case "rotation": return !isWidgetNode(node);
-    case "stroke": case "strokeWidth": case "strokeStyle": return STROKED.has(node.type);
+    case "stroke": return STROKED.has(node.type) || node.type === "table";
+    case "strokeWidth": case "strokeStyle": return STROKED.has(node.type);
     case "fill": return node.type === "rectangle" || node.type === "ellipse";
     case "headLength": case "headWidth": return node.type === "arrow";
-    case "color": case "fontSize": case "align": return node.type === "text";
+    case "color": return node.type === "text" || node.type === "stencil" || node.type === "table";
+    case "fontSize": return node.type === "text" || node.type === "table";
+    case "align": return node.type === "text";
+    case "label": return node.type === "stencil";
+    case "headerFill": return node.type === "table";
+    case "header": return node.type === "table" && node.variant === "grid";
   }
 };
 const read = (node: CanvasNode, field: Field): unknown => (node as unknown as Record<string, unknown>)[field];
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 function sanitize(field: Field, value: unknown): unknown {
+  if (field === "label" && typeof value === "string") return [...value.replace(/[\r\n\u2028\u2029]+/gu, " ")].slice(0, LIMITS.stencilLabelCodePoints).join("");
   if (typeof value !== "number") return value;
   if (field === "opacity") return clamp(value, LIMITS.opacityMin, LIMITS.opacityMax);
   if (field === "strokeWidth") return clamp(value, LIMITS.strokeWidthMin, LIMITS.strokeWidthMax);
@@ -48,7 +56,9 @@ function applyField(nodes: CanvasNode[], field: Field, value: unknown): CanvasNo
   const clean = sanitize(field, value);
   return nodes.filter((node) => supports(node, field)).map((node) => field === "rotation"
     ? rotateAboutCenter(node, clean as number)
-    : ({ ...node, [field]: clean } as CanvasNode));
+    : node.type === "table" && field === "fontSize"
+      ? { ...node, fontSize: clamp(clean as number, LIMITS.tableFontMin, LIMITS.tableFontMax) }
+      : ({ ...node, [field]: clean } as CanvasNode));
 }
 
 /** Range / color inputs: preview on `input`, commit once on native `change` (release / picker close). */
@@ -122,6 +132,41 @@ function NumberField({ label, value, min, max, step, mixed, disabled, onCommit, 
       }} />
     {disabled && disabledReason && <span className="mt-1 block text-xs muted">{disabledReason}</span>}
   </label>;
+}
+
+/** One-line text: commit on Enter or blur, Escape restores; bound to the selection present when editing started. */
+function TextField({ label, value, mixed, disabled, maxLength, onCommit }: { label: string; value: string; mixed?: boolean; disabled: boolean; maxLength: number; onCommit: (value: string) => void }) {
+  const [text, setText] = useState<string | null>(null);
+  const commitAtStart = useRef<((value: string) => void) | null>(null);
+  const commit = () => {
+    const target = commitAtStart.current ?? onCommit;
+    commitAtStart.current = null;
+    if (text === null) return;
+    setText(null);
+    if (text !== value) target(text);
+  };
+  return <label className="block">{label}
+    <input className="field mt-2" type="text" aria-label={label} value={text ?? (mixed ? "" : value)} placeholder={mixed ? "หลายค่า" : "(ไม่มีข้อความ)"} maxLength={maxLength} disabled={disabled}
+      onFocus={() => { commitAtStart.current = onCommit; }}
+      onChange={(event) => { if (commitAtStart.current === null) commitAtStart.current = onCommit; setText(event.target.value); }}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") { event.preventDefault(); commit(); }
+        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); commitAtStart.current = null; setText(null); }
+      }} />
+  </label>;
+}
+
+/** What the label of a stencil means, for the Properties field name. */
+function stencilLabelName(nodes: CanvasNode[]): string {
+  const kinds = new Set(nodes.map((node) => (node.type === "stencil" ? node.kind : null)));
+  if (kinds.size !== 1) return "ข้อความ";
+  const kind = [...kinds][0];
+  if (kind === "browser") return "ที่อยู่เว็บ (URL)";
+  if (kind === "window" || kind === "terminal") return "ชื่อหน้าต่าง";
+  if (kind === "editor") return "ชื่อไฟล์";
+  if (kind === "phone" || kind === "laptop") return "ข้อความบนจอ";
+  return "คำใต้ไอคอน";
 }
 
 function Segmented<T extends string>({ label, value, options, disabled, onChange }: { label: string; value: T | null; options: { value: T; label: string; icon?: React.ReactNode }[]; disabled: boolean; onChange: (value: T) => void }) {
@@ -209,8 +254,8 @@ export default function PropertiesPanel({ slide, selected, writable, lockSelecte
     <div className="font-semibold">เลือก {selected.length} วัตถุ</div>
     <RangeField label="ความทึบ" value={Number(opacity.value)} mixed={opacity.mixed} min={LIMITS.opacityMin} max={LIMITS.opacityMax} step={0.05} disabled={!writable}
       format={(value) => `${Math.round(value * 100)}%`} onPreview={(value) => preview("opacity", value)} onCommit={(value) => commit("opacity", value)} />
-    {common("stroke") && <>
-      <ColorField label="สีเส้น" value={String(stroke.value)} mixed={stroke.mixed} disabled={!writable} onPreview={(value) => preview("stroke", value)} onCommit={(value) => commit("stroke", value)} onCancel={() => setPropertyPreview(null)} />
+    {common("stroke") && <ColorField label="สีเส้น" value={String(stroke.value)} mixed={stroke.mixed} disabled={!writable} onPreview={(value) => preview("stroke", value)} onCommit={(value) => commit("stroke", value)} onCancel={() => setPropertyPreview(null)} />}
+    {common("strokeWidth") && <>
       <NumberField label="ความหนาเส้น" value={Number(strokeWidth.value)} mixed={strokeWidth.mixed} min={LIMITS.strokeWidthMin} max={LIMITS.strokeWidthMax} step={0.5} disabled={!writable} onCommit={(value) => commit("strokeWidth", value)} />
       <Segmented label="รูปแบบเส้น" value={strokeStyle.mixed ? null : strokeStyle.value as "solid" | "dashed"} disabled={!writable}
         options={[{ value: "solid", label: "เส้นทึบ" }, { value: "dashed", label: "เส้นประ" }]} onChange={(value) => commit("strokeStyle", value)} />
@@ -223,7 +268,27 @@ export default function PropertiesPanel({ slide, selected, writable, lockSelecte
       <NumberField label="ความยาวหัวลูกศร" value={Number(valueOf("headLength").value)} mixed={valueOf("headLength").mixed} min={1} max={256} step={1} disabled={!writable} onCommit={(value) => commit("headLength", value)} />
       <NumberField label="ความกว้างหัวลูกศร" value={Number(valueOf("headWidth").value)} mixed={valueOf("headWidth").mixed} min={1} max={256} step={1} disabled={!writable} onCommit={(value) => commit("headWidth", value)} />
     </div>}
-    {common("color") && <>
+    {common("label") && <>
+      <ColorField label="สี" value={String(valueOf("color").value)} mixed={valueOf("color").mixed} disabled={!writable} onPreview={(value) => preview("color", value)} onCommit={(value) => commit("color", value)} onCancel={() => setPropertyPreview(null)} />
+      <TextField label={stencilLabelName(selected)} value={String(valueOf("label").value ?? "")} mixed={valueOf("label").mixed} maxLength={LIMITS.stencilLabelCodePoints} disabled={!writable} onCommit={(value) => commit("label", value)} />
+    </>}
+    {common("headerFill") && <>
+      <p className="muted text-xs">ดับเบิลคลิกช่องเพื่อพิมพ์ (Tab ไปช่องถัดไป, Enter ลงบรรทัด) · คลิกขวาที่ช่องเพื่อเพิ่ม/ลบแถว{common("header") ? "-คอลัมน์" : ""}</p>
+      {common("header") && <label className="flex items-center gap-2"><input type="checkbox" aria-label="แถวหัวตาราง" checked={valueOf("header").value === true} disabled={!writable}
+        onChange={(event) => commit("header", event.target.checked)} />แถวแรกเป็นหัวตาราง{valueOf("header").mixed && <span className="text-xs muted">(หลายค่า)</span>}</label>}
+      <ColorField label="สีหัวตาราง" value={String(valueOf("headerFill").value)} mixed={valueOf("headerFill").mixed} disabled={!writable} onPreview={(value) => preview("headerFill", value)} onCommit={(value) => commit("headerFill", value)} onCancel={() => setPropertyPreview(null)} />
+      <ColorField label="สีตัวอักษร" value={String(valueOf("color").value)} mixed={valueOf("color").mixed} disabled={!writable} onPreview={(value) => preview("color", value)} onCommit={(value) => commit("color", value)} onCancel={() => setPropertyPreview(null)} />
+      <NumberField label="ขนาดตัวอักษร" value={Number(valueOf("fontSize").value)} mixed={valueOf("fontSize").mixed} min={LIMITS.tableFontMin} max={LIMITS.tableFontMax} step={1} disabled={!writable} onCommit={(value) => commit("fontSize", value)} />
+      {selected.length === 1 && selected[0].type === "table" && (() => {
+        const table = selected[0];
+        const change = (label: string, next: typeof table) => { if (next !== table) transact({ label, affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes: [next] }] }); };
+        return <div className="grid grid-cols-2 gap-2">
+          <button type="button" className="app-button" disabled={!writable || table.rows.length >= LIMITS.tableRows} onClick={() => change("เพิ่มแถว", insertRow(table, table.rows.length))}><BetweenHorizontalEnd size={15} /> {table.variant === "class" ? "เพิ่มบรรทัด" : "เพิ่มแถว"}</button>
+          {table.variant === "grid" && <button type="button" className="app-button" disabled={!writable || table.columns.length >= LIMITS.tableColumns} onClick={() => change("เพิ่มคอลัมน์", insertColumn(table, table.columns.length))}><BetweenVerticalEnd size={15} /> เพิ่มคอลัมน์</button>}
+        </div>;
+      })()}
+    </>}
+    {common("align") && <>
       <p className="muted text-xs">ดับเบิลคลิกข้อความบนกระดานเพื่อแก้เนื้อหา · ลากจุดจับด้านข้างเพื่อปรับความกว้าง</p>
       <ColorField label="สีข้อความ" value={String(valueOf("color").value)} mixed={valueOf("color").mixed} disabled={!writable} onPreview={(value) => preview("color", value)} onCommit={(value) => commit("color", value)} onCancel={() => setPropertyPreview(null)} />
       <NumberField label="ขนาดตัวอักษร" value={Number(valueOf("fontSize").value)} mixed={valueOf("fontSize").mixed} min={LIMITS.fontSizeMin} max={LIMITS.fontSizeMax} step={1} disabled={!writable} onCommit={(value) => commit("fontSize", value)} />

@@ -13,7 +13,7 @@ import {
 } from "@/services/persistence/local-db";
 import { readKeepDrawing, readToolDefaults, writeKeepDrawing, writeToolDefaults, type ToolDefaults } from "./tool-defaults";
 
-export type EditorTool = "select" | "hand" | "pen" | "highlighter" | "rectangle" | "ellipse" | "line" | "arrow" | "text" | "image" | "eraser" | "laser";
+export type EditorTool = "select" | "hand" | "pen" | "highlighter" | "rectangle" | "ellipse" | "line" | "arrow" | "text" | "image" | "stencil" | "table" | "eraser" | "laser";
 export type LocalStatus = "loading" | "writing" | "stored" | "error";
 export type RightPanel = "properties" | "objects" | "git";
 
@@ -52,6 +52,7 @@ export type OpenedProject = {
 export type ProjectOpener = (ownerId: string, projectId: string, access: { writer: boolean }) => Promise<OpenedProject>;
 
 type PropertyPreview = { slideId: string; nodes: CanvasNode[] } | null;
+export type TableEdit = { slideId: string; nodeId: string; row: number; col: number; selectAll?: boolean };
 
 type EditorState = {
   ownerId: string | null;
@@ -78,6 +79,8 @@ type EditorState = {
   pendingSave: boolean;
   teachingMode: boolean;
   rightPanel: RightPanel | null;
+  /** Table cell being typed into (canvas DOM editor); `selectAll` = replace the text when typing starts. */
+  tableEdit: TableEdit | null;
   propertyPreview: PropertyPreview;
   historyEpoch: number;
   /** Size of the visible canvas in CSS px (device state, used to place inserted objects). */
@@ -113,6 +116,7 @@ type EditorState = {
   setTeachingMode: (on: boolean) => void;
   setRightPanel: (panel: RightPanel | null) => void;
   setPropertyPreview: (preview: PropertyPreview) => void;
+  setTableEdit: (edit: TableEdit | null) => void;
   waitForLocalWrites: () => Promise<void>;
   setViewport: (viewport: { width: number; height: number }) => void;
 };
@@ -263,7 +267,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     localStatus: "loading", localError: null, loadError: null, notice: null,
     writable: false, readOnlyReason: null, cloudStatus: null, pendingEdit: null, recoveredEdit: null,
     gestureActive: false, pendingSave: false, teachingMode: false, rightPanel: "properties",
-    propertyPreview: null, historyEpoch: 0, viewport: { width: 1024, height: 700 },
+    propertyPreview: null, historyEpoch: 0, viewport: { width: 1024, height: 700 }, tableEdit: null,
 
     async load(ownerId, projectId, opener = defaultOpener, force = false) {
       // A remount (StrictMode replay or navigation back) cancels the deferred close of the previous mount.
@@ -275,7 +279,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
       set({
         ownerId, projectId, history: null, activeSlideId: null, selectedIds: [], cameras: {}, localStatus: "loading",
         localError: null, loadError: null, notice: null, writable: false, readOnlyReason: null, cloudStatus: null,
-        pendingEdit: null, recoveredEdit: null, pendingSave: false, gestureActive: false, propertyPreview: null,
+        pendingEdit: null, recoveredEdit: null, pendingSave: false, gestureActive: false, propertyPreview: null, tableEdit: null,
       });
       let lock: WriterLock | null = null;
       try {
@@ -410,7 +414,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
       if (!state.history?.content.document.slides.some((slide) => slide.id === slideId)) return false;
       if (slideId === state.activeSlideId) return true;
       if (!state.flushPendingEdits()) return false;
-      set({ activeSlideId: slideId, selectedIds: [], propertyPreview: null });
+      set({ activeSlideId: slideId, selectedIds: [], propertyPreview: null, tableEdit: null });
       persistSession();
       return true;
     },
@@ -470,6 +474,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
       set({ rightPanel: panel });
     },
     setPropertyPreview(preview) { set({ propertyPreview: preview }); },
+    setTableEdit(tableEdit) { set({ tableEdit }); },
     setViewport(viewport) { set({ viewport }); },
     async waitForLocalWrites() {
       let queue: Promise<void>;

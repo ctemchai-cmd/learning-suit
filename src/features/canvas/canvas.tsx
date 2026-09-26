@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Group, Layer, Line, Rect, Shape, Stage } from "react-konva";
 import type Konva from "konva";
-import type { Bounds, CanvasNode, Point, SlideDocument, TextNode } from "@/domain/document/model";
+import type { Bounds, CanvasNode, Point, SlideDocument, TableNode, TextNode } from "@/domain/document/model";
 import { cloneNodes, isFlowWidget, isWidgetNode } from "@/domain/document/model";
 import { getContentBounds, getNodeBounds } from "@/domain/document/geometry";
 import { fitBounds, screenToWorld, zoomAt } from "@/domain/document/camera";
@@ -22,11 +22,17 @@ import { constrainPoint, freehandNode, isStepTool, stepNode, type StepTool } fro
 import { GitCanvasOverlay } from "./git-overlay";
 import { LaserPointer, type LaserHandle } from "./laser-pointer";
 import { TextEditorOverlay, type TextSession } from "./text-editor";
+import { TableCellEditor, TableColumnHandles } from "./table-editor";
+import { tableCellAt } from "@/domain/document/table";
+import { expandToGroups } from "@/domain/document/groups";
+import { snapMove, type Guide } from "@/domain/document/snap";
 import { TransformOverlay } from "./transform-overlay";
 
 type Gesture =
-  | { kind: "pending-select"; pointerId: number; screen: Point; world: Point; ids: string[]; clone: boolean; toggleId: string | null; zoom: number }
-  | { kind: "moving"; pointerId: number; screen: Point; world: Point; ids: string[]; clone: boolean; dx: number; dy: number; zoom: number }
+  | { kind: "pending-select"; pointerId: number; screen: Point; world: Point; ids: string[]; clone: boolean; toggleIds: string[] | null; zoom: number }
+  | { kind: "moving"; pointerId: number; screen: Point; world: Point; ids: string[]; clone: boolean; dx: number; dy: number; zoom: number;
+      /** Snapping targets, taken once when the drag starts: the moved selection and the other objects in view. */
+      moving: Bounds | null; others: Bounds[] }
   | { kind: "marquee"; pointerId: number; start: Point; current: Point; additive: boolean; previousIds: string[]; screen: Point }
   | { kind: "drawing"; pointerId: number; tool: "pen" | "highlighter"; samples: Point[]; zoom: number; lastScreen: Point }
   | { kind: "erasing"; pointerId: number; path: Point[]; hits: Set<string> }
@@ -123,18 +129,20 @@ function GridLayer({ camera, size }: { camera: Camera; size: { width: number; he
   </Layer>;
 }
 
-export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPosition, onToolbarPositionChange, onImageFiles, onRequestImagePicker, onWidgetSelected, onContextMenu }: {
+export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPosition, onToolbarPositionChange, onImageFiles, onToolAction, onWidgetSelected, onContextMenu }: {
   slide: SlideDocument;
   /** A teaching widget was clicked: show its panel (the editor knows where the panel lives in this layout). */
   onWidgetSelected: () => void;
   favorites: EditorTool[];
   onFavoritesReorder: (order: EditorTool[]) => void;
   /** Right-click (or Ctrl+click on a Mac) on the board, at this window position. */
-  onContextMenu?: (at: { x: number; y: number }) => void;
+  /** Right-click: screen position for the menu and the board point under it (to find a table cell). */
+  onContextMenu?: (at: { x: number; y: number; world: Point }) => void;
   toolbarPosition: ToolbarPosition;
   onToolbarPositionChange: (position: ToolbarPosition) => void;
   onImageFiles: (files: File[], world: Point | null) => void;
-  onRequestImagePicker: () => void;
+  /** Image/stencil entries of the favorites toolbar: open their picker. */
+  onToolAction: (tool: EditorTool) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
@@ -148,6 +156,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   const [spaceDown, setSpaceDown] = useState(false);
   const [marquee, setMarquee] = useState<{ start: Point; current: Point } | null>(null);
   const [movePreview, setMovePreview] = useState<MovePreview>(null);
+  const [guides, setGuides] = useState<Guide[]>([]);
   const [erasing, setErasing] = useState<Set<string> | null>(null);
   const [freehandPreview, setFreehandPreview] = useState<{ tool: "pen" | "highlighter" } | null>(null);
   const [stepDraft, setStepDraft] = useState<StepDraft | null>(null);
@@ -204,7 +213,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     if (frame.current) cancelAnimationFrame(frame.current);
     frame.current = null;
     if (current && containerRef.current?.hasPointerCapture(current.pointerId)) containerRef.current.releasePointerCapture(current.pointerId);
-    setMarquee(null); setMovePreview(null); setErasing(null); setFreehandPreview(null);
+    setMarquee(null); setMovePreview(null); setErasing(null); setFreehandPreview(null); setGuides([]);
     if (current) setGestureActive(false);
   }, [setGestureActive]);
 
@@ -372,10 +381,31 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recoveredEdit, slide.id]);
 
+  const tableEdit = useEditorStore((state) => state.tableEdit);
+  const setTableEdit = useEditorStore((state) => state.setTableEdit);
+  /** Opens typing in the cell under `world` (double-click, or a click on another cell while typing). */
+  const startEditingCell = (node: TableNode, world: Point, selectAll = false) => {
+    if (!writable || node.locked) return;
+    const cell = tableCellAt(node, world, konvaFontMetrics);
+    if (!cell || !setSelectedIds([node.id])) return;
+    setTableEdit({ slideId: slide.id, nodeId: node.id, ...cell, selectAll });
+  };
   const startEditingText = (node: TextNode) => {
     if (!writable || node.locked || textSessionRef.current?.draft.id === node.id) return;
     setSelectedIds([node.id]);
     openText({ slideId: slide.id, before: node, draft: structuredClone(node) });
+  };
+
+  /**
+   * A drag of the selection: Shift keeps one axis; edges/centres snap to nearby objects (pink guides), else to the
+   * visible grid. Holding ⌘/Ctrl moves freely.
+   */
+  const snappedMove = (current: Extract<Gesture, { kind: "moving" }>, world: Point, event: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) => {
+    let dx = world.x - current.world.x, dy = world.y - current.world.y;
+    let lockX = false, lockY = false;
+    if (event.shiftKey) { if (Math.abs(dx) >= Math.abs(dy)) { dy = 0; lockY = true; } else { dx = 0; lockX = true; } }
+    if (event.metaKey || event.ctrlKey || !current.moving) return { dx, dy, guides: [] as Guide[] };
+    return snapMove(current.moving, current.others, dx, dy, { threshold: 6 / camera.zoom, grid: gridSpacing(camera.zoom).minor, lockX, lockY });
   };
 
   // ------------------------------------------------------------------ pointer handling
@@ -385,10 +415,22 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     if (gesture.current || (event.button !== 0 && event.button !== 1)) return;
     // Ctrl+click is the Mac right-click: it opens the board menu, it must not draw a dot.
     if (event.button === 0 && event.ctrlKey) return;
-    // Any open Text/Git DOM draft is flushed (or refuses) before the canvas changes selection.
-    if (!useEditorStore.getState().flushPendingEdits()) return;
     const screen = pointerOf(event);
     const world = screenToWorld(screen, camera);
+    // Typing in a table: a click on another cell of the same table moves the typing there.
+    const typingIn = useEditorStore.getState().tableEdit;
+    if (typingIn && tool === "select" && event.button === 0) {
+      const hit = nodeAt(screen);
+      if (hit?.type === "table" && hit.id === typingIn.nodeId) {
+        event.preventDefault();
+        if (!useEditorStore.getState().flushPendingEdits()) return;
+        const fresh = useEditorStore.getState().history?.content.document.slides.find((item) => item.id === slide.id)?.nodes.find((node) => node.id === hit.id);
+        if (fresh?.type === "table") startEditingCell(fresh, world);
+        return;
+      }
+    }
+    // Any open Text/Git DOM draft is flushed (or refuses) before the canvas changes selection.
+    if (!useEditorStore.getState().flushPendingEdits()) return;
     if (event.button === 1 || spaceDown || tool === "hand") {
       event.preventDefault();
       beginGesture({ kind: "panning", pointerId: event.pointerId, screen, camera }, event);
@@ -409,14 +451,16 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       }
       if (hit) {
         let ids = selectedIds;
-        let toggleId: string | null = null;
+        let toggleIds: string[] | null = null;
+        // A grouped object brings its whole group (double-click selects the one piece inside).
+        const members = expandToGroups(slide.nodes, [hit.id]);
         if (event.shiftKey) {
-          if (selectedIds.includes(hit.id)) toggleId = hit.id;
-          else ids = [...selectedIds, hit.id];
-        } else if (!selectedIds.includes(hit.id)) ids = [hit.id];
+          if (selectedIds.includes(hit.id)) toggleIds = members;
+          else ids = [...new Set([...selectedIds, ...members])];
+        } else if (!selectedIds.includes(hit.id)) ids = members;
         if (ids !== selectedIds) setSelectedIds(ids);
         if (isWidgetNode(hit)) onWidgetSelected();
-        beginGesture({ kind: "pending-select", pointerId: event.pointerId, screen, world, ids, clone: event.altKey, toggleId, zoom: camera.zoom }, event);
+        beginGesture({ kind: "pending-select", pointerId: event.pointerId, screen, world, ids, clone: event.altKey, toggleIds, zoom: camera.zoom }, event);
       } else {
         beginGesture({ kind: "marquee", pointerId: event.pointerId, start: world, current: world, additive: event.shiftKey, previousIds: selectedIds, screen }, event);
       }
@@ -465,14 +509,18 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
         if (Math.hypot(screen.x - current.screen.x, screen.y - current.screen.y) < DEFAULTS.cloneThresholdPx || !writable) return;
         const ids = current.ids.filter((id) => slide.nodes.some((node) => node.id === id && !node.locked));
         if (!ids.length) return;
-        gesture.current = { kind: "moving", pointerId: current.pointerId, screen: current.screen, world: current.world, ids, clone: current.clone, dx: 0, dy: 0, zoom: current.zoom };
+        const moved = slide.nodes.filter((node) => ids.includes(node.id));
+        const others = slide.nodes.filter((node) => !ids.includes(node.id)).map(cachedBounds).filter((bounds) => intersects(bounds, viewportWorld)).slice(0, 400);
+        gesture.current = {
+          kind: "moving", pointerId: current.pointerId, screen: current.screen, world: current.world, ids, clone: current.clone, dx: 0, dy: 0, zoom: current.zoom,
+          moving: getContentBounds(moved, konvaFontMetrics), others,
+        };
         return onPointerMove(event);
       }
       case "moving": {
-        let dx = world.x - current.world.x, dy = world.y - current.world.y;
-        if (event.shiftKey) { if (Math.abs(dx) >= Math.abs(dy)) dy = 0; else dx = 0; }
-        current.dx = dx; current.dy = dy;
-        schedule(() => setMovePreview({ ids: current.ids, dx: current.dx, dy: current.dy, clone: current.clone }));
+        const move = snappedMove(current, world, event);
+        current.dx = move.dx; current.dy = move.dy;
+        schedule(() => { setMovePreview({ ids: current.ids, dx: current.dx, dy: current.dy, clone: current.clone }); setGuides(move.guides); });
         return;
       }
       case "marquee": {
@@ -538,13 +586,13 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
         return;
       }
       case "pending-select": {
-        if (current.toggleId) setSelectedIds(selectedIds.filter((id) => id !== current.toggleId));
+        if (current.toggleIds) setSelectedIds(selectedIds.filter((id) => !current.toggleIds!.includes(id)));
         return;
       }
       case "moving": {
         setMovePreview(null);
-        let dx = world.x - current.world.x, dy = world.y - current.world.y;
-        if (event.shiftKey) { if (Math.abs(dx) >= Math.abs(dy)) dy = 0; else dx = 0; }
+        setGuides([]);
+        const { dx, dy } = snappedMove(current, world, event);
         if (Math.hypot(dx, dy) < 1e-6) return;
         const nodes = slide.nodes.filter((node) => current.ids.includes(node.id));
         if (current.clone) {
@@ -565,7 +613,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
           x: Math.min(current.start.x, world.x), y: Math.min(current.start.y, world.y),
           width: Math.abs(world.x - current.start.x), height: Math.abs(world.y - current.start.y),
         };
-        const hits = slide.nodes.filter((node) => !node.locked && intersects(cachedBounds(node), box)).map((node) => node.id);
+        const hits = expandToGroups(slide.nodes, slide.nodes.filter((node) => !node.locked && intersects(cachedBounds(node), box)).map((node) => node.id));
         setSelectedIds(current.additive ? [...new Set([...current.previousIds, ...hits])] : hits);
         return;
       }
@@ -616,25 +664,30 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   const onPointerCancel = () => { trace("pointercancel"); interruptGesture(); };
 
   const onBoardContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
-    // DOM editors on the board (text, Git file) keep the browser's own menu (copy/paste text).
-    if (event.target !== event.currentTarget && !(event.target instanceof HTMLCanvasElement)) return;
+    // DOM editors on the board (text, Git file) keep the browser's own menu (copy/paste text);
+    // selection handles and column borders (`data-board-chrome`) open the board menu like the canvas.
+    const chrome = event.target instanceof HTMLElement && event.target.closest("[data-board-chrome]");
+    if (event.target !== event.currentTarget && !(event.target instanceof HTMLCanvasElement) && !chrome) return;
     event.preventDefault();
     if (gesture.current || !onContextMenu) return;
     setStepDraft(null);
-    if (tool === "select") {
+    if (tool === "select" && !chrome) {
       // Like most editors: right-clicking an object selects it (unless it is already in the selection).
       const hit = nodeAt(pointerOf(event));
       if (!hit) setSelectedIds([]);
-      else if (!useEditorStore.getState().selectedIds.includes(hit.id)) setSelectedIds([hit.id]);
+      else if (!useEditorStore.getState().selectedIds.includes(hit.id)) setSelectedIds(expandToGroups(slide.nodes, [hit.id]));
     }
-    onContextMenu({ x: event.clientX, y: event.clientY });
+    onContextMenu({ x: event.clientX, y: event.clientY, world: screenToWorld(pointerOf(event), camera) });
   };
 
   const onDoubleClick = (event: React.MouseEvent<HTMLDivElement>) => {
     // Pointer capture retargets the click/dblclick to the viewport container.
     if (tool !== "select" || !(event.target instanceof HTMLCanvasElement || event.target === event.currentTarget)) return;
     const hit = nodeAt(pointerOf(event));
+    // Inside a group, a double-click picks just that piece.
+    if (hit?.groupId && !hit.locked) setSelectedIds([hit.id]);
     if (hit?.type === "text") startEditingText(hit);
+    else if (hit?.type === "table") startEditingCell(hit, screenToWorld(pointerOf(event), camera));
   };
 
   const onWheel = useCallback((event: WheelEvent) => {
@@ -718,7 +771,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   // ------------------------------------------------------------------ render
   const stepPreview = activeStep ? stepNode(activeStep.tool, activeStep.start, activeStep.current, camera.zoom, "preview", toolDefaults) : null;
   const clonePreview = movePreview?.clone ? displayNodes.filter((node) => movePreview.ids.includes(node.id)).map((node) => ({ ...node, x: node.x + movePreview.dx, y: node.y + movePreview.dy } as CanvasNode)) : [];
-  const showHandles = selectable && writable && !movePreview && !textSession && selectedNodes.length > 0;
+  const showHandles = selectable && writable && !movePreview && !textSession && !tableEdit && selectedNodes.length > 0;
   // File editor and commit buttons of the one selected Git widget (hidden while it is being moved/resized).
   const selectedGit = tool === "select" && selectedNodes.length === 1 && selectedNodes[0].type === "git-simulator" && !selectedNodes[0].locked
     && !movePreview && !transformPreview && !nudgePreview && !textSession ? selectedNodes[0] : null;
@@ -772,6 +825,8 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
               stroke="#2563EB" strokeWidth={1.5 / camera.zoom} dash={[5 / camera.zoom, 4 / camera.zoom]} />
           </Group>;
         })}
+        {guides.map((guide, index) => <Line key={`guide-${index}`} stroke="#EC4899" strokeWidth={1 / camera.zoom}
+          points={guide.axis === "x" ? [guide.at, guide.from, guide.at, guide.to] : [guide.from, guide.at, guide.to, guide.at]} />)}
         {marquee && <Rect x={Math.min(marquee.start.x, marquee.current.x)} y={Math.min(marquee.start.y, marquee.current.y)}
           width={Math.abs(marquee.current.x - marquee.start.x)} height={Math.abs(marquee.current.y - marquee.start.y)}
           stroke="#2563EB" strokeWidth={1 / camera.zoom} fill="rgba(37,99,235,0.1)" dash={[6 / camera.zoom, 4 / camera.zoom]} />}
@@ -788,6 +843,19 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     {/* The file editor is for the Select tool; with pen/shapes/text/eraser the board underneath takes the clicks. */}
     {selectedGit && tool === "select" && <GitCanvasOverlay node={selectedGit} slideId={slide.id} camera={camera} writable={writable} />}
     {activeStep && <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full border border-slate-300 bg-white/95 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">คลิกจุดที่ 2 เพื่อจบ · Shift จัดมุม · Esc ยกเลิก</div>}
+    {showHandles && selectedNodes.length === 1 && selectedNodes[0].type === "table" && tool === "select" && !transformPreview
+      && (() => {
+        // The stored table is the base of the drag; the handles follow the live preview.
+        const stored = slide.nodes.find((node) => node.id === selectedNodes[0].id);
+        return stored?.type === "table" && selectedNodes[0].type === "table"
+          ? <TableColumnHandles node={stored} shown={selectedNodes[0]} slideId={slide.id} camera={camera} /> : null;
+      })()}
+    {tableEdit?.slideId === slide.id && (() => {
+      // The stored table (not the live preview) is the base of the cell draft.
+      const table = slide.nodes.find((node) => node.id === tableEdit.nodeId);
+      return table?.type === "table" && !table.locked
+        ? <TableCellEditor key={`${table.id}:${tableEdit.row}:${tableEdit.col}`} node={table} edit={tableEdit} camera={camera} /> : null;
+    })()}
     {textSession && <TextEditorOverlay session={textSession} camera={camera}
       onChange={(draft) => {
         const next = { ...textSession, draft };
@@ -796,7 +864,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
         setPendingEdit({ kind: "text", slideId: next.slideId, nodeId: draft.id, before: next.before, draft });
       }}
       onFinish={finishText} />}
-    <FavoriteToolbar favorites={favorites} position={toolbarPosition} viewport={size} onPositionChange={onToolbarPositionChange} onReorder={onFavoritesReorder} onImage={onRequestImagePicker} />
+    <FavoriteToolbar favorites={favorites} position={toolbarPosition} viewport={size} onPositionChange={onToolbarPositionChange} onReorder={onFavoritesReorder} onAction={onToolAction} />
     <div className="pointer-events-none absolute bottom-4 left-4 rounded-lg border border-slate-200 bg-white/90 px-3 py-2 text-xs text-slate-600 shadow-sm">{Math.round(camera.zoom * 100)}% · scroll เลื่อน · ⌘/pinch ซูม · Space ลากเลื่อน</div>
     <div className="absolute bottom-4 right-4 flex gap-1 rounded-lg border border-slate-200 bg-white/95 p-1 shadow-sm" role="group" aria-label="การซูม">
       <button className="app-button icon-button" aria-label="ซูมออก" title="ซูมออก" onClick={() => setCamera(slide.id, zoomAt(camera, { x: size.width / 2, y: size.height / 2 }, camera.zoom / 1.25))}>−</button>

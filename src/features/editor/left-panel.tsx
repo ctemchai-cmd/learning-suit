@@ -25,7 +25,7 @@ function readCollapsed() {
   return typeof window !== "undefined" && localStorage.getItem(COLLAPSED_KEY) === "true";
 }
 
-export default function LeftPanel({ slides, activeSlideId, tool, setTool, favorites, toggleFavorite, writable, onSwitchSlide, onAddSlide, onCopySlide, onRenameSlide, onDeleteSlide, onMoveSlide, onReorderSlides, onInsertGit, onInsertData, onInsertDeploy, onInsertAi, onImage, autoCollapsed = false }: {
+export default function LeftPanel({ slides, activeSlideId, tool, setTool, favorites, toggleFavorite, writable, onSwitchSlide, onAddSlide, onCopySlide, onRenameSlide, onDeleteSlide, onMoveSlide, onReorderSlides, onInsertGit, onInsertData, onInsertDeploy, onInsertAi, onAction, autoCollapsed = false }: {
   slides: SlideDocument[];
   activeSlideId: string | undefined;
   tool: EditorTool;
@@ -44,12 +44,13 @@ export default function LeftPanel({ slides, activeSlideId, tool, setTool, favori
   onInsertData: () => void;
   onInsertDeploy: () => void;
   onInsertAi: () => void;
-  onImage: () => void;
+  /** Image/stencil entries: open their picker. */
+  onAction: (tool: EditorTool) => void;
   /** Below 1100 px the rail starts collapsed and opens as an overlay over the canvas. */
   autoCollapsed?: boolean;
 }) {
   const [dragging, setDragging] = useState<string | null>(null);
-  const pickTool = (id: EditorTool) => { if (isActionTool(id)) onImage(); else setTool(id); };
+  const pickTool = (id: EditorTool) => { if (isActionTool(id)) onAction(id); else setTool(id); };
   const dropOn = (targetId: string) => {
     if (!dragging || dragging === targetId) return;
     const ordered = slides.map((slide) => slide.id).filter((id) => id !== dragging);
@@ -127,7 +128,7 @@ export default function LeftPanel({ slides, activeSlideId, tool, setTool, favori
           <button className="app-button icon-button !h-9 !w-9" aria-label="เพิ่มสไลด์" title="เพิ่มสไลด์" disabled={!writable} onClick={onAddSlide}><Plus size={17} /></button>
         </div>
       </> : <>
-        <div className="border-b border-slate-200 p-3"><div className="mb-2 text-xs text-slate-500">กดดาวเพื่อปักหมุด · กด 1–8 เลือกเร็ว</div><div className="grid grid-cols-4 gap-2">{TOOL_ITEMS.map((item) => <div key={item.id} className="relative"><button className={`app-button icon-button w-full ${tool === item.id ? "!border-slate-800 !bg-slate-900 !text-white" : ""}`} title={item.key ? `${item.label} (${item.key})` : item.label} aria-label={item.label} aria-pressed={isActionTool(item.id) ? undefined : tool === item.id} disabled={isActionTool(item.id) && !writable} onClick={() => pickTool(item.id)}>{item.icon}</button><button className={`absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-slate-200 bg-white ${favorites.includes(item.id) ? "text-amber-500" : "text-slate-400"}`} title={favorites.includes(item.id) ? `นำ ${item.label} ออกจากเครื่องมือโปรด` : `เพิ่ม ${item.label} ในเครื่องมือโปรด`} aria-label={favorites.includes(item.id) ? `นำ ${item.label} ออกจากเครื่องมือโปรด` : `เพิ่ม ${item.label} ในเครื่องมือโปรด`} aria-pressed={favorites.includes(item.id)} onClick={() => toggleFavorite(item.id)}><Star size={11} fill={favorites.includes(item.id) ? "currentColor" : "none"} /></button></div>)}</div>
+        <div className="border-b border-slate-200 p-3"><div className="mb-2 text-xs text-slate-500">กดดาวเพื่อปักหมุด · กด 1–8 เลือกเร็ว</div><div className="grid grid-cols-[repeat(auto-fill,minmax(36px,1fr))] gap-2">{TOOL_ITEMS.map((item) => <div key={item.id} className="relative"><button className={`app-button icon-button w-full ${tool === item.id ? "!border-slate-800 !bg-slate-900 !text-white" : ""}`} title={item.key ? `${item.label} (${item.key})` : item.label} aria-label={item.label} aria-pressed={isActionTool(item.id) ? undefined : tool === item.id} disabled={isActionTool(item.id) && !writable} onClick={() => pickTool(item.id)}>{item.icon}</button><button className={`absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-slate-200 bg-white ${favorites.includes(item.id) ? "text-amber-500" : "text-slate-400"}`} title={favorites.includes(item.id) ? `นำ ${item.label} ออกจากเครื่องมือโปรด` : `เพิ่ม ${item.label} ในเครื่องมือโปรด`} aria-label={favorites.includes(item.id) ? `นำ ${item.label} ออกจากเครื่องมือโปรด` : `เพิ่ม ${item.label} ในเครื่องมือโปรด`} aria-pressed={favorites.includes(item.id)} onClick={() => toggleFavorite(item.id)}><Star size={11} fill={favorites.includes(item.id) ? "currentColor" : "none"} /></button></div>)}</div>
           {/* One compact row so the slide list keeps its room on short screens. */}
           <div className="mt-3 text-xs text-slate-500">เพิ่มตัวจำลอง</div>
           <div className="mt-1 grid grid-cols-4 gap-1.5">
