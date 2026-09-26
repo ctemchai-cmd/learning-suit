@@ -31,9 +31,10 @@ type Gesture =
   | { kind: "drawing"; pointerId: number; tool: "pen" | "highlighter"; samples: Point[]; zoom: number; lastScreen: Point }
   | { kind: "erasing"; pointerId: number; path: Point[]; hits: Set<string> }
   | { kind: "panning"; pointerId: number; screen: Point; camera: Camera }
-  | { kind: "click"; pointerId: number; screen: Point };
+  /** Text/shape tools. Shapes: a click places a point; pressing and dragging draws from `start` (then `dragging`). */
+  | { kind: "click"; pointerId: number; screen: Point; start: Point; dragging: boolean };
 
-type StepDraft = { slideId: string; tool: StepTool; toolVersion: number; start: Point; current: Point };
+type StepDraft = { slideId: string; tool: StepTool; toolVersion: number; start: Point; current: Point; drag?: true };
 type MovePreview = { ids: string[]; dx: number; dy: number; clone: boolean } | null;
 
 const boundsCache = new WeakMap<CanvasNode, Bounds>();
@@ -361,7 +362,8 @@ export default function Canvas({ slide, favorites, toolbarPosition, onToolbarPos
       setErasing(new Set(hits));
       return;
     }
-    beginGesture({ kind: "click", pointerId: event.pointerId, screen }, event);
+    const pending = stepDraft && stepDraft.slideId === slide.id && stepDraft.tool === tool && stepDraft.toolVersion === toolVersion ? stepDraft : null;
+    beginGesture({ kind: "click", pointerId: event.pointerId, screen, start: pending?.start ?? world, dragging: false }, event);
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -428,8 +430,26 @@ export default function Canvas({ slide, favorites, toolbarPosition, onToolbarPos
         schedule(() => setErasing(new Set(current.hits)));
         return;
       }
-      case "click":
+      case "click": {
+        // Press-drag-release also draws a shape (like most drawing apps); the two-click way still works.
+        if (!isStepTool(tool) || !writable) return;
+        if (!current.dragging && Math.hypot(screen.x - current.screen.x, screen.y - current.screen.y) <= 6) return;
+        if (!current.dragging) { current.dragging = true; setSelectedIds([]); }
+        const point = event.shiftKey ? constrainPoint(tool, current.start, world) : world;
+        const start = current.start;
+        schedule(() => setStepDraft({ slideId: slide.id, tool, toolVersion, start, current: point, drag: true }));
         return;
+      }
+    }
+  };
+
+  /** Inserts the finished shape; afterwards the new shape is selected unless “วาดต่อเนื่อง” is on. */
+  const finishStep = (stepTool: StepTool, start: Point, point: Point): void => {
+    const node = stepNode(stepTool, start, point, camera.zoom, crypto.randomUUID(), toolDefaults);
+    if (!node) return;
+    setStepDraft(null);
+    if (transact({ label: "วาดรูปทรง", affectedSlideId: slide.id, commands: [{ type: "nodes.insert", slideId: slide.id, nodes: [node] }] })) {
+      if (!keepDrawing) { setTool("select"); setSelectedIds([node.id]); }
     }
   };
 
@@ -490,6 +510,11 @@ export default function Canvas({ slide, favorites, toolbarPosition, onToolbarPos
         return;
       }
       case "click": {
+        if (current.dragging && isStepTool(tool)) {
+          setStepDraft(null); // a drag too small to make a shape just disappears
+          finishStep(tool, current.start, event.shiftKey ? constrainPoint(tool, current.start, world) : world);
+          return;
+        }
         if (Math.hypot(screen.x - current.screen.x, screen.y - current.screen.y) > 6) return;
         if (tool === "text") {
           const hit = nodeAt(screen);
@@ -513,13 +538,7 @@ export default function Canvas({ slide, favorites, toolbarPosition, onToolbarPos
           setStepDraft({ slideId: slide.id, tool, toolVersion, start: world, current: world });
           return;
         }
-        const point = event.shiftKey ? constrainPoint(active.tool, active.start, world) : world;
-        const node = stepNode(active.tool, active.start, point, camera.zoom, crypto.randomUUID(), toolDefaults);
-        if (!node) return;
-        setStepDraft(null);
-        if (transact({ label: "วาดรูปทรง", affectedSlideId: slide.id, commands: [{ type: "nodes.insert", slideId: slide.id, nodes: [node] }] })) {
-          if (!keepDrawing) { setTool("select"); setSelectedIds([node.id]); }
-        }
+        finishStep(active.tool, active.start, event.shiftKey ? constrainPoint(active.tool, active.start, world) : world);
         return;
       }
     }
@@ -678,8 +697,9 @@ export default function Canvas({ slide, favorites, toolbarPosition, onToolbarPos
       onPreview={setTransformPreview} onGesture={setGestureActive}
       onCommit={(nodes) => transact({ label: "ปรับขนาด/หมุนวัตถุ", affectedSlideId: slide.id, commands: [{ type: "nodes.replace", slideId: slide.id, nodes }] })} />}
     {tool === "laser" && <LaserPointer handleRef={laserRef} />}
-    {selectedGit && <GitCanvasOverlay node={selectedGit} slideId={slide.id} camera={camera} writable={writable} />}
-    {activeStep && <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full border border-slate-300 bg-white/95 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">คลิกจุดที่ 2 เพื่อจบ · Shift จัดมุม · Esc ยกเลิก</div>}
+    {/* The file editor is for the Select tool; with pen/shapes/text/eraser the board underneath takes the clicks. */}
+    {selectedGit && tool === "select" && <GitCanvasOverlay node={selectedGit} slideId={slide.id} camera={camera} writable={writable} />}
+    {activeStep && <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full border border-slate-300 bg-white/95 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">{activeStep.drag ? "ปล่อยเพื่อจบ" : "คลิกจุดที่ 2 เพื่อจบ"} · Shift จัดมุม · Esc ยกเลิก</div>}
     {textSession && <TextEditorOverlay session={textSession} camera={camera}
       onChange={(draft) => {
         const next = { ...textSession, draft };

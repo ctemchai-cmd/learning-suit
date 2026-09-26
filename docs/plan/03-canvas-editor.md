@@ -69,7 +69,9 @@ Pen ใช้สี/ความหนาจาก tool defaults; Highlighter �
 - Line/Arrow คลิกจุดแรก → เลื่อน pointer → คลิกจุดที่สอง เก็บ start/end ตามทิศทางที่คลิก; Shift ระหว่างกำหนดจุดที่สอง snap มุมทีละ 45 องศา
 - ลูกศรชี้ปลาย end และ stroke เป็นสีเดียวกับหัว; หัวมี base length 12 / width 10 world units ปรับตาม spec ผ่าน Properties ได้
 - จุดแรกกับจุดที่สองห่างกันน้อยกว่า 3 CSS px ให้คง draft รอจุดที่สองใหม่ ไม่สร้างวัตถุขนาดศูนย์
-- วาดสำเร็จแล้วกลับ Select และเลือกวัตถุใหม่ ยกเว้น Pen/Highlighter หรือ keepDrawing เปิดอยู่
+- วาดสำเร็จแล้วกลับ Select และเลือกวัตถุใหม่ ยกเว้น Pen/Highlighter หรือ keepDrawing เปิดอยู่ (keepDrawing = “วาดต่อเนื่อง” จำไว้ใน localStorage ของเครื่องเหมือน tool defaults)
+- Rect/Ellipse/Line/Arrow วาดแบบ **กดค้าง-ลาก-ปล่อย** ได้ด้วย (เพิ่ม 2026-09-26 ตาม feedback “คลิกวาดไม่ได้ ต้องคลิกหลายที” — เดิมการลากถูกทิ้งเงียบๆ): ลากเกิน 6 px เริ่ม preview (แถบบอก “ปล่อยเพื่อจบ”) ปล่อยแล้วได้รูปทรง; ถ้าคลิกจุดแรกไว้แล้วค่อยลาก จะเริ่มจากจุดแรกนั้น
+- กล่องแก้ไฟล์ของตัวจำลอง Git (DOM overlay) แสดงเฉพาะเครื่องมือ Select เครื่องมืออื่นจึงวาด/ขีดทับตัวจำลองได้แม้เลือกค้างไว้
 - Tool defaults จำในอุปกรณ์; สี normalize เป็น `#RRGGBB`, no fill ใช้ literal `transparent`
 - Properties ของ Rect/Ellipse มี checkbox `ใช้สีพื้น`; ปิดแล้วบันทึก `fill: "transparent"` และซ่อน color picker เปิดใหม่ใช้สีเริ่มต้นที่เห็นชัด
 

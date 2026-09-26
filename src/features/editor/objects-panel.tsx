@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowUpRight, ChevronDown, ChevronsDown, ChevronsUp, ChevronUp, Circle, Database, GitBranch, Rocket, Highlighter, Image as ImageIcon, Lock, PenLine, Slash, Square, Type, Unlock } from "lucide-react";
+import { ArrowUpRight, Bot, ChevronDown, ChevronsDown, ChevronsUp, ChevronUp, Circle, Database, GitBranch, Rocket, Highlighter, Image as ImageIcon, Lock, PenLine, Slash, Square, Type, Unlock } from "lucide-react";
 import type { CanvasNode, SlideDocument } from "@/domain/document/model";
 import type { DocumentTransaction } from "@/domain/document/commands";
 import { hasZOrderChange, type ZOrderAction } from "@/domain/document/z-order";
@@ -11,6 +11,7 @@ export function nodeLabel(node: CanvasNode): string {
   if (node.type === "git-simulator") return "git-simulator";
   if (node.type === "data-simulator") return "data-simulator";
   if (node.type === "deploy-simulator") return "deploy-simulator";
+  if (node.type === "ai-simulator") return "ai-simulator";
   return node.type;
 }
 function NodeIcon({ node }: { node: CanvasNode }) {
@@ -27,6 +28,7 @@ function NodeIcon({ node }: { node: CanvasNode }) {
     case "git-simulator": return <GitBranch {...props} />;
     case "data-simulator": return <Database {...props} />;
     case "deploy-simulator": return <Rocket {...props} />;
+    case "ai-simulator": return <Bot {...props} />;
   }
 }
 

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { DATA_LIMITS } from "../data/model";
 import { DEPLOY_LIMITS } from "../deploy/model";
+import { AI_LIMITS } from "../ai/model";
 import { LIMITS } from "./limits";
 import type { ProjectContent } from "./model";
 
@@ -158,7 +159,37 @@ const deploySimulator = z.strictObject({
   scale: z.number().finite().min(0.5).max(4), view: z.enum(["local", "localEnv", "vercel", "env", "overall"]), state: deployState,
 });
 
-export const canvasNodeSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, arrow, pen, highlighter, text, image, gitSimulator, dataSimulator, deploySimulator]);
+// AI simulator (plan 07 §5). Scripted: the stored state is what the board shows, nothing else.
+const aiLine = z.string().refine((v) => codePoints(v) >= 1 && codePoints(v) <= AI_LIMITS.lineCodePoints);
+const chatMsg = z.strictObject({ role: z.enum(["user", "ai"]), text: aiLine, out: z.literal(true).optional() });
+const chat = z.strictObject({ messages: z.array(chatMsg).max(AI_LIMITS.messages), shown: z.number().int().min(0).max(AI_LIMITS.messages) })
+  .refine((value) => value.shown <= value.messages.length, "Shown bubbles exceed the chat");
+const aiState = z.strictObject({
+  version: z.literal(1),
+  history: chat,
+  thinking: z.strictObject({
+    on: z.boolean(), puzzle: z.enum(["pen", "letters", "apples"]).nullable(), thoughts: z.array(aiLine).max(8),
+    answer: aiLine.nullable(), correct: z.boolean().nullable(), seconds: z.number().int().min(0).max(60),
+  }),
+  memory: z.strictObject({
+    on: z.boolean(), items: z.array(z.strictObject({ key: z.enum(["name", "job", "like"]), value: aiLine })).max(3),
+    messages: z.array(chatMsg).max(AI_LIMITS.messages), shown: z.number().int().min(0).max(AI_LIMITS.messages), chat: z.number().int().min(1).max(1_000_000),
+  }).refine((value) => value.shown <= value.messages.length && new Set(value.items.map((item) => item.key)).size === value.items.length, "Invalid AI memory"),
+  agent: z.strictObject({
+    code: z.enum(["bug", "fixed"]), tests: z.enum(["unknown", "fail", "pass"]),
+    web: z.strictObject({ asked: z.boolean(), answer: aiLine.nullable() }), log: z.array(aiLine).max(AI_LIMITS.log),
+  }),
+  cc: z.strictObject({
+    rules: z.array(aiLine).max(4), memories: z.array(aiLine).max(AI_LIMITS.ccMemories), session: z.number().int().min(0).max(1_000_000),
+    context: z.number().int().min(0).max(AI_LIMITS.ccContext + 8), chat: z.array(aiLine).max(AI_LIMITS.ccChat), summarized: z.boolean(),
+  }),
+});
+const aiSimulator = z.strictObject({
+  ...base, type: z.literal("ai-simulator"), rotation: z.literal(0),
+  scale: z.number().finite().min(0.5).max(4), view: z.enum(["history", "thinking", "memory", "agent", "ccMemory"]), state: aiState,
+});
+
+export const canvasNodeSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, arrow, pen, highlighter, text, image, gitSimulator, dataSimulator, deploySimulator, aiSimulator]);
 export const slideSchema = z.strictObject({ id: uuid, name: title, background: color, nodes: z.array(canvasNodeSchema) });
 export const assetSchema = z.strictObject({
   id: uuid, mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]),

@@ -9,6 +9,7 @@ import { ImageCache, ImageCacheContext } from "@/features/canvas/image-cache";
 import { konvaFontMetrics } from "@/features/canvas/font-metrics";
 import { DataPanel } from "@/features/data-simulator/data-panel";
 import { DeployPanel } from "@/features/deploy-simulator/deploy-panel";
+import { AiPanel } from "@/features/ai-simulator/ai-panel";
 import { useFlowSession } from "@/features/flow/flow-session";
 import { GitPanel } from "@/features/git-simulator/git-panel";
 import { flushGitDraft } from "@/features/git-simulator/git-draft";
@@ -22,6 +23,7 @@ import { DEFAULTS, LIMITS } from "@/domain/document/limits";
 import { reorderNodeIds, type ZOrderAction } from "@/domain/document/z-order";
 import { createInitialDataState } from "@/domain/data/initial";
 import { createInitialDeployState } from "@/domain/deploy/initial";
+import { createInitialAiState } from "@/domain/ai/initial";
 import { createInitialGitState } from "@/domain/git/initial";
 import { ingestImage } from "@/services/assets/ingest";
 import { getLocalAsset, putLocalAsset, putThumbnail } from "@/services/persistence/local-db";
@@ -50,6 +52,7 @@ function WidgetPanelEmpty({ slide, writable, onSelect, onInsert }: {
   const git = unlocked.filter((node) => node.type === "git-simulator");
   const data = unlocked.filter((node) => node.type === "data-simulator");
   const deploy = unlocked.filter((node) => node.type === "deploy-simulator");
+  const ai = unlocked.filter((node) => node.type === "ai-simulator");
   const pick = (list: CanvasNode[], name: string) => list.map((node, index) => <button key={node.id} className="app-button app-button-primary w-full" onClick={() => onSelect(node.id)}>
     {list.length > 1 ? `เลือก${name} ชิ้นที่ ${index + 1}` : `เลือก${name}ที่มีอยู่`}</button>);
   return <div className="space-y-3 p-4 text-sm">
@@ -57,13 +60,15 @@ function WidgetPanelEmpty({ slide, writable, onSelect, onInsert }: {
     {pick(git, "ตัวจำลอง Git ")}
     {pick(data, "ตัวจำลองข้อมูล")}
     {pick(deploy, "ตัวจำลอง Deploy ")}
+    {pick(ai, "ตัวจำลอง AI ")}
     <button className="app-button w-full" disabled={!writable} onClick={() => onInsert("git")}>{git.length ? "เพิ่มตัวจำลอง Git ใหม่" : "เพิ่มตัวจำลอง Git กลางจอ"}</button>
     <button className="app-button w-full" disabled={!writable} onClick={() => onInsert("data")}>{data.length ? "เพิ่มตัวจำลองข้อมูลใหม่" : "เพิ่มตัวจำลองข้อมูลกลางจอ"}</button>
     <button className="app-button w-full" disabled={!writable} onClick={() => onInsert("deploy")}>{deploy.length ? "เพิ่มตัวจำลอง Deploy ใหม่" : "เพิ่มตัวจำลอง Deploy กลางจอ"}</button>
+    <button className="app-button w-full" disabled={!writable} onClick={() => onInsert("ai")}>{ai.length ? "เพิ่มตัวจำลอง AI ใหม่" : "เพิ่มตัวจำลอง AI กลางจอ"}</button>
   </div>;
 }
 
-type WidgetKind = "git" | "data" | "deploy";
+type WidgetKind = "git" | "data" | "deploy" | "ai";
 
 function reorderSelection(action: ZOrderAction) {
   const state = useEditorStore.getState();
@@ -330,14 +335,16 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
       ? { ...base, type: "git-simulator", view: "local", state: createInitialGitState() }
       : kind === "data"
         ? { ...base, type: "data-simulator", view: "where", state: createInitialDataState() }
-        : { ...base, type: "deploy-simulator", view: "local", state: createInitialDeployState() };
+        : kind === "deploy"
+          ? { ...base, type: "deploy-simulator", view: "local", state: createInitialDeployState() }
+          : { ...base, type: "ai-simulator", view: "history", state: createInitialAiState() };
     const size = widgetNodeSize(draft);
     // Never stack a new widget exactly on top of an existing one (it would hide the lesson so far).
     let x = center.x - size.width / 2, y = center.y - size.height / 2;
     const others = current?.nodes.filter(isWidgetNode) ?? [];
     while (others.some((node) => Math.abs(node.x - x) < 40 && Math.abs(node.y - y) < 40)) { x += 64; y += 64; }
     const node = { ...draft, x, y } as WidgetNode;
-    if (!insertNodes([node], [], kind === "git" ? "เพิ่มตัวจำลอง Git" : kind === "data" ? "เพิ่มตัวจำลองข้อมูล" : "เพิ่มตัวจำลอง Deploy")) return;
+    if (!insertNodes([node], [], { git: "เพิ่มตัวจำลอง Git", data: "เพิ่มตัวจำลองข้อมูล", deploy: "เพิ่มตัวจำลอง Deploy", ai: "เพิ่มตัวจำลอง AI" }[kind])) return;
     showWidgetPanel();
     // Zoom out (never in) so the whole widget is visible beside the panel, not under it.
     const slideId = state.activeSlideId;
@@ -517,7 +524,9 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
             ? <GitPanel key={selectedWidget.id} node={selectedWidget} slideId={slide.id} writable={writable} transact={transact} />
             : selectedWidget.type === "data-simulator"
               ? <DataPanel key={selectedWidget.id} node={selectedWidget} slideId={slide.id} writable={writable} transact={transact} />
-              : <DeployPanel key={selectedWidget.id} node={selectedWidget} slideId={slide.id} writable={writable} transact={transact} />
+              : selectedWidget.type === "deploy-simulator"
+                ? <DeployPanel key={selectedWidget.id} node={selectedWidget} slideId={slide.id} writable={writable} transact={transact} />
+                : <AiPanel key={selectedWidget.id} node={selectedWidget} slideId={slide.id} writable={writable} transact={transact} />
           : <WidgetPanelEmpty slide={slide} writable={writable} onSelect={(id) => { if (setSelectedIds([id])) showWidgetPanel(); }} onInsert={insertWidget} />
         : <PropertiesPanel slide={slide} selected={selected} writable={writable} lockSelected={lockSelected} removeSelected={removeSelected} />}
   </>;
@@ -587,7 +596,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
           onDeleteSlide={() => slides.length > 1 && setDialog({ kind: "delete-slide", value: "" })}
           onMoveSlide={moveSlide}
           onReorderSlides={(orderedIds) => slide && transact({ label: "จัดลำดับสไลด์", affectedSlideId: slide.id, commands: [{ type: "slide.reorder", orderedIds }] })}
-          onInsertGit={() => insertWidget("git")} onInsertData={() => insertWidget("data")} onInsertDeploy={() => insertWidget("deploy")} onImage={() => fileInput.current?.click()} />}
+          onInsertGit={() => insertWidget("git")} onInsertData={() => insertWidget("data")} onInsertDeploy={() => insertWidget("deploy")} onInsertAi={() => insertWidget("ai")} onImage={() => fileInput.current?.click()} />}
         <div className="min-w-0 flex-1">{slide
           ? <Canvas key={slide.id} slide={slide} favorites={favorites} toolbarPosition={toolbarPosition} onToolbarPositionChange={setToolbarPosition}
             onImageFiles={(files, world) => void insertImages(files, world)} onRequestImagePicker={() => fileInput.current?.click()} onWidgetSelected={showWidgetPanel} />

@@ -5,6 +5,7 @@ import { Arrow, Circle, Ellipse, Group, Image as KonvaImage, Line, Rect, Text } 
 import type { CanvasNode, ImageNode } from "@/domain/document/model";
 import { DataWidgetView } from "@/features/data-simulator/data-widget-view";
 import { DeployWidgetView } from "@/features/deploy-simulator/deploy-widget-view";
+import { AiWidgetView } from "@/features/ai-simulator/ai-widget-view";
 import type { FlowPlay } from "@/features/flow/flow-session";
 import { GitWidgetView } from "@/features/git-simulator/git-widget-view";
 import type { GitPreview, GitTab, GitTransferAnimation } from "@/features/git-simulator/session-store";
@@ -67,6 +68,8 @@ export function NodeBody({ node, hitWidth = 8, git, flow }: { node: CanvasNode; 
       return <DataWidgetView node={node} play={flow ?? null} fontFamily={CANVAS_FONT} />;
     case "deploy-simulator":
       return <DeployWidgetView node={node} play={flow ?? null} fontFamily={CANVAS_FONT} />;
+    case "ai-simulator":
+      return <AiWidgetView node={node} play={flow ?? null} fontFamily={CANVAS_FONT} />;
   }
 }
 

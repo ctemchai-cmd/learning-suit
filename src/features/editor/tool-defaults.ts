@@ -53,3 +53,13 @@ export function readToolDefaults(): ToolDefaults {
 export function writeToolDefaults(defaults: ToolDefaults): void {
   try { localStorage.setItem(KEY, JSON.stringify(defaults)); } catch { /* Device preferences are best effort. */ }
 }
+
+const KEEP_DRAWING_KEY = "learning-suit-keep-drawing-v1";
+/** “วาดต่อเนื่อง” is a device preference too: once ticked it stays on for the next shapes and visits. */
+export function readKeepDrawing(): boolean {
+  if (typeof window === "undefined") return false;
+  try { return localStorage.getItem(KEEP_DRAWING_KEY) === "1"; } catch { return false; }
+}
+export function writeKeepDrawing(keep: boolean): void {
+  try { localStorage.setItem(KEEP_DRAWING_KEY, keep ? "1" : "0"); } catch { /* Device preferences are best effort. */ }
+}

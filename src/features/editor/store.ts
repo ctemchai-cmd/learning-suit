@@ -11,7 +11,7 @@ import {
   acquireWriterLock, getLocalDraft, getLocalSession, LocalWriteError, putLocalSession, subscribeBroadcast,
   writeDraftContent, writePendingEdit, type WriterLock,
 } from "@/services/persistence/local-db";
-import { readToolDefaults, writeToolDefaults, type ToolDefaults } from "./tool-defaults";
+import { readKeepDrawing, readToolDefaults, writeKeepDrawing, writeToolDefaults, type ToolDefaults } from "./tool-defaults";
 
 export type EditorTool = "select" | "hand" | "pen" | "highlighter" | "rectangle" | "ellipse" | "line" | "arrow" | "text" | "image" | "eraser" | "laser";
 export type LocalStatus = "loading" | "writing" | "stored" | "error";
@@ -259,7 +259,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
   return {
     ownerId: null, projectId: null, history: null, activeSlideId: null, cameras: {}, selectedIds: [],
-    tool: "select", toolVersion: 0, keepDrawing: false, toolDefaults: readToolDefaults(),
+    tool: "select", toolVersion: 0, keepDrawing: readKeepDrawing(), toolDefaults: readToolDefaults(),
     localStatus: "loading", localError: null, loadError: null, notice: null,
     writable: false, readOnlyReason: null, cloudStatus: null, pendingEdit: null, recoveredEdit: null,
     gestureActive: false, pendingSave: false, teachingMode: false, rightPanel: "properties",
@@ -386,7 +386,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
       updateHistory(result.history, result.affectedSlideId, true);
     },
     setTool(tool) { set((state) => tool === state.tool ? state : { tool, toolVersion: state.toolVersion + 1 }); },
-    setKeepDrawing(keep) { set({ keepDrawing: keep }); },
+    setKeepDrawing(keep) { writeKeepDrawing(keep); set({ keepDrawing: keep }); },
     setToolDefaults(update) {
       const next = update(get().toolDefaults);
       writeToolDefaults(next);

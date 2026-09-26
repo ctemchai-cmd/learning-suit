@@ -1,6 +1,6 @@
 # Learning Suit
 
-เว็บกระดานวาดสำหรับสอนสด จัดงานเป็นโปรเจกต์และสไลด์ มีตัวจำลองบนกระดาน 3 แบบ: Git (เครื่อง A ↔ GitHub ↔ เครื่อง B, Merge, diff ของ commit), การเก็บข้อมูล (ฐานข้อมูล/Supabase) และการ Deploy (Local, `.env.local`, Vercel) พร้อมเลเซอร์พอยเตอร์ (K) สำหรับแชร์หน้าจอ เก็บ **Drawing info** (จุดเส้น รูปทรง ข้อความ properties ลำดับซ้อน และ Git state) เป็นข้อมูลหลัก และ Export เป็น PNG / PDF / `.learning-suit` ได้ สถานะงานและผลตรวจรับล่าสุดอยู่ที่ [docs/plan/06-delivery-and-acceptance.md](docs/plan/06-delivery-and-acceptance.md)
+เว็บกระดานวาดสำหรับสอนสด จัดงานเป็นโปรเจกต์และสไลด์ มีตัวจำลองบนกระดาน 4 แบบ: Git (เครื่อง A ↔ GitHub ↔ เครื่อง B, Merge, diff ของ commit), การเก็บข้อมูล (ฐานข้อมูล/Supabase), การ Deploy (Local, `.env.local`, Vercel) และ AI (ประวัติแชท/context, Chain of Thought, Memory, AI บนเว็บ vs Claude Code — จำลองล้วน ไม่เรียก AI จริง) พร้อมเลเซอร์พอยเตอร์ (K) สำหรับแชร์หน้าจอ เก็บ **Drawing info** (จุดเส้น รูปทรง ข้อความ properties ลำดับซ้อน และ Git state) เป็นข้อมูลหลัก และ Export เป็น PNG / PDF / `.learning-suit` ได้ สถานะงานและผลตรวจรับล่าสุดอยู่ที่ [docs/plan/06-delivery-and-acceptance.md](docs/plan/06-delivery-and-acceptance.md)
 
 ## ทดลองบนเครื่อง (โหมดพัฒนาในเครื่อง)
 
@@ -59,7 +59,7 @@ Playwright เปิด dev server ที่พอร์ต 3100 เอง ห�
 |---|---|
 | Domain (pure TS) | `src/domain/document`, `src/domain/git` |
 | Canvas / editor / Git widget + panel | `src/features/canvas`, `src/features/editor`, `src/features/git-simulator` |
-| ตัวจำลองการเก็บข้อมูลและ Deploy | `src/domain/data`, `src/domain/deploy`, `src/features/flow`, `src/features/data-simulator`, `src/features/deploy-simulator` |
+| ตัวจำลองการเก็บข้อมูล, Deploy และ AI | `src/domain/{data,deploy,ai}`, `src/features/flow`, `src/features/{data,deploy,ai}-simulator` |
 | เข้าสู่ระบบ | `src/features/auth`, `src/app/{login,change-password}`, `src/lib/supabase`, `src/proxy.ts` |
 | Local drafts, save coordinator, Supabase adapters | `src/services/persistence` |
 | Export PNG/PDF, archive worker | `src/services/export` |

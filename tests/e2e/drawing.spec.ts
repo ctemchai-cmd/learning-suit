@@ -112,3 +112,51 @@ test("CAN-13: laser pointer (K) shows a dot with a fading trail and never draws,
   await page.keyboard.press("v");
   await expect(laser).toHaveCount(0);
 });
+
+test("CAN-14: shapes draw by press-drag-release too; “วาดต่อเนื่อง” is remembered; the pen draws over a selected Git widget", async ({ page }) => {
+  await createProject(page, "ลากวาด");
+  const box = await stageBox(page);
+  await page.getByRole("button", { name: "สี่เหลี่ยม", exact: true }).click();
+  await page.mouse.move(box.cx - 300, box.cy - 200);
+  await page.mouse.down();
+  await page.mouse.move(box.cx - 150, box.cy - 100, { steps: 8 });
+  await expect(page.getByText("ปล่อยเพื่อจบ")).toBeVisible();
+  await page.mouse.up();
+  const rows = await objectRows(page);
+  await expect(rows).toHaveText(["rectangle"]);
+  const rect = (await readDraft(page))!.content.document.slides[0].nodes[0] as { width: number; height: number };
+  expect(rect.width).toBeGreaterThan(100);
+  expect(rect.height).toBeGreaterThan(60);
+  // Default: back to Select with the new shape selected.
+  await expect(page.getByRole("button", { name: "เลือก", exact: true }).first()).toHaveAttribute("aria-pressed", "true");
+
+  // “วาดต่อเนื่อง” survives a reload; then two drags make two shapes without re-picking the tool.
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "วงกลม", exact: true }).click();
+  await page.getByRole("tab", { name: "Properties" }).click();
+  await page.getByRole("checkbox", { name: /วาดต่อเนื่อง/ }).check();
+  await page.reload();
+  await page.getByRole("button", { name: "วงกลม", exact: true }).click();
+  await page.getByRole("tab", { name: "Properties" }).click();
+  await expect(page.getByRole("checkbox", { name: /วาดต่อเนื่อง/ })).toBeChecked();
+  for (const dy of [0, 140]) {
+    await page.mouse.move(box.cx + 100, box.cy - 200 + dy);
+    await page.mouse.down();
+    await page.mouse.move(box.cx + 220, box.cy - 120 + dy, { steps: 6 });
+    await page.mouse.up();
+  }
+  await expect(await objectRows(page)).toHaveText(["ellipse", "ellipse", "rectangle"]);
+  await expect(page.getByRole("button", { name: "วงกลม", exact: true }).first()).toHaveAttribute("aria-pressed", "true");
+
+  // A selected Git widget's file editor must not swallow the pen.
+  await page.getByRole("button", { name: "เพิ่มตัวจำลอง Git" }).first().click();
+  const file = await page.getByRole("textbox", { name: "แก้ไฟล์บนเครื่อง A" }).boundingBox();
+  await page.getByRole("button", { name: "ปากกา", exact: true }).first().click();
+  await expect(page.getByTestId("git-overlay")).toHaveCount(0);
+  await page.mouse.move(file!.x + 20, file!.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(file!.x + file!.width - 20, file!.y + file!.height - 20, { steps: 10 });
+  await page.mouse.up();
+  const nodes = (await readDraft(page))!.content.document.slides[0].nodes as { type: string }[];
+  expect(nodes.filter((node) => node.type === "pen")).toHaveLength(1);
+});

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { ChevronDown, ChevronUp, Copy, Database, GitBranch, Rocket, PanelLeftClose, PanelLeftOpen, PenLine, Plus, Star, Trash2 } from "lucide-react";
+import { Bot, ChevronDown, ChevronUp, Copy, Database, GitBranch, Rocket, PanelLeftClose, PanelLeftOpen, PenLine, Plus, Star, Trash2 } from "lucide-react";
 import type { SlideDocument } from "@/domain/document/model";
 import { isActionTool, TOOL_ITEMS } from "./tools";
 import type { EditorTool } from "./store";
@@ -23,7 +23,7 @@ function readCollapsed() {
   return typeof window !== "undefined" && localStorage.getItem(COLLAPSED_KEY) === "true";
 }
 
-export default function LeftPanel({ slides, activeSlideId, tool, setTool, favorites, toggleFavorite, writable, onSwitchSlide, onAddSlide, onCopySlide, onRenameSlide, onDeleteSlide, onMoveSlide, onReorderSlides, onInsertGit, onInsertData, onInsertDeploy, onImage, autoCollapsed = false }: {
+export default function LeftPanel({ slides, activeSlideId, tool, setTool, favorites, toggleFavorite, writable, onSwitchSlide, onAddSlide, onCopySlide, onRenameSlide, onDeleteSlide, onMoveSlide, onReorderSlides, onInsertGit, onInsertData, onInsertDeploy, onInsertAi, onImage, autoCollapsed = false }: {
   slides: SlideDocument[];
   activeSlideId: string | undefined;
   tool: EditorTool;
@@ -41,6 +41,7 @@ export default function LeftPanel({ slides, activeSlideId, tool, setTool, favori
   onInsertGit: () => void;
   onInsertData: () => void;
   onInsertDeploy: () => void;
+  onInsertAi: () => void;
   onImage: () => void;
   /** Below 1100 px the rail starts collapsed and opens as an overlay over the canvas. */
   autoCollapsed?: boolean;
@@ -116,7 +117,8 @@ export default function LeftPanel({ slides, activeSlideId, tool, setTool, favori
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 py-3">{TOOL_ITEMS.map((item) => <button key={item.id} className={`app-button icon-button !h-9 !w-9 ${tool === item.id ? "!border-slate-800 !bg-slate-900 !text-white" : ""}`} title={`${item.label} (${item.key})`} aria-label={item.label} aria-pressed={isActionTool(item.id) ? undefined : tool === item.id} disabled={isActionTool(item.id) && !writable} onClick={() => pickTool(item.id)}>{item.icon}</button>)}
           <button className="app-button icon-button !h-9 !w-9" aria-label="เพิ่มตัวจำลอง Git" title="เพิ่มตัวจำลอง Git กลางจอ" disabled={!writable} onClick={onInsertGit}><GitBranch size={17} /></button>
           <button className="app-button icon-button !h-9 !w-9" aria-label="เพิ่มตัวจำลองข้อมูล" title="เพิ่มตัวจำลองการเก็บข้อมูลกลางจอ" disabled={!writable} onClick={onInsertData}><Database size={17} /></button>
-          <button className="app-button icon-button !h-9 !w-9" aria-label="เพิ่มตัวจำลอง Deploy" title="เพิ่มตัวจำลองการ Deploy กลางจอ" disabled={!writable} onClick={onInsertDeploy}><Rocket size={17} /></button></div>
+          <button className="app-button icon-button !h-9 !w-9" aria-label="เพิ่มตัวจำลอง Deploy" title="เพิ่มตัวจำลองการ Deploy กลางจอ" disabled={!writable} onClick={onInsertDeploy}><Rocket size={17} /></button>
+          <button className="app-button icon-button !h-9 !w-9" aria-label="เพิ่มตัวจำลอง AI" title="เพิ่มตัวจำลอง AI (แชท, Memory, Claude Code) กลางจอ" disabled={!writable} onClick={onInsertAi}><Bot size={17} /></button></div>
         <div className="space-y-2 border-t border-slate-200 p-2">
           <select className="w-9 rounded border border-slate-200 bg-white text-xs" aria-label="เลือกสไลด์" title="เลือกสไลด์" value={activeSlideId ?? ""} onChange={(event) => onSwitchSlide(event.target.value)}>{slides.map((slide, index) => <option key={slide.id} value={slide.id}>{index + 1}. {slide.name}</option>)}</select>
           <button className="app-button icon-button !h-9 !w-9" aria-label="เพิ่มสไลด์" title="เพิ่มสไลด์" disabled={!writable} onClick={onAddSlide}><Plus size={17} /></button>
@@ -125,10 +127,11 @@ export default function LeftPanel({ slides, activeSlideId, tool, setTool, favori
         <div className="border-b border-slate-200 p-3"><div className="mb-2 text-xs text-slate-500">กดดาวเพื่อปักหมุดเครื่องมือโปรด</div><div className="grid grid-cols-4 gap-2">{TOOL_ITEMS.map((item) => <div key={item.id} className="relative"><button className={`app-button icon-button w-full ${tool === item.id ? "!border-slate-800 !bg-slate-900 !text-white" : ""}`} title={item.key ? `${item.label} (${item.key})` : item.label} aria-label={item.label} aria-pressed={isActionTool(item.id) ? undefined : tool === item.id} disabled={isActionTool(item.id) && !writable} onClick={() => pickTool(item.id)}>{item.icon}</button><button className={`absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-slate-200 bg-white ${favorites.includes(item.id) ? "text-amber-500" : "text-slate-400"}`} title={favorites.includes(item.id) ? `นำ ${item.label} ออกจากเครื่องมือโปรด` : `เพิ่ม ${item.label} ในเครื่องมือโปรด`} aria-label={favorites.includes(item.id) ? `นำ ${item.label} ออกจากเครื่องมือโปรด` : `เพิ่ม ${item.label} ในเครื่องมือโปรด`} aria-pressed={favorites.includes(item.id)} onClick={() => toggleFavorite(item.id)}><Star size={11} fill={favorites.includes(item.id) ? "currentColor" : "none"} /></button></div>)}</div>
           {/* One compact row so the slide list keeps its room on short screens. */}
           <div className="mt-3 text-xs text-slate-500">เพิ่มตัวจำลอง</div>
-          <div className="mt-1 grid grid-cols-3 gap-1.5">
+          <div className="mt-1 grid grid-cols-4 gap-1.5">
             <button className="app-button flex-col !gap-0.5 !px-1 !py-1.5 text-[11px]" disabled={!writable} onClick={onInsertGit} aria-label="เพิ่มตัวจำลอง Git" title="เพิ่มตัวจำลอง Git: เครื่อง A ↔ GitHub ↔ เครื่อง B กลางจอ"><GitBranch size={16} />Git</button>
             <button className="app-button flex-col !gap-0.5 !px-1 !py-1.5 text-[11px]" disabled={!writable} onClick={onInsertData} aria-label="เพิ่มตัวจำลองข้อมูล" title="เพิ่มตัวจำลองการเก็บข้อมูล (ร้านกาแฟ) กลางจอ"><Database size={16} />ข้อมูล</button>
             <button className="app-button flex-col !gap-0.5 !px-1 !py-1.5 text-[11px]" disabled={!writable} onClick={onInsertDeploy} aria-label="เพิ่มตัวจำลอง Deploy" title="เพิ่มตัวจำลองการ Deploy (Local → Vercel) กลางจอ"><Rocket size={16} />Deploy</button>
+            <button className="app-button flex-col !gap-0.5 !px-1 !py-1.5 text-[11px]" disabled={!writable} onClick={onInsertAi} aria-label="เพิ่มตัวจำลอง AI" title="เพิ่มตัวจำลอง AI: ประวัติแชท, คิดก่อนตอบ, Memory, Claude Code กลางจอ"><Bot size={16} />AI</button>
           </div></div>
         <div className="flex items-center justify-between px-3 pb-2 pt-4"><h2 className="text-sm font-semibold">สไลด์ <span className="muted font-normal">{slides.length}</span></h2><button className="app-button icon-button" aria-label="เพิ่มสไลด์" title="เพิ่มสไลด์" disabled={!writable} onClick={onAddSlide}><Plus size={17} /></button></div>
         <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-3" aria-label="รายการสไลด์">{slides.map((item, index) => <li key={item.id}><button aria-current={item.id === activeSlideId ? "true" : undefined} onClick={() => onSwitchSlide(item.id)}

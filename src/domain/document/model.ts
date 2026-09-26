@@ -1,5 +1,6 @@
 import type { DataState, DataView } from "../data/model";
 import type { DeployState, DeployView } from "../deploy/model";
+import type { AiState, AiView } from "../ai/model";
 import type { GitSimulationState } from "../git/model";
 
 export type Point = { x: number; y: number };
@@ -102,21 +103,31 @@ export type DeploySimulatorNode = NodeBase & {
   state: DeployState;
 };
 
+/** AI teaching simulator (plan 07 §5, scripted — never calls a real AI); `view` is its lesson step. */
+export type AiSimulatorNode = NodeBase & {
+  type: "ai-simulator";
+  rotation: 0;
+  scale: number;
+  view: AiView;
+  state: AiState;
+};
+
 /** Teaching widgets: drawn by their own renderer, uniform scale only, never rotated. */
-export type WidgetNode = GitSimulatorNode | DataSimulatorNode | DeploySimulatorNode;
+export type WidgetNode = GitSimulatorNode | DataSimulatorNode | DeploySimulatorNode | AiSimulatorNode;
 export const isWidgetNode = (node: CanvasNode): node is WidgetNode =>
-  node.type === "git-simulator" || node.type === "data-simulator" || node.type === "deploy-simulator";
+  node.type === "git-simulator" || node.type === "data-simulator" || node.type === "deploy-simulator" || node.type === "ai-simulator";
 /** Widgets whose actions play as a flow (packets on pipes). */
-export const isFlowWidget = (node: CanvasNode): node is DataSimulatorNode | DeploySimulatorNode => node.type === "data-simulator" || node.type === "deploy-simulator";
+export type FlowWidgetNode = DataSimulatorNode | DeploySimulatorNode | AiSimulatorNode;
+export const isFlowWidget = (node: CanvasNode): node is FlowWidgetNode => node.type === "data-simulator" || node.type === "deploy-simulator" || node.type === "ai-simulator";
 /** Base (scale 1) size of any teaching widget: the single source for bounds, transforms and export. */
 export function widgetNodeSize(node: WidgetNode): { width: number; height: number } {
-  // Data and deploy widgets share the 1120×680 frame in every step.
+  // Data, deploy and AI widgets share the 1120×680 frame in every step.
   return node.type === "git-simulator" ? gitNodeSize(node) : { ...DATA_BASE_SIZE };
 }
 
 export type CanvasNode =
   | RectNode | EllipseNode | LineNode | ArrowNode
-  | FreehandNode | TextNode | ImageNode | GitSimulatorNode | DataSimulatorNode | DeploySimulatorNode;
+  | FreehandNode | TextNode | ImageNode | GitSimulatorNode | DataSimulatorNode | DeploySimulatorNode | AiSimulatorNode;
 
 export type SlideDocument = {
   id: string;
