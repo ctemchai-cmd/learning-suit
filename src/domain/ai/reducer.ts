@@ -54,27 +54,32 @@ function chatSend(state: AiState, raw: string): AiTransition {
   if (!text) return noop(state, INVALID_INPUT, "rejected");
   const flow = new Flow(state);
   const before = state.history.messages;
-  flow.step(hop("chat", "app", "ข้อความใหม่", "request"), `คุณพิมพ์ “${text}” แล้วกดส่ง`,
+  flow.step(null, `คุณพิมพ์ “${text}” ในแอปแชท แล้วกดส่ง`,
     (s) => ({ ...s, history: trimMessages([...s.history.messages, { role: "user", text }], s.history.shown + 1) }), [{ spot: "chat", tone: "new" }]);
   const withNew = flow.state.history.messages;
   const newlyOut = markOut(withNew).filter((message, index) => message.out && !withNew[index].out).length;
   if (newlyOut) {
-    flow.step(null, `ประวัติยาวเกินที่ AI รับได้ (${AI_LIMITS.window} ข้อความ) → ข้อความเก่าสุด ${newlyOut} ข้อความหลุด AI จะไม่เห็นอีก`,
-      (s) => ({ ...s, history: { ...s.history, messages: markOut(s.history.messages) } }), [{ spot: "app", tone: "stale" }]);
+    flow.step(null, `แชทยาวเกินที่ AI รับได้ (${AI_LIMITS.window} ข้อความ) → ข้อความเก่าสุด ${newlyOut} ข้อความจะไม่ถูกส่งไปแล้ว`,
+      (s) => ({ ...s, history: { ...s.history, messages: markOut(s.history.messages) } }), [{ spot: "chat", tone: "stale" }]);
   }
   const window = contextWindow(flow.state.history.messages);
-  flow.step(hop("app", "model", `ส่งทั้ง ${window.length} ข้อความ`), `แอปส่ง “ทั้งบทสนทนา” ${window.length} ข้อความไปให้ AI อ่านใหม่หมด (ตัว AI ไม่ได้จำเอง)`,
-    undefined, [{ spot: "model", tone: "read" }]);
+  flow.step(hop("chat", "model", `ส่งทั้ง ${window.length} ข้อความ`),
+    `แอปแชทส่ง “ทั้งบทสนทนา” ${window.length} ข้อความไปให้ AI ทุกครั้ง ไม่ใช่แค่ข้อความล่าสุด`,
+    (s) => ({ ...s, history: { ...s.history, reading: true } }), [{ spot: "model", tone: "read" }]);
   const facts = factsFrom(window);
   const reply = replyTo(text, facts);
   // Did the fact exist earlier in the chat, but is no longer sent? That is the “forgetting” to show.
   const forgot = Boolean(reply.asked && !reply.known && factsFrom(before)[reply.asked]);
-  flow.step(hop("model", "app", "คำตอบ", reply.known ? "ok" : "blocked"),
-    forgot ? `AI หา${FACT_LABEL[reply.asked!]}ไม่เจอ เพราะข้อความที่บอกไว้หลุดจาก context ไปแล้ว ✗` : reply.asked && !reply.known ? "AI ไม่รู้คำตอบ เพราะไม่มีในข้อความที่ได้รับ" : "AI อ่านทุกข้อความที่ส่งมาแล้วเขียนคำตอบ แอปเก็บต่อท้ายประวัติ",
-    (s) => ({ ...s, history: trimMessages(markOut([...s.history.messages, { role: "ai", text: clip(reply.text) }]), s.history.shown) }),
-    [{ spot: "app", tone: "changed" }]);
-  flow.step(hop("app", "chat", "แสดงคำตอบ", reply.known ? "ok" : "blocked"), `AI: “${reply.text}”`,
-    (s) => ({ ...s, history: { ...s.history, shown: s.history.messages.length } }), [{ spot: "chat", tone: reply.known ? "new" : "blocked" }]);
+  flow.step(null,
+    forgot ? `AI อ่านทั้ง ${window.length} ข้อความแล้วหา${FACT_LABEL[reply.asked!]}ไม่เจอ เพราะข้อความที่บอกไว้ไม่ได้ถูกส่งมา ✗`
+      : `AI อ่านทั้ง ${window.length} ข้อความตั้งแต่ต้น แล้วเขียนคำตอบ`,
+    undefined, [{ spot: "model", tone: forgot || !reply.known ? "blocked" : "changed" }]);
+  flow.step(hop("model", "chat", "คำตอบ", reply.known ? "ok" : "blocked"), `AI ตอบ “${reply.text}” แล้วลืมทุกอย่างทันที (รอบหน้าแอปต้องส่งใหม่หมด)`,
+    (s) => {
+      // No `reading`: the model keeps nothing once it has answered.
+      const next = trimMessages(markOut([...s.history.messages, { role: "ai", text: clip(reply.text) }]), s.history.shown);
+      return { ...s, history: { messages: next.messages, shown: next.messages.length } };
+    }, [{ spot: "chat", tone: reply.known ? "new" : "blocked" }, { spot: "model", tone: "removed" }]);
   if (forgot) return finish(state, flow, "failed", `AI ลืม${FACT_LABEL[reply.asked!]}แล้ว: ข้อความแรกหลุดออกจาก context window`);
   return finish(state, flow, reply.known ? "success" : "failed", `AI ตอบ: ${reply.text}`);
 }
@@ -131,24 +136,28 @@ function memorySend(state: AiState, raw: string): AiTransition {
   if (!text) return noop(state, INVALID_INPUT, "rejected");
   const { on, items } = state.memory;
   const flow = new Flow(state);
-  flow.step(hop("chat", "app", "ข้อความใหม่", "request"), `แชท #${state.memory.chat}: คุณพิมพ์ “${text}”`,
+  flow.step(null, `แชท #${state.memory.chat}: คุณพิมพ์ “${text}” แล้วกดส่ง`,
     (s) => ({ ...s, memory: { ...s.memory, ...trimMessages([...s.memory.messages, { role: "user", text }], s.memory.shown + 1) } }), [{ spot: "chat", tone: "new" }]);
   const attached = on && items.length > 0;
-  flow.step(hop("app", "model", attached ? `ความจำ ${items.length} เรื่อง + แชทนี้` : "แชทนี้"),
-    attached ? `แอปแนบ “ความจำ” (${items.map((item) => `${FACT_LABEL[item.key]} ${item.value}`).join(", ")}) ไปกับแชทนี้ให้ AI อ่าน`
+  const count = flow.state.memory.messages.length;
+  flow.step(hop("chat", "model", attached ? `ความจำ + ${count} ข้อความ` : `${count} ข้อความ`),
+    attached ? `แอปแนบ “ความจำ” (${items.map((item) => `${FACT_LABEL[item.key]} ${item.value}`).join(", ")}) ไปพร้อมข้อความในแชทนี้`
       : on ? "ยังไม่มีความจำ แอปส่งแค่ข้อความในแชทนี้" : "Memory ปิดอยู่: แอปส่งแค่ข้อความในแชทนี้",
-    undefined, [{ spot: "model", tone: "read" }, ...(attached ? [{ spot: "memory", tone: "read" as const }] : [])]);
+    (s) => ({ ...s, memory: { ...s.memory, reading: true } }), [{ spot: "model", tone: "read" }, ...(attached ? [{ spot: "memory", tone: "read" as const }] : [])]);
   const facts = factsFrom(flow.state.memory.messages, on ? items : []);
   const reply = replyTo(text, facts);
-  flow.step(hop("model", "app", "คำตอบ", reply.known ? "ok" : "blocked"), reply.known ? "AI เขียนคำตอบจากข้อมูลที่ได้รับ" : "AI ไม่รู้ เพราะข้อมูลนี้ไม่ได้ถูกส่งมา",
-    (s) => ({ ...s, memory: { ...s.memory, ...trimMessages([...s.memory.messages, { role: "ai", text: clip(reply.text) }], s.memory.shown) } }));
+  flow.step(hop("model", "chat", "คำตอบ", reply.known ? "ok" : "blocked"),
+    reply.known ? `AI ตอบ “${reply.text}” จากสิ่งที่ได้รับ แล้วลืมทันที` : `AI ไม่รู้ เพราะเรื่องนี้ไม่ได้ถูกส่งมา: “${reply.text}”`,
+    (s) => {
+      const { on: memoryOn, items: memoryItems, chat } = s.memory;
+      const next = trimMessages([...s.memory.messages, { role: "ai", text: clip(reply.text) }], s.memory.shown);
+      return { ...s, memory: { on: memoryOn, items: memoryItems, chat, messages: next.messages, shown: next.messages.length } };
+    }, [{ spot: "chat", tone: reply.known ? "new" : "blocked" }, { spot: "model", tone: "removed" }]);
   const { items: nextItems, saved } = saveFacts(items, text);
   if (saved.length && on) {
-    flow.step(hop("app", "memory", `จด: ${saved.map((item) => item.value).join(", ")}`), "แอปจดเรื่องสำคัญไว้ใน “ความจำของแอป” (อยู่นอกตัว AI)",
+    flow.step(hop("chat", "memory", `จด: ${saved.map((item) => item.value).join(", ")}`), "แอปจดเรื่องสำคัญลง “Memory ของแอป” (เก็บที่แอป ไม่ได้อยู่ในตัว AI)",
       (s) => ({ ...s, memory: { ...s.memory, items: nextItems } }), [{ spot: "memory", tone: "new" }]);
   }
-  flow.step(hop("app", "chat", "แสดงคำตอบ", reply.known ? "ok" : "blocked"), `AI: “${reply.text}”`,
-    (s) => ({ ...s, memory: { ...s.memory, shown: s.memory.messages.length } }), [{ spot: "chat", tone: reply.known ? "new" : "blocked" }]);
   return finish(state, flow, reply.known ? "success" : "failed", reply.known ? `AI ตอบ: ${reply.text}` : `AI ไม่รู้: ${on ? "ยังไม่มีเรื่องนี้ในความจำ" : "Memory ปิดอยู่"}`);
 }
 

@@ -25,12 +25,13 @@ describe("scripted AI (no real model)", () => {
 describe("step 1 — the app sends the whole chat every time", () => {
   it("each send carries the history; the chat screen shows the answer only when it arrives", () => {
     const first = applyAiAction(createInitialAiState(), { type: "chat.send", text: "สวัสดี ผมชื่อต้น" });
-    expect(route(createInitialAiState(), { type: "chat.send", text: "สวัสดี ผมชื่อต้น" })).toEqual(["chat→app:request", "app→model:data", "model→app:ok", "app→chat:ok"]);
+    // Typed in the chat app → the whole conversation travels to the model → it reads → answers and forgets.
+    expect(route(createInitialAiState(), { type: "chat.send", text: "สวัสดี ผมชื่อต้น" })).toEqual([null, "chat→model:data", null, "model→chat:ok"]);
     expect(first.frames[1].hop?.label).toBe("ส่งทั้ง 1 ข้อความ");
-    // The answer is stored at the app before the chat screen shows it.
-    expect(first.frames[2].state.history).toMatchObject({ shown: 1 });
-    expect(first.frames[2].state.history.messages).toHaveLength(2);
-    expect(first.nextState.history.shown).toBe(2);
+    // The model holds what it was sent only while answering.
+    expect(first.frames[1].state.history.reading).toBe(true);
+    expect(first.frames[2].state.history.messages).toHaveLength(1);
+    expect(first.nextState.history).toEqual({ messages: [{ role: "user", text: "สวัสดี ผมชื่อต้น" }, { role: "ai", text: "ยินดีที่ได้รู้จักครับ คุณต้น!" }], shown: 2 });
     const second = applyAiAction(first.nextState, { type: "chat.send", text: "ผมชื่ออะไรนะ?" });
     expect(second.frames[1].hop?.label).toBe("ส่งทั้ง 3 ข้อความ");
     expect(second.outcome).toBe("success");
@@ -42,7 +43,7 @@ describe("step 1 — the app sends the whole chat every time", () => {
       { type: "chat.send", text: "สวัสดี ผมชื่อต้น" }, { type: "chat.send", text: "ผมชอบลาเต้" }, { type: "chat.send", text: "เล่าเรื่องแมวหน่อย" });
     expect(state.history.messages.some((message) => message.out)).toBe(false);
     const ask = applyAiAction(state, { type: "chat.send", text: "ผมชื่ออะไรนะ?" });
-    expect(ask.frames[1].hop).toBeNull(); // the “dropped out” frame
+    expect(ask.frames[1].caption).toContain("จะไม่ถูกส่งไปแล้ว"); // the “dropped out” frame
     expect(ask.outcome).toBe("failed");
     expect(ask.message).toContain("ลืมชื่อ");
     state = ask.nextState;
@@ -75,14 +76,15 @@ describe("step 3 — a web AI's memory lives in the app, not in the model", () =
     state = play(state, { type: "memory.newChat" });
     expect(state.memory).toMatchObject({ chat: 2, messages: [], shown: 0 });
     const ask = applyAiAction(state, { type: "memory.send", text: "ผมชื่ออะไรนะ?" });
-    expect(ask.frames[1].hop?.label).toBe("ความจำ 2 เรื่อง + แชทนี้");
+    expect(ask.frames[1].hop).toMatchObject({ from: "chat", to: "model", label: "ความจำ + 1 ข้อความ" });
+    expect(ask.nextState.memory.reading).toBeUndefined();
     expect(ask.outcome).toBe("success");
     expect(ask.nextState.memory.messages.at(-1)?.text).toBe("คุณชื่อต้นครับ");
 
     const off = play(state, { type: "memory.set", on: false });
     const blind = applyAiAction(off, { type: "memory.send", text: "ผมชื่ออะไรนะ?" });
     expect(blind.outcome).toBe("failed");
-    expect(blind.frames[1].hop?.label).toBe("แชทนี้");
+    expect(blind.frames[1].hop?.label).toBe("1 ข้อความ");
     expect(play(state, { type: "memory.clear" }).memory.items).toEqual([]);
   });
 });

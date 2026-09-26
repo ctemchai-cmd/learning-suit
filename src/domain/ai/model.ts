@@ -14,12 +14,15 @@ export type PuzzleId = "pen" | "letters" | "apples";
 
 export type AiState = {
   version: 1;
-  /** Step 1: `messages` = the app's stored history; `shown` = how many bubbles the chat screen shows yet. */
-  history: { messages: ChatMsg[]; shown: number };
+  /**
+   * Step 1: `messages` = the chat app's history; `shown` = how many bubbles its screen shows yet;
+   * `reading` = the model is holding what it was sent this turn (it forgets it right after answering).
+   */
+  history: { messages: ChatMsg[]; shown: number; reading?: true };
   /** Step 2: the last question and how it was answered. */
   thinking: { on: boolean; puzzle: PuzzleId | null; thoughts: string[]; answer: string | null; correct: boolean | null; seconds: number };
   /** Step 3: the app's memory (outside the model) and the current chat (`chat` = its number). */
-  memory: { on: boolean; items: MemoryItem[]; messages: ChatMsg[]; shown: number; chat: number };
+  memory: { on: boolean; items: MemoryItem[]; messages: ChatMsg[]; shown: number; chat: number; reading?: true };
   /** Step 4: one small project with a bug, the web chat, and Claude Code's terminal. */
   agent: { code: "bug" | "fixed"; tests: "unknown" | "fail" | "pass"; web: { asked: boolean; answer: string | null }; log: string[] };
   /** Step 5: CLAUDE.md, memory files and one Claude Code session with its context usage. */

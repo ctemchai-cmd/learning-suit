@@ -162,7 +162,7 @@ const deploySimulator = z.strictObject({
 // AI simulator (plan 07 §5). Scripted: the stored state is what the board shows, nothing else.
 const aiLine = z.string().refine((v) => codePoints(v) >= 1 && codePoints(v) <= AI_LIMITS.lineCodePoints);
 const chatMsg = z.strictObject({ role: z.enum(["user", "ai"]), text: aiLine, out: z.literal(true).optional() });
-const chat = z.strictObject({ messages: z.array(chatMsg).max(AI_LIMITS.messages), shown: z.number().int().min(0).max(AI_LIMITS.messages) })
+const chat = z.strictObject({ messages: z.array(chatMsg).max(AI_LIMITS.messages), shown: z.number().int().min(0).max(AI_LIMITS.messages), reading: z.literal(true).optional() })
   .refine((value) => value.shown <= value.messages.length, "Shown bubbles exceed the chat");
 const aiState = z.strictObject({
   version: z.literal(1),
@@ -174,6 +174,7 @@ const aiState = z.strictObject({
   memory: z.strictObject({
     on: z.boolean(), items: z.array(z.strictObject({ key: z.enum(["name", "job", "like"]), value: aiLine })).max(3),
     messages: z.array(chatMsg).max(AI_LIMITS.messages), shown: z.number().int().min(0).max(AI_LIMITS.messages), chat: z.number().int().min(1).max(1_000_000),
+    reading: z.literal(true).optional(),
   }).refine((value) => value.shown <= value.messages.length && new Set(value.items.map((item) => item.key)).size === value.items.length, "Invalid AI memory"),
   agent: z.strictObject({
     code: z.enum(["bug", "fixed"]), tests: z.enum(["unknown", "fail", "pass"]),

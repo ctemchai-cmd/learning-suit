@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Arc, Circle, Group, Line, Rect, Text } from "react-konva";
 import type Konva from "konva";
 import type { FlowTone, MarkTone } from "@/domain/data/model";
@@ -83,9 +83,10 @@ export function pointAlong(path: Pt[], share: number): Pt {
 /**
  * The packet of the current frame: travels along `path` once in `duration` ms, then calls `onLanded`.
  * Animated imperatively so React output stays the same; with reduced motion it lands immediately.
+ * `body` replaces the dot and label with what is carried (e.g. the messages sent), centred on the path.
  */
-export function Packet({ path, label, tone, duration, onLanded, runKey, font }: {
-  path: Pt[]; label: string; tone: FlowTone; duration: number; onLanded: () => void; runKey: string; font: string;
+export function Packet({ path, label, tone, duration, onLanded, runKey, font, body }: {
+  path: Pt[]; label: string; tone: FlowTone; duration: number; onLanded: () => void; runKey: string; font: string; body?: ReactNode;
 }) {
   const groupRef = useRef<Konva.Group>(null);
   const landed = useRef(onLanded);
@@ -118,11 +119,13 @@ export function Packet({ path, label, tone, duration, onLanded, runKey, font }: 
   const color = TONE_COLOR[tone];
   const width = Math.min(220, Math.max(60, [...label].length * 9 + 28));
   return <Group ref={groupRef} visible={false} listening={false}>
-    <Circle radius={13} fill={color} stroke="#FFFFFF" strokeWidth={3} shadowColor={color} shadowOpacity={0.45} shadowBlur={12} />
-    <Group x={-width / 2} y={-44}>
-      <Rect width={width} height={26} cornerRadius={13} fill={color} shadowColor="#0F172A" shadowOpacity={0.2} shadowBlur={6} />
-      <Label x={8} y={0} width={width - 16} text={label} size={13} bold color="#FFFFFF" align="center" font={font} lineHeight={26} />
-    </Group>
+    {body ?? <>
+      <Circle radius={13} fill={color} stroke="#FFFFFF" strokeWidth={3} shadowColor={color} shadowOpacity={0.45} shadowBlur={12} />
+      <Group x={-width / 2} y={-44}>
+        <Rect width={width} height={26} cornerRadius={13} fill={color} shadowColor="#0F172A" shadowOpacity={0.2} shadowBlur={6} />
+        <Label x={8} y={0} width={width - 16} text={label} size={13} bold color="#FFFFFF" align="center" font={font} lineHeight={26} />
+      </Group>
+    </>}
   </Group>;
 }
 

@@ -11,7 +11,7 @@ export const AI_H = 680;
 export const CAPTION_BOX: Box = { x: 24, y: 620, w: 1072, h: 46 };
 
 export const AI_VIEWS: { id: AiView; label: string; description: string }[] = [
-  { id: "history", label: "ทำไม AI จำแชทได้", description: "ทุกครั้งที่ส่ง แอปส่งบทสนทนาทั้งหมดให้ AI อ่านใหม่ ถ้ายาวเกินจะหลุด" },
+  { id: "history", label: "ทำไม AI จำแชทได้", description: "ทุกครั้งที่ส่ง แอปแชทส่งบทสนทนาทั้งหมดให้ AI อ่านใหม่ ถ้ายาวเกินจะหลุด" },
   { id: "thinking", label: "คิดก่อนตอบ (Chain of Thought)", description: "เขียนความคิดทีละขั้นก่อนตอบ: ช้ากว่าแต่ถูกกว่า" },
   { id: "memory", label: "Memory ของ AI บนเว็บ", description: "แอปจดเรื่องของเราไว้นอกตัว AI แล้วแนบไปกับแชทใหม่" },
   { id: "agent", label: "AI บนเว็บ vs Claude Code", description: "Claude Code ใช้เครื่องมือในเครื่องเรา: อ่านไฟล์ → รันเทสต์ → แก้โค้ด วนจนเสร็จ" },
@@ -19,12 +19,10 @@ export const AI_VIEWS: { id: AiView; label: string; description: string }[] = [
 ];
 
 export type Scene = {
-  /** Chat screen (web app in the browser). */
+  /** The chat app the learner types in (it also keeps the history). One place, so “browser vs app” never splits. */
   chat?: Box;
-  /** The chat app's server: stores the history and builds what is sent. */
-  app?: Box;
-  /** What the app sent last time (inside the app card). */
-  request?: Box;
+  /** Step 3: the chat app as a whole, holding the conversation and its memory. */
+  appFrame?: Box;
   /** The app's memory store (step 3). */
   memory?: Box;
   model: Box;
@@ -50,11 +48,9 @@ const right = (box: Box, y = box.y + box.h / 2): Pt => ({ x: box.x + box.w, y })
 const left = (box: Box, y = box.y + box.h / 2): Pt => ({ x: box.x, y });
 
 function historyScene(): Scene {
-  const chat = { x: 40, y: 76, w: 330, h: 528 };
-  const app = { x: 430, y: 110, w: 290, h: 470 };
-  const request = { x: 446, y: 186, w: 258, h: 380 };
-  const model = { x: 780, y: 110, w: 300, h: 470 };
-  return { chat, app, request, model, pipes: [{ from: right(chat, 340), to: left(app, 340) }, { from: right(app, 340), to: left(model, 340) }] };
+  const chat = { x: 40, y: 76, w: 480, h: 528 };
+  const model = { x: 680, y: 76, w: 400, h: 528 };
+  return { chat, model, pipes: [{ from: right(chat, 340), to: left(model, 340) }] };
 }
 
 function thinkingScene(): Scene {
@@ -65,15 +61,11 @@ function thinkingScene(): Scene {
 }
 
 function memoryScene(): Scene {
-  const chat = { x: 40, y: 76, w: 320, h: 528 };
-  const app = { x: 410, y: 76, w: 320, h: 528 };
-  const memory = { x: 426, y: 118, w: 288, h: 196 };
-  const request = { x: 426, y: 330, w: 288, h: 258 };
-  const model = { x: 790, y: 130, w: 290, h: 420 };
-  return {
-    chat, app, memory, request, model,
-    pipes: [{ from: right(chat, 440), to: left(app, 440) }, { from: right(app, 440), to: left(model, 440) }],
-  };
+  const appFrame = { x: 24, y: 62, w: 640, h: 546 };
+  const chat = { x: 40, y: 120, w: 370, h: 474 };
+  const memory = { x: 426, y: 120, w: 222, h: 474 };
+  const model = { x: 720, y: 76, w: 376, h: 528 };
+  return { appFrame, chat, memory, model, pipes: [{ from: right(appFrame, 340), to: left(model, 340) }] };
 }
 
 function agentScene(): Scene {
@@ -123,7 +115,6 @@ export function spotPoint(view: AiView, spot: Spot): Pt | null {
   const at = (box: Box | undefined) => (box ? center(box) : null);
   switch (spot) {
     case "chat": return at(scene.chat);
-    case "app": return scene.request ? center(scene.request) : at(scene.app);
     case "memory": return at(scene.memory);
     case "model": return at(scene.model);
     case "thoughts": return at(scene.thoughts);
