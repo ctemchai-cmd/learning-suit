@@ -1,0 +1,79 @@
+# Supabase CLI configuration for LOCAL development/testing (`supabase start`, `supabase test db`).
+# Hosted projects are configured in the Supabase Dashboard; keep these values in sync:
+#   - Auth: email/password only, public signup DISABLED (owner accounts are created by an admin).
+#   - Storage: private bucket `project-assets`, 10 MiB, PNG/JPEG/WebP (also created by the migration).
+# No secrets belong in this file.
+
+project_id = "learning-suit"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.pooler]
+enabled = false
+
+[db.seed]
+# No seed data: pgTAP tests create their own fixture users inside a rolled-back transaction and
+# tests/integration creates fixture users through the Auth admin API.
+enabled = false
+
+[realtime]
+enabled = false
+
+[studio]
+enabled = true
+port = 54323
+
+[local_smtp]
+enabled = true
+port = 54324
+
+[storage]
+enabled = true
+file_size_limit = "10MiB"
+
+[storage.buckets.project-assets]
+public = false
+file_size_limit = "10MiB"
+allowed_mime_types = ["image/png", "image/jpeg", "image/webp"]
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000", "http://127.0.0.1:3000"]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+# Closed product: nobody can self-register (ADR 0004).
+enable_signup = false
+enable_anonymous_sign_ins = false
+enable_manual_linking = false
+minimum_password_length = 12
+
+[auth.rate_limit]
+# tests/integration signs in ~12 sessions per run (A, B, "other devices", failure-injection clients).
+sign_in_sign_ups = 300
+
+[auth.email]
+enable_signup = false
+double_confirm_changes = true
+enable_confirmations = false
+secure_password_change = true
+
+[auth.sms]
+enable_signup = false
+
+[analytics]
+enabled = false
+
+[edge_runtime]
+enabled = false

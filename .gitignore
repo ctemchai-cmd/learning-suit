@@ -1,0 +1,16 @@
+node_modules/
+.next/
+.pnpm-store/
+.corepack/
+coverage/
+playwright-report/
+test-results/
+.env*
+!.env.example
+*.tsbuildinfo
+.playwright-mcp/
+.vercel/
+.DS_Store
+supabase/.temp/
+supabase/.branches/
+next-env.d.ts

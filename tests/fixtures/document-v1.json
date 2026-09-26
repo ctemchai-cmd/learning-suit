@@ -1,0 +1,31 @@
+{
+  "title": "Git เบื้องต้น",
+  "document": {
+    "schemaVersion": 1,
+    "slides": [
+      {
+        "id": "10000000-0000-4000-8000-000000000001",
+        "name": "Commit อยู่ในเครื่อง",
+        "background": "#FFFFFF",
+        "nodes": [
+          {
+            "id": "20000000-0000-4000-8000-000000000001",
+            "type": "rectangle",
+            "x": 120,
+            "y": 80,
+            "rotation": 0,
+            "opacity": 1,
+            "locked": false,
+            "width": 300,
+            "height": 160,
+            "stroke": "#1F2937",
+            "strokeWidth": 2,
+            "strokeStyle": "solid",
+            "fill": "transparent"
+          }
+        ]
+      }
+    ],
+    "assets": {}
+  }
+}

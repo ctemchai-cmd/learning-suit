@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "commits": {},
+  "machines": {
+    "A": {
+      "initialized": true,
+      "working": {
+        "name": "main.py",
+        "content": "print(\"Hello World\")\n"
+      },
+      "index": null,
+      "mainHead": null,
+      "originMainHead": null,
+      "knownCommitIds": []
+    },
+    "B": {
+      "initialized": false,
+      "working": null,
+      "index": null,
+      "mainHead": null,
+      "originMainHead": null,
+      "knownCommitIds": []
+    }
+  },
+  "remote": {
+    "mainHead": null,
+    "knownCommitIds": []
+  },
+  "nextCommitNumber": 1
+}
