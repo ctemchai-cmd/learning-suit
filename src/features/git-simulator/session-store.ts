@@ -13,7 +13,7 @@ export type GitResultMessage = { code: GitResultCode; outcome: GitOutcome; messa
 export type GitPreview = { repository: RepositoryId; commitId: string };
 
 /** Long enough to follow on a projector; prefers-reduced-motion skips the animation. */
-export const GIT_TRANSFER_DURATION_MS = 900;
+export const GIT_TRANSFER_DURATION_MS = 1800; // half the earlier speed (teacher feedback 2026-09-26)
 
 type GitSessionState = {
   tabs: Record<string, GitTab>;

@@ -25,8 +25,11 @@ export type AiState = {
   memory: { on: boolean; items: MemoryItem[]; messages: ChatMsg[]; shown: number; chat: number; reading?: true };
   /** Step 4: one small project with a bug, the web chat, and Claude Code's terminal. */
   agent: { code: "bug" | "fixed"; tests: "unknown" | "fail" | "pass"; web: { asked: boolean; answer: string | null }; log: string[] };
-  /** Step 5: CLAUDE.md, memory files and one Claude Code session with its context usage. */
-  cc: { rules: string[]; memories: string[]; session: number; context: number; chat: string[]; summarized: boolean };
+  /**
+   * Step 5: CLAUDE.md and memory files (on disk, permanent), one Claude Code session (temporary) with its
+   * context usage; `reading` = the model holds what it was sent this turn.
+   */
+  cc: { rules: string[]; memories: string[]; session: number; context: number; chat: string[]; summarized: boolean; reading?: true };
 };
 
 export type AiAction =

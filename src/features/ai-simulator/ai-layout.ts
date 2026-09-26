@@ -15,7 +15,7 @@ export const AI_VIEWS: { id: AiView; label: string; description: string }[] = [
   { id: "thinking", label: "คิดก่อนตอบ (Chain of Thought)", description: "เขียนความคิดทีละขั้นก่อนตอบ: ช้ากว่าแต่ถูกกว่า" },
   { id: "memory", label: "Memory ของ AI บนเว็บ", description: "แอปจดเรื่องของเราไว้นอกตัว AI แล้วแนบไปกับแชทใหม่" },
   { id: "agent", label: "AI บนเว็บ vs Claude Code", description: "Claude Code ใช้เครื่องมือในเครื่องเรา: อ่านไฟล์ → รันเทสต์ → แก้โค้ด วนจนเสร็จ" },
-  { id: "ccMemory", label: "ความจำของ Claude Code", description: "CLAUDE.md + ไฟล์ความจำโหลดทุก session บทสนทนายาวถูกสรุปย่อ" },
+  { id: "ccMemory", label: "ความจำของ Claude Code", description: "ทุกข้อความส่ง CLAUDE.md + ความจำ + บทสนทนาไปให้ AI ปิด session แล้วเหลือแค่ไฟล์" },
 ];
 
 export type Scene = {
@@ -82,17 +82,18 @@ function agentScene(): Scene {
 }
 
 function ccMemoryScene(): Scene {
-  const machine = { x: 24, y: 62, w: 800, h: 546 };
-  const claudeMd = { x: 44, y: 104, w: 300, h: 180 };
-  const memoryDir = { x: 44, y: 302, w: 300, h: 290 };
-  const cc = { x: 390, y: 104, w: 414, h: 488 };
-  const model = { x: 860, y: 150, w: 236, h: 380 };
+  // Files on disk (permanent) | the Claude Code session (temporary) | the AI.
+  const machine = { x: 24, y: 70, w: 300, h: 536 };
+  const claudeMd = { x: 38, y: 126, w: 272, h: 190 };
+  const memoryDir = { x: 38, y: 330, w: 272, h: 262 };
+  const cc = { x: 356, y: 70, w: 348, h: 536 };
+  const model = { x: 736, y: 70, w: 360, h: 536 };
   return {
     machine, claudeMd, memoryDir, cc, model,
     pipes: [
-      { from: right(claudeMd, 194), to: left(cc, 194) },
-      { from: right(memoryDir, 446), to: left(cc, 446) },
-      { from: right(cc, 340), to: left(model, 340) },
+      { from: right(claudeMd, 221), to: left(cc, 221) },
+      { from: right(memoryDir, 461), to: left(cc, 461) },
+      { from: right(cc, 338), to: left(model, 338) },
     ],
   };
 }

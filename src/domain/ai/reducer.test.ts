@@ -118,6 +118,11 @@ describe("step 5 — Claude Code's memory", () => {
     state = play(state, { type: "cc.start" });
     expect(state.cc).toMatchObject({ session: 2, chat: [], context: 3 });
     const ask = applyAiAction(state, { type: "cc.say", say: "ask" });
+    // Each message carries CLAUDE.md + the memory files + the whole session to the AI, which forgets after answering.
+    const sent = ask.frames.find((frame) => frame.hop?.from === "cc" && frame.hop.to === "model")!;
+    expect(sent.hop!.detail).toEqual(["📄 ใช้ pnpm ติดตั้งแพ็กเกจ", "📄 เขียนเทสต์ทุกครั้งที่แก้โค้ด", "📌 ตอบเป็นภาษาไทยเสมอ", "💬 คุณ: ต้องตอบเป็นภาษาอะไร?"]);
+    expect(sent.state.cc.reading).toBe(true);
+    expect(ask.nextState.cc.reading).toBeUndefined();
     expect(ask.outcome).toBe("success");
     expect(ask.message).toContain("จากไฟล์ความจำ");
     // Without the memory file a new session does not know.

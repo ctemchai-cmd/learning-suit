@@ -19,10 +19,13 @@ export type FlowPlay = {
 export type FlowSpeed = "normal" | "slow";
 export type FlowResult = { outcome: "success" | "rejected" | "noop" | "failed"; message: string };
 
-/** Travel time of one packet and the pause after it lands (auto play), per speed. */
+/**
+ * Travel time of one packet and the pause after it lands (auto play), per speed. Teacher feedback
+ * (2026-09-26): half the earlier speed by default so there is time to explain each beat.
+ */
 export const FLOW_TIMING: Record<FlowSpeed, { travel: number; pause: number }> = {
-  normal: { travel: 1100, pause: 1100 },
-  slow: { travel: 2000, pause: 1900 },
+  normal: { travel: 2200, pause: 2200 },
+  slow: { travel: 4000, pause: 3800 },
 };
 
 type FlowSession = {

@@ -183,6 +183,7 @@ const aiState = z.strictObject({
   cc: z.strictObject({
     rules: z.array(aiLine).max(4), memories: z.array(aiLine).max(AI_LIMITS.ccMemories), session: z.number().int().min(0).max(1_000_000),
     context: z.number().int().min(0).max(AI_LIMITS.ccContext + 8), chat: z.array(aiLine).max(AI_LIMITS.ccChat), summarized: z.boolean(),
+    reading: z.literal(true).optional(),
   }),
 });
 const aiSimulator = z.strictObject({

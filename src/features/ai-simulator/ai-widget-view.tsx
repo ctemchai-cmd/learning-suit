@@ -7,7 +7,7 @@ import type { AiSimulatorNode } from "@/domain/document/model";
 import type { AiState, AiView, ChatMsg } from "@/domain/ai/model";
 import { AI_LIMITS } from "@/domain/ai/model";
 import { FACT_LABEL, factsFrom, puzzleOf, type Facts } from "@/domain/ai/chat";
-import { contextWindow } from "@/domain/ai/reducer";
+import { ccContextLines, contextWindow } from "@/domain/ai/reducer";
 import { CaptionBar, Label, MARK_STYLE, Packet, Pipe, TONE_COLOR, type Pt } from "@/features/flow/flow-bits";
 import { waitingAt, type FlowPlay } from "@/features/flow/flow-session";
 import { useFlowPlayback } from "@/features/flow/use-flow-playback";
@@ -49,14 +49,6 @@ function Card({ box, title, sub, mark, fill = C.card, stroke = C.cardStroke, dar
     {title && <Label x={box.x + 14} y={box.y + 12} width={box.w - 28} text={title} size={16} bold color={dark ? "#F8FAFC" : C.title} font={font} />}
     {sub && <Label x={box.x + 14} y={box.y + 34} width={box.w - 28} text={sub} size={11} color={dark ? "#94A3B8" : C.muted} font={font} />}
     {children}
-  </Group>;
-}
-
-/** Frame with a caption tab, for “the web” / “our machine” areas. */
-function Area({ box, title, font }: { box: Box; title: string; font: string }) {
-  return <Group listening={false}>
-    <Rect x={box.x} y={box.y} width={box.w} height={box.h} cornerRadius={16} fill="#F8FAFC" stroke="#CBD5E1" strokeWidth={1.5} dash={[8, 6]} />
-    <Label x={box.x + 14} y={box.y + 8} width={box.w - 28} text={title} size={13} bold color="#475569" font={font} />
   </Group>;
 }
 
@@ -110,17 +102,22 @@ function ChatScreen({ box, title, sub, messages, typing, mark, font, children }:
   </Group>;
 }
 
-type Row = { icon: string; text: string; tone: "user" | "ai" | "memory" };
+type Row = { icon: string; text: string; tone: "user" | "ai" | "memory" | "file" };
 const ROW_FILL: Record<Row["tone"], { fill: string; text: string }> = {
-  user: { fill: "#2563EB", text: "#FFFFFF" }, ai: { fill: "#E2E8F0", text: "#1E293B" }, memory: { fill: "#FEF3C7", text: "#92400E" },
+  user: { fill: "#2563EB", text: "#FFFFFF" }, ai: { fill: "#E2E8F0", text: "#1E293B" }, memory: { fill: "#FEF3C7", text: "#92400E" }, file: { fill: "#DBEAFE", text: "#1E3A8A" },
 };
+/** A carried line coloured by what it is: 📄 CLAUDE.md, 📌 memory, 💬 คุณ… (us), other (the AI / plain). */
+const rowOfLine = (line: string): Row => ({
+  icon: "", text: line,
+  tone: line.startsWith("📄") ? "file" : line.startsWith("📌") ? "memory" : line.startsWith("💬 คุณ") || line.startsWith("👤") ? "user" : "ai",
+});
 const rowsOf = (messages: ChatMsg[]): Row[] => messages.map((message) => ({ icon: message.role === "user" ? "👤" : "🤖", text: message.text, tone: message.role }));
 
 /** Mini chat rows: what travels to the model, or what the model is holding right now. */
 function Rows({ x, y, w, rows, font, size = 12, rowH = 26 }: { x: number; y: number; w: number; rows: Row[]; font: string; size?: number; rowH?: number }) {
   return <Group listening={false}>{rows.map((row, index) => {
     const style = ROW_FILL[row.tone];
-    const inset = row.tone === "memory" ? 0 : 36;
+    const inset = row.tone === "memory" || row.tone === "file" ? 0 : 36;
     return <Group key={index}>
       <Rect x={row.tone === "user" ? x + inset : x} y={y + index * (rowH + 4)} width={w - inset} height={rowH} cornerRadius={rowH / 2.6} fill={style.fill} />
       <Label x={(row.tone === "user" ? x + inset : x) + 10} y={y + index * (rowH + 4)} width={w - inset - 20} text={row.icon ? `${row.icon} ${row.text}` : row.text} size={size} color={style.text} font={font} lineHeight={rowH} />
@@ -320,38 +317,65 @@ function AgentStep({ state, marks, play, font }: StepProps) {
   </>;
 }
 
+/** Stacked context bar: CLAUDE.md, memory and the conversation, out of the session's room. */
+function ContextBar({ x, y, w, rules, memories, chat, total, font }: { x: number; y: number; w: number; rules: number; memories: number; chat: number; total: number; font: string }) {
+  const gap = 3, slot = (w - gap * (total - 1)) / total;
+  const colours = [...Array(rules).fill("#60A5FA"), ...Array(memories).fill("#FBBF24"), ...Array(Math.max(0, chat)).fill("#A78BFA")].slice(0, total);
+  const used = Math.min(total, rules + memories + Math.max(0, chat));
+  return <Group listening={false}>
+    <Label x={x} y={y} width={w} text={`Context ที่ส่งทุกครั้ง: ${used}/${total}${used >= total ? " (เต็ม)" : ""}`} size={13} bold color="#E2E8F0" font={font} />
+    {Array.from({ length: total }, (_, index) => <Rect key={index} x={x + index * (slot + gap)} y={y + 22} width={slot} height={18} cornerRadius={4}
+      fill={colours[index] ?? "#1E293B"} stroke="#334155" strokeWidth={1} />)}
+    {[["#60A5FA", "CLAUDE.md"], ["#FBBF24", "ความจำ"], ["#A78BFA", "บทสนทนา"]].map(([colour, label], index) => <Group key={label} x={x + index * (w / 3)} y={y + 50}>
+      <Rect width={12} height={12} y={2} cornerRadius={3} fill={colour} />
+      <Label x={16} y={0} width={w / 3 - 18} text={label} size={12} color="#CBD5E1" font={font} />
+    </Group>)}
+  </Group>;
+}
+
 function CcMemoryStep({ state, marks, font }: StepProps) {
   const scene = sceneOf("ccMemory");
-  const { rules, memories, session, context, chat, summarized } = state.cc;
+  const { rules, memories, session, context, chat, summarized, reading } = state.cc;
   const md = scene.claudeMd!, dir = scene.memoryDir!, cc = scene.cc!, model = scene.model;
+  const received = ccContextLines(state).map(rowOfLine);
   return <>
-    <Area box={scene.machine!} title="💻 เครื่องเรา (โฟลเดอร์โปรเจกต์)" font={font} />
-    <Card box={md} title="📄 CLAUDE.md" sub="คำสั่งประจำโปรเจกต์ · เราเขียนเอง" mark={toneOf(marks, "claudeMd")} font={font}>
-      {rules.map((rule, index) => <Label key={index} x={md.x + 14} y={md.y + 64 + index * 26} width={md.w - 28} text={`• ${rule}`} size={14} color={C.text} font={font} />)}
+    {/* Left: files on our disk — they stay when the session ends. */}
+    <Card box={scene.machine!} title="💾 ไฟล์ในเครื่องเรา" sub="อยู่ถาวร ปิด session ก็ไม่หาย" fill="#F8FAFC" font={font} />
+    <Card box={md} title="📄 CLAUDE.md" sub="คำสั่งโปรเจกต์ · เราเขียนเอง" mark={toneOf(marks, "claudeMd")} fill="#EFF6FF" stroke="#93C5FD" font={font}>
+      {rules.map((rule, index) => <Label key={index} x={md.x + 14} y={md.y + 64 + index * 28} width={md.w - 28} text={`• ${rule}`} size={14} color="#1E3A8A" font={font} />)}
     </Card>
-    <Card box={dir} title="🗂 ความจำ (memory/)" sub="Claude จดเองข้าม session · เปิดอ่าน/ลบได้" mark={toneOf(marks, "memoryDir")} fill="#FFFBEB" stroke="#FCD34D" font={font}>
+    <Card box={dir} title="📌 ไฟล์ความจำ" sub="Claude จดเองข้าม session · เปิดอ่าน/ลบได้" mark={toneOf(marks, "memoryDir")} fill="#FFFBEB" stroke="#FCD34D" font={font}>
       {memories.length === 0
-        ? <Label x={dir.x + 14} y={dir.y + 70} width={dir.w - 28} text="ยังไม่มีไฟล์ความจำ" size={13} color={C.muted} font={font} />
-        : memories.map((memory, index) => <Label key={index} x={dir.x + 14} y={dir.y + 64 + index * 28} width={dir.w - 28} text={`📌 ${memory}`} size={15} bold color="#92400E" font={font} />)}
+        ? <Label x={dir.x + 14} y={dir.y + 70} width={dir.w - 28} text="ยังไม่มี" size={14} color={C.muted} font={font} />
+        : memories.map((memory, index) => <Label key={index} x={dir.x + 14} y={dir.y + 64 + index * 28} width={dir.w - 28} text={`• ${memory}`} size={15} bold color="#92400E" font={font} />)}
     </Card>
-    <Card box={cc} title={session ? `⌨️ Claude Code · session #${session}` : "⌨️ Claude Code"} mark={toneOf(marks, "cc")} fill={C.terminal} stroke="#334155" dark font={font}>
+
+    {/* Middle: the session — temporary; everything in it is sent with every message. */}
+    <Card box={cc} title={session ? `⌨️ Claude Code · session #${session}` : "⌨️ Claude Code"} sub="บทสนทนาชั่วคราว ปิด session แล้วหาย" mark={toneOf(marks, "cc")} fill={C.terminal} stroke="#334155" dark font={font}>
       {session === 0
-        ? <Label x={cc.x + 16} y={cc.y + 52} width={cc.w - 32} text="ยังไม่ได้เปิด session" size={14} color="#94A3B8" font={font} />
+        ? <Label x={cc.x + 16} y={cc.y + 70} width={cc.w - 32} text="ยังไม่ได้เปิด session" size={15} color="#94A3B8" font={font} />
         : <>
-          <Label x={cc.x + 16} y={cc.y + 46} width={cc.w - 32} text={`↳ โหลด CLAUDE.md (${rules.length} ข้อ)${memories.length ? ` + ความจำ ${memories.length} เรื่อง` : ""}`} size={13} color="#93C5FD" font={font} />
-          {chat.map((line, index) => <Label key={index} x={cc.x + 16} y={cc.y + 78 + index * 30} width={cc.w - 32} text={line} size={14}
+          <Label x={cc.x + 16} y={cc.y + 62} width={cc.w - 32} text={`↳ อ่าน CLAUDE.md${memories.length ? ` + ความจำ ${memories.length} เรื่อง` : ""}`} size={13} color="#93C5FD" font={font} />
+          {chat.map((line, index) => <Label key={index} x={cc.x + 16} y={cc.y + 94 + index * 30} width={cc.w - 32} text={line} size={14}
             color={line.startsWith("สรุป") ? "#FDE68A" : line.startsWith("คุณ") ? "#F8FAFC" : "#C4B5FD"} font={font} />)}
-          {summarized && <Group x={cc.x + cc.w - 124} y={cc.y + 12}>
+          {summarized && <Group x={cc.x + cc.w - 124} y={cc.y + 14}>
             <Rect width={110} height={22} cornerRadius={11} fill="#F59E0B" />
             <Label x={0} y={0} width={110} text="สรุปย่อแล้ว" size={12} bold color="#1F2937" align="center" font={font} lineHeight={22} />
           </Group>}
         </>}
-      <Meter x={cc.x + 16} y={cc.y + cc.h - 56} w={cc.w - 32} used={Math.min(context, AI_LIMITS.ccContext)} total={AI_LIMITS.ccContext}
-        label={`Context ที่ใช้: ${Math.min(context, AI_LIMITS.ccContext)}/${AI_LIMITS.ccContext}${context >= AI_LIMITS.ccContext ? " (เต็ม)" : ""}`} dark font={font} />
+      <ContextBar x={cc.x + 16} y={cc.y + cc.h - 84} w={cc.w - 32} rules={session ? rules.length : 0} memories={session ? memories.length : 0}
+        chat={session ? context - rules.length - memories.length : 0} total={AI_LIMITS.ccContext} font={font} />
     </Card>
-    <ModelCard box={model} sub="อ่านทุกอย่างที่ส่งมา ทุกครั้งที่ตอบ" mark={toneOf(marks, "model")} font={font}>
-      <Para x={model.x + 16} y={model.y + 80} width={model.w - 32} height={200}
-        text="ปิด session แล้วบทสนทนาหาย แต่ไฟล์ CLAUDE.md กับความจำอยู่ในเครื่อง จึงถูกโหลดใหม่ทุกครั้ง" size={14} color={C.text} font={font} />
+
+    {/* Right: the AI holds what it was sent only while answering. */}
+    <ModelCard box={model} sub="ไม่มีความจำของตัวเอง" mark={toneOf(marks, "model")} font={font}>
+      <Label x={model.x + 16} y={model.y + 64} width={model.w - 32} text={reading ? `📥 ได้รับรอบนี้ (${received.length} ชิ้น)` : "📥 ได้รับรอบนี้"} size={14} bold color={C.title} font={font} />
+      <Rect x={model.x + 16} y={model.y + 90} width={model.w - 32} height={336} cornerRadius={12} fill="#FFFFFF" stroke="#DDD6FE" dash={reading ? undefined : [6, 5]} />
+      {reading
+        ? <Rows x={model.x + 26} y={model.y + 100} w={model.w - 52} rows={received.slice(-10)} font={font} />
+        : <Para x={model.x + 26} y={model.y + 100} width={model.w - 52} height={316} text="ว่างเปล่า — ตอบเสร็จแล้วลืมหมด 🫥" size={15} color="#A78BFA" align="center" font={font} />}
+      <Para x={model.x + 16} y={model.y + model.h - 96} width={model.w - 32} height={84}
+        text="Claude “จำ” ข้าม session ได้ เพราะ Claude Code ส่งไฟล์ CLAUDE.md กับไฟล์ความจำไปด้วยทุกข้อความ" size={13} color={C.muted} font={font} />
     </ModelCard>
   </>;
 }
@@ -373,7 +397,7 @@ export function AiWidgetView({ node, play, fontFamily: font }: { node: AiSimulat
   const after = flow.frame?.state;
   let body: ReactNode = undefined;
   if (move?.detail) {
-    const rows: Row[] = move.detail.map((line) => ({ icon: "", text: line, tone: "ai" }));
+    const rows: Row[] = move.detail.slice(-12).map(rowOfLine);
     // 📤 = sent to the AI, 🧠 = the AI answers or asks for a tool.
     body = <Payload title={`${move.to === "model" ? "📤" : "🧠"} ${move.label}`} rows={rows} color={TONE_COLOR[move.tone]} font={font} />;
   } else if (move && after && (view === "history" || view === "memory")) {
