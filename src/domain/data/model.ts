@@ -70,7 +70,8 @@ export type DataAction =
  */
 export type Spot = string;
 export type FlowTone = "data" | "request" | "ok" | "blocked" | "leak" | "lost";
-export type Hop = { from: Spot; to: Spot; label: string; tone: FlowTone };
+/** `detail` = what the packet carries, line by line (drawn as a card instead of a dot where a view supports it). */
+export type Hop = { from: Spot; to: Spot; label: string; tone: FlowTone; detail?: string[] };
 /** `refresh` on a phone = its app restarts (the board spins the refresh icon over a blank screen). */
 export type MarkTone = "new" | "changed" | "stale" | "blocked" | "allowed" | "leak" | "removed" | "read" | "refresh";
 export type Mark = { spot: Spot; tone: MarkTone; note?: string };

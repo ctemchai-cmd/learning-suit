@@ -75,7 +75,8 @@ test("AI-02: Claude Code loops through tools on our machine; its memory files su
   await expect(panel(page)).toContainText("จนเทสต์ผ่าน");
   let node = await aiNode(page);
   expect(node.state.agent).toMatchObject({ code: "fixed", tests: "pass" });
-  expect(node.state.agent.log).toContain("● Edit main.py");
+  expect(node.state.agent.log).toContain("✏️ แก้ main.py แล้ว");
+  expect(node.state.agent.log).toContain("🔐 ขอแก้ไฟล์ → คุณอนุญาต");
   await expect(button(page, "สั่ง Claude Code แก้บั๊ก")).toBeDisabled();
 
   await step(page, "ccMemory");

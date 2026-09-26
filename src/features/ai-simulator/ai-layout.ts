@@ -28,15 +28,13 @@ export type Scene = {
   model: Box;
   /** Chain of thought box inside the model (step 2). */
   thoughts?: Box;
-  /** Step 4. */
-  webBand?: Box;
+  /** Step 4 (web chat | AI | machine); `machine` is also step 5's frame. */
   machine?: Box;
   web?: Box;
-  webNote?: Box;
   cc?: Box;
   files?: Box;
   tests?: Box;
-  gate?: Pt;
+  permission?: Box;
   /** Step 5. */
   claudeMd?: Box;
   memoryDir?: Box;
@@ -69,24 +67,17 @@ function memoryScene(): Scene {
 }
 
 function agentScene(): Scene {
-  const webBand = { x: 24, y: 62, w: 800, h: 216 };
-  const web = { x: 40, y: 94, w: 470, h: 172 };
-  const webNote = { x: 530, y: 104, w: 278, h: 140 };
-  const machine = { x: 24, y: 290, w: 800, h: 318 };
-  const cc = { x: 40, y: 330, w: 330, h: 262 };
-  const files = { x: 460, y: 330, w: 348, h: 150 };
-  const tests = { x: 460, y: 496, w: 348, h: 96 };
-  const model = { x: 860, y: 62, w: 236, h: 546 };
-  const gate = { x: 415, y: 405 };
+  // Three columns: the web chat | the same AI in the middle | our machine with Claude Code.
+  const web = { x: 24, y: 70, w: 316, h: 536 };
+  const model = { x: 404, y: 150, w: 312, h: 380 };
+  const machine = { x: 780, y: 70, w: 316, h: 536 };
+  const cc = { x: 794, y: 132, w: 288, h: 214 };
+  const files = { x: 794, y: 358, w: 288, h: 96 };
+  const tests = { x: 794, y: 466, w: 288, h: 60 };
+  const permission = { x: 794, y: 538, w: 288, h: 56 };
   return {
-    webBand, web, webNote, machine, cc, files, tests, model, gate,
-    pipes: [
-      { from: right(web, 174), to: left(model, 174) },
-      { from: { x: cc.x + cc.w, y: 405 }, to: gate },
-      { from: gate, to: left(files, 405) },
-      { from: { x: cc.x + cc.w, y: 544 }, to: left(tests, 544) },
-      { from: { x: cc.x + cc.w, y: 488 }, to: left(model, 488) },
-    ],
+    web, model, machine, cc, files, tests, permission,
+    pipes: [{ from: right(web, 340), to: left(model, 340) }, { from: right(model, 340), to: left(machine, 340) }],
   };
 }
 
@@ -122,26 +113,16 @@ export function spotPoint(view: AiView, spot: Spot): Pt | null {
     case "cc": return at(scene.cc);
     case "files": return at(scene.files);
     case "tests": return at(scene.tests);
-    case "gate": return scene.gate ?? null;
+    case "gate": return at(scene.permission);
     case "claudeMd": return at(scene.claudeMd);
     case "memoryDir": return at(scene.memoryDir);
   }
   return null;
 }
 
-/** Polyline for a hop. Claude Code ↔ files passes the permission gate; Claude Code ↔ model leaves the machine on the right. */
+/** Polyline for a hop: straight between the two places (every step keeps its travellers on one line). */
 export function hopPath(view: AiView, move: Hop): Pt[] | null {
   const start = spotPoint(view, move.from);
   const end = spotPoint(view, move.to);
-  if (!start || !end) return null;
-  const scene = sceneOf(view);
-  if (view === "agent" && scene.gate) {
-    const pair = `${move.from}>${move.to}`;
-    if (pair === "cc>files" || pair === "files>cc") return [start, { x: 370, y: 405 }, scene.gate, { x: 460, y: 405 }, end];
-    if (pair === "cc>tests" || pair === "tests>cc") return [start, { x: 370, y: 544 }, { x: 460, y: 544 }, end];
-    // Between the files and the tests cards, out of the machine to the model.
-    if (pair === "cc>model") return [start, { x: 370, y: 488 }, { x: 860, y: 488 }, end];
-    if (pair === "model>cc") return [start, { x: 860, y: 488 }, { x: 370, y: 488 }, end];
-  }
-  return [start, end];
+  return start && end ? [start, end] : null;
 }

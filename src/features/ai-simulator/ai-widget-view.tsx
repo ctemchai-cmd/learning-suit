@@ -8,7 +8,7 @@ import type { AiState, AiView, ChatMsg } from "@/domain/ai/model";
 import { AI_LIMITS } from "@/domain/ai/model";
 import { FACT_LABEL, factsFrom, puzzleOf, type Facts } from "@/domain/ai/chat";
 import { contextWindow } from "@/domain/ai/reducer";
-import { CaptionBar, Gate, Label, MARK_STYLE, Packet, Pipe, type Pt } from "@/features/flow/flow-bits";
+import { CaptionBar, Label, MARK_STYLE, Packet, Pipe, TONE_COLOR, type Pt } from "@/features/flow/flow-bits";
 import { waitingAt, type FlowPlay } from "@/features/flow/flow-session";
 import { useFlowPlayback } from "@/features/flow/use-flow-playback";
 import { AI_H, AI_VIEWS, AI_W, CAPTION_BOX, hopPath, sceneOf, type Box } from "./ai-layout";
@@ -123,7 +123,7 @@ function Rows({ x, y, w, rows, font, size = 12, rowH = 26 }: { x: number; y: num
     const inset = row.tone === "memory" ? 0 : 36;
     return <Group key={index}>
       <Rect x={row.tone === "user" ? x + inset : x} y={y + index * (rowH + 4)} width={w - inset} height={rowH} cornerRadius={rowH / 2.6} fill={style.fill} />
-      <Label x={(row.tone === "user" ? x + inset : x) + 10} y={y + index * (rowH + 4)} width={w - inset - 20} text={`${row.icon} ${row.text}`} size={size} color={style.text} font={font} lineHeight={rowH} />
+      <Label x={(row.tone === "user" ? x + inset : x) + 10} y={y + index * (rowH + 4)} width={w - inset - 20} text={row.icon ? `${row.icon} ${row.text}` : row.text} size={size} color={style.text} font={font} lineHeight={rowH} />
     </Group>;
   })}</Group>;
 }
@@ -274,39 +274,49 @@ function MemoryStep({ state, marks, play, font }: StepProps) {
 function AgentStep({ state, marks, play, font }: StepProps) {
   const scene = sceneOf("agent");
   const { code, tests, web, log } = state.agent;
+  const webBox = scene.web!, model = scene.model, machine = scene.machine!, cc = scene.cc!, files = scene.files!, testBox = scene.tests!, gate = scene.permission!;
   const webMessages: ChatMsg[] = web.asked ? [{ role: "user", text: "(วางโค้ดที่ก๊อปมา) ทำไมเทสต์ไม่ผ่าน?" }, ...(web.answer ? [{ role: "ai" as const, text: web.answer }] : [])] : [];
-  const files = scene.files!, testBox = scene.tests!, cc = scene.cc!, model = scene.model, note = scene.webNote!;
-  const gateTone = toneOf(marks, "gate") === "allowed" ? "ok" : "idle";
+  const gateMark = toneOf(marks, "gate");
   return <>
-    <Area box={scene.webBand!} title="🌐 AI บนเว็บ (แชทในเบราว์เซอร์)" font={font} />
-    <ChatScreen box={scene.web!} title="💬 แชท" messages={webMessages} typing={Boolean(waitingAt(play, "web"))} mark={toneOf(marks, "web")} font={font} />
-    <Card box={note} title="บนเว็บ AI…" fill="#FFF7ED" stroke="#FDBA74" font={font}>
-      {["✗ มองไม่เห็นไฟล์ในเครื่องเรา", "✗ เราต้องก๊อปโค้ดไปวางเอง", "✗ แก้ไฟล์/รันเทสต์ให้ไม่ได้"].map((line, index) =>
-        <Label key={index} x={note.x + 14} y={note.y + 42 + index * 28} width={note.w - 28} text={line} size={13} color="#9A3412" font={font} />)}
-    </Card>
-    <Area box={scene.machine!} title="💻 เครื่องเรา" font={font} />
-    <Card box={cc} title="⌨️ Claude Code (terminal)" mark={toneOf(marks, "cc")} fill={C.terminal} stroke="#334155" dark font={font}>
+    {/* Left: the web chat — it can only talk. */}
+    <ChatScreen box={webBox} title="🌐 AI บนเว็บ (แชท)" sub="คุยได้ แต่แตะเครื่องเราไม่ได้" messages={webMessages} typing={Boolean(waitingAt(play, "web"))} mark={toneOf(marks, "web")} font={font}>
+      <Bubbles area={{ x: webBox.x + 12, y: webBox.y + 76, w: webBox.w - 24, h: 200 }} messages={webMessages} typing={Boolean(waitingAt(play, "web"))} font={font} />
+      {webMessages.length === 0 && <Label x={webBox.x + 14} y={webBox.y + 96} width={webBox.w - 28} text="ยังไม่ได้ถาม" size={13} color={C.muted} align="center" font={font} />}
+      <Rect x={webBox.x + 12} y={webBox.y + webBox.h - 150} width={webBox.w - 24} height={136} cornerRadius={12} fill="#FFF7ED" stroke="#FDBA74" />
+      <Label x={webBox.x + 26} y={webBox.y + webBox.h - 138} width={webBox.w - 52} text={web.answer ? "✋ ต่อจากนี้เราต้องทำเอง:" : "บนเว็บ AI…"} size={14} bold color="#9A3412" font={font} />
+      {(web.answer ? ["เปิดไฟล์ในเครื่อง", "แก้โค้ดเอง", "รันเทสต์เอง"] : ["มองไม่เห็นไฟล์ในเครื่องเรา", "ต้องก๊อปโค้ดไปวางเอง", "ให้ได้แค่คำแนะนำ"]).map((line, index) =>
+        <Label key={index} x={webBox.x + 30} y={webBox.y + webBox.h - 108 + index * 28} width={webBox.w - 60} text={`• ${line}`} size={14} color="#9A3412" font={font} />)}
+    </ChatScreen>
+
+    {/* Middle: the same AI serves both — it only sees what is sent to it. */}
+    <ModelCard box={model} sub="ตัวเดียวกันทั้งสองฝั่ง · อยู่บนคลาวด์" mark={toneOf(marks, "model")} font={font}>
+      {["👀 มองไม่เห็นเครื่องเรา", "📥 รู้แค่สิ่งที่ถูกส่งมา", "🔧 ใน Claude Code “ขอใช้เครื่องมือ” ได้"].map((line, index) =>
+        <Label key={index} x={model.x + 18} y={model.y + 76 + index * 34} width={model.w - 36} text={line} size={15} bold={index === 2} color={index === 2 ? C.violet : C.text} font={font} />)}
+      <Rect x={model.x + 18} y={model.y + 196} width={model.w - 36} height={164} cornerRadius={12} fill="#FFFFFF" stroke="#DDD6FE" />
+      <Label x={model.x + 30} y={model.y + 206} width={model.w - 60} text="🔁 วงจรของ Claude Code" size={14} bold color={C.violet} font={font} />
+      {["1. AI ขอใช้เครื่องมือ", "2. Claude Code ทำในเครื่องเรา", "3. ส่งผลกลับให้ AI", "4. วนจนเสร็จ แล้วตอบ"].map((line, index) =>
+        <Label key={index} x={model.x + 30} y={model.y + 236 + index * 28} width={model.w - 60} text={line} size={14} color={C.text} font={font} />)}
+    </ModelCard>
+
+    {/* Right: our machine — Claude Code acts here, and asks before editing. */}
+    <Card box={machine} title="💻 เครื่องเรา" sub="Claude Code ลงมือทำให้ในเครื่องนี้" fill="#F8FAFC" font={font} />
+    <Card box={cc} title="⌨️ Claude Code" mark={toneOf(marks, "cc")} fill={C.terminal} stroke="#334155" dark font={font}>
       {log.length === 0
-        ? <Label x={cc.x + 14} y={cc.y + 48} width={cc.w - 28} text="$ claude" size={14} color="#86EFAC" font={font} />
-        : log.slice(-9).map((line, index) => <Label key={index} x={cc.x + 14} y={cc.y + 46 + index * 23} width={cc.w - 28} text={line} size={13}
-          color={line.startsWith("✓") || line.includes("passed") ? "#86EFAC" : line.includes("failed") ? "#FCA5A5" : line.startsWith(">") ? "#FDE68A" : C.terminalText} font={font} />)}
+        ? <Label x={cc.x + 14} y={cc.y + 44} width={cc.w - 28} text="$ claude" size={14} color="#86EFAC" font={font} />
+        : log.slice(-7).map((line, index) => <Label key={index} x={cc.x + 14} y={cc.y + 40 + index * 24} width={cc.w - 28} text={line} size={14}
+          color={line.startsWith("✅") || line.includes("✓") ? "#86EFAC" : line.includes("✗") ? "#FCA5A5" : line.startsWith(">") ? "#FDE68A" : C.terminalText} font={font} />)}
     </Card>
     <Card box={files} title="📄 main.py" mark={toneOf(marks, "files")} font={font}>
-      <Rect x={files.x + 14} y={files.y + 44} width={files.w - 28} height={84} cornerRadius={8} fill="#0F172A" />
-      <Label x={files.x + 26} y={files.y + 54} width={files.w - 52} text="def add(a, b):" size={15} color="#E2E8F0" font={font} />
-      <Label x={files.x + 26} y={files.y + 82} width={files.w - 52} text={code === "bug" ? "    return a - b   ← บั๊ก" : "    return a + b   ✓"} size={15} bold color={code === "bug" ? "#FCA5A5" : "#86EFAC"} font={font} />
+      <Label x={files.x + 14} y={files.y + 38} width={files.w - 28} text="def add(a, b):" size={15} color={C.text} font={font} />
+      <Label x={files.x + 14} y={files.y + 62} width={files.w - 28} text={code === "bug" ? "    return a - b   ← บั๊ก" : "    return a + b   ✓"} size={15} bold color={code === "bug" ? C.bad : C.ok} font={font} />
     </Card>
-    <Card box={testBox} title="🧪 เทสต์: add(2, 3) ต้องได้ 5" mark={toneOf(marks, "tests")} font={font}>
-      <Label x={testBox.x + 14} y={testBox.y + 50} width={testBox.w - 28}
-        text={tests === "unknown" ? "ยังไม่ได้รัน" : tests === "fail" ? "✗ ไม่ผ่าน: ได้ −1" : "✓ ผ่าน"} size={16} bold color={tests === "pass" ? C.ok : tests === "fail" ? C.bad : C.muted} font={font} />
+    <Card box={testBox} mark={toneOf(marks, "tests")} font={font}>
+      <Label x={testBox.x + 14} y={testBox.y} width={testBox.w - 28} text={`🧪 เทสต์: ${tests === "unknown" ? "ยังไม่ได้รัน" : tests === "fail" ? "✗ ไม่ผ่าน" : "✓ ผ่าน"}`} size={15} bold
+        color={tests === "pass" ? C.ok : tests === "fail" ? C.bad : C.muted} font={font} lineHeight={testBox.h} />
     </Card>
-    <Gate at={scene.gate!} label="ขออนุญาต" tone={gateTone} font={font} />
-    <ModelCard box={model} sub="ตัวเดียวกัน แต่ขอใช้เครื่องมือได้" mark={toneOf(marks, "model")} font={font}>
-      {["1. รับงาน", "2. ขอใช้เครื่องมือ", "3. อ่านผลที่ส่งกลับ", "4. วนจนเสร็จ แล้วตอบ"].map((line, index) =>
-        <Label key={index} x={model.x + 16} y={model.y + 90 + index * 30} width={model.w - 32} text={line} size={14} bold color={C.violet} font={font} />)}
-      <Para x={model.x + 16} y={model.y + 230} width={model.w - 32} height={120}
-        text="เครื่องมือรันในเครื่องเรา แต่ผลลัพธ์ (เช่น เนื้อหาไฟล์) ถูกส่งไปให้โมเดลอ่าน" size={12} color={C.muted} font={font} />
-    </ModelCard>
+    <Card box={gate} mark={gateMark} fill="#F5F3FF" stroke="#C4B5FD" font={font}>
+      <Label x={gate.x + 14} y={gate.y} width={gate.w - 28} text={gateMark === "allowed" ? "🔐 ✓ คุณกดอนุญาตแล้ว" : gateMark === "read" ? "🔐 ขอแก้ไฟล์… อนุญาตไหม?" : "🔐 ถามเราก่อนแก้ไฟล์เสมอ"} size={14} bold color={C.violet} font={font} lineHeight={gate.h} />
+    </Card>
   </>;
 }
 
@@ -362,7 +372,11 @@ export function AiWidgetView({ node, play, fontFamily: font }: { node: AiSimulat
   const move = flow.moving;
   const after = flow.frame?.state;
   let body: ReactNode = undefined;
-  if (move && after && (view === "history" || view === "memory")) {
+  if (move?.detail) {
+    const rows: Row[] = move.detail.map((line) => ({ icon: "", text: line, tone: "ai" }));
+    // 📤 = sent to the AI, 🧠 = the AI answers or asks for a tool.
+    body = <Payload title={`${move.to === "model" ? "📤" : "🧠"} ${move.label}`} rows={rows} color={TONE_COLOR[move.tone]} font={font} />;
+  } else if (move && after && (view === "history" || view === "memory")) {
     if (move.from === "chat" && move.to === "model") {
       const rows = view === "history" ? rowsOf(contextWindow(flow.state.history.messages)) : memoryRows(flow.state);
       body = <Payload title={`📨 ${move.label}`} rows={rows.slice(-8)} font={font} />;

@@ -188,40 +188,60 @@ function memoryClear(state: AiState): AiTransition {
 
 const log = (state: AiState, line: string): AiState => ({ ...state, agent: { ...state.agent, log: [...state.agent.log, line].slice(-AI_LIMITS.log) } });
 
+const CODE_BUG = ["def add(a, b):", "    return a - b"];
+const withDetail = (move: Hop, detail: string[]): Hop => ({ ...move, detail });
+
 function agentWeb(state: AiState): AiTransition {
   if (state.agent.web.asked && state.agent.web.answer) return noop(state, "ถาม AI บนเว็บไปแล้ว ลองสั่ง Claude Code ต่อ");
   const flow = new Flow(state);
-  flow.step(hop("web", "model", "คำถาม + โค้ดที่ก๊อปมาวาง", "request"), "บนเว็บ: ต้องก๊อปโค้ดไปวางเอง เพราะ AI มองไม่เห็นไฟล์ในเครื่องเรา",
-    (s) => ({ ...s, agent: { ...s.agent, web: { asked: true, answer: null } } }), [{ spot: "web", tone: "new" }]);
-  flow.step(hop("model", "web", "คำแนะนำ", "ok"), "AI บนเว็บตอบเป็นคำแนะนำ เราต้องไปแก้ไฟล์และรันเทสต์เอง",
+  flow.step(withDetail(hop("web", "model", "คำถาม + โค้ดที่ก๊อปมาวาง", "request"), ["👤 ทำไมเทสต์ไม่ผ่าน?", ...CODE_BUG.map((line) => `📋 ${line.trim()}`)]),
+    "บนเว็บ: เราต้องก๊อปโค้ดไปวางเอง เพราะ AI มองไม่เห็นไฟล์ในเครื่องเรา",
+    (s) => ({ ...s, agent: { ...s.agent, web: { asked: true, answer: null } } }), [{ spot: "model", tone: "read" }]);
+  flow.step(withDetail(hop("model", "web", "คำแนะนำ", "ok"), ["💬 ลองเปลี่ยน a - b เป็น a + b"]),
+    "AI ตอบเป็นคำแนะนำ → เราต้องไปเปิดไฟล์ แก้เอง และรันเทสต์เอง ✋",
     (s) => ({ ...s, agent: { ...s.agent, web: { asked: true, answer: "ลองเปลี่ยน a - b เป็น a + b ในบรรทัดที่ 2" } } }), [{ spot: "web", tone: "changed" }]);
-  return finish(state, flow, "success", "AI บนเว็บให้คำแนะนำ (ไฟล์ในเครื่องยังไม่เปลี่ยน)");
+  return finish(state, flow, "success", "AI บนเว็บให้คำแนะนำ (ไฟล์ในเครื่องยังไม่เปลี่ยน เราต้องทำเอง)");
 }
 
+/**
+ * Claude Code's loop, one packet at a time between Claude Code and the AI: the AI asks for a tool,
+ * Claude Code runs it on our machine and sends the result back, until the AI answers “done”.
+ */
 function agentCc(state: AiState): AiTransition {
   if (state.agent.code === "fixed" && state.agent.tests === "pass") return noop(state, "เทสต์ผ่านแล้ว กด “ใส่บั๊กกลับ” เพื่อลองใหม่");
   const flow = new Flow(state);
-  flow.step(hop("cc", "model", "งาน + เครื่องมือที่ใช้ได้", "request"), "สั่ง Claude Code: “แก้บั๊กให้เทสต์ผ่าน” → ส่งงานพร้อมรายการเครื่องมือไปให้โมเดล",
+  flow.step(null, "คุณพิมพ์ใน Claude Code: “แก้บั๊กให้เทสต์ผ่าน”",
     (s) => log({ ...s, agent: { ...s.agent, log: [] } }, "> แก้บั๊กให้เทสต์ผ่าน"), [{ spot: "cc", tone: "new" }]);
-  flow.step(hop("model", "cc", "ขอใช้: อ่าน main.py", "request"), "โมเดลยังไม่ตอบ แต่ “ขอใช้เครื่องมือ” อ่านไฟล์ก่อน");
-  flow.step(hop("cc", "files", "อ่าน main.py", "request"), "Claude Code อ่านไฟล์ในเครื่องเรา", (s) => log(s, "● Read main.py"), [{ spot: "files", tone: "read" }]);
-  flow.step(hop("files", "cc", "เนื้อหาไฟล์"), "ได้เนื้อหาไฟล์มาแล้ว");
-  flow.step(hop("cc", "model", "เนื้อหา main.py"), "เนื้อหาไฟล์ถูกส่งไปให้โมเดลอ่าน (ข้อมูลออกจากเครื่องเราไปที่โมเดล)", undefined, [{ spot: "model", tone: "read" }]);
-  flow.step(hop("model", "cc", "ขอใช้: รันเทสต์", "request"), "โมเดลขอรันเทสต์เพื่อดูว่าพังตรงไหน");
-  flow.step(hop("cc", "tests", "pytest", "request"), "Claude Code รันคำสั่งในเครื่องเรา", (s) => log(s, "● Bash pytest"));
-  flow.step(hop("tests", "cc", "✗ 1 ไม่ผ่าน", "blocked"), "เทสต์ไม่ผ่าน: add(2, 3) ได้ −1 แทนที่จะได้ 5",
-    (s) => log({ ...s, agent: { ...s.agent, tests: "fail" } }, "  ✗ 1 failed"), [{ spot: "tests", tone: "blocked" }]);
-  flow.step(hop("cc", "model", "ผลเทสต์ ✗"), "ผลเทสต์ถูกส่งกลับไปให้โมเดลคิดต่อ");
-  flow.step(hop("model", "cc", "ขอใช้: แก้ main.py", "request"), "โมเดลขอแก้ไฟล์: เปลี่ยน a - b เป็น a + b");
-  flow.step(null, "Claude Code ถามก่อนแก้ไฟล์ → คุณกด “อนุญาต” ✓", undefined, [{ spot: "gate", tone: "allowed" }]);
-  flow.step(hop("cc", "files", "แก้บรรทัด 2", "ok"), "แก้ไฟล์ในเครื่องเราแล้ว",
-    (s) => log({ ...s, agent: { ...s.agent, code: "fixed" } }, "● Edit main.py"), [{ spot: "files", tone: "changed" }]);
-  flow.step(hop("cc", "tests", "pytest", "request"), "รันเทสต์อีกครั้ง", (s) => log(s, "● Bash pytest"));
-  flow.step(hop("tests", "cc", "✓ ผ่าน", "ok"), "เทสต์ผ่านแล้ว ✓", (s) => log({ ...s, agent: { ...s.agent, tests: "pass" } }, "  ✓ 1 passed"), [{ spot: "tests", tone: "allowed" }]);
-  flow.step(hop("cc", "model", "ผลเทสต์ ✓"), "ส่งผลให้โมเดลอีกรอบ");
-  flow.step(hop("model", "cc", "เสร็จแล้ว", "ok"), "โมเดลเห็นว่าเทสต์ผ่าน จึงตอบคำตอบสุดท้าย วงจร “ขอใช้เครื่องมือ → ทำ → ส่งผล” จบ",
-    (s) => log(s, "✓ แก้แล้ว: a - b → a + b"), [{ spot: "cc", tone: "allowed" }]);
-  return finish(state, flow, "success", "Claude Code แก้ไฟล์และรันเทสต์ในเครื่องเราเอง จนเทสต์ผ่าน");
+  flow.step(withDetail(hop("cc", "model", "งาน + เครื่องมือ", "request"), ["📝 งาน: แก้บั๊กให้เทสต์ผ่าน", "🔧 ใช้ได้: อ่านไฟล์ · รันคำสั่ง · แก้ไฟล์"]),
+    "Claude Code ส่งงานไปให้ AI พร้อมบอกว่ามีเครื่องมืออะไรให้ใช้", undefined, [{ spot: "model", tone: "read" }]);
+  // Round 1: read the file.
+  flow.step(withDetail(hop("model", "cc", "ขอใช้เครื่องมือ", "request"), ["🔧 อ่านไฟล์ main.py"]),
+    "AI ยังไม่ตอบ แต่ “ขอใช้เครื่องมือ”: อ่านไฟล์ → Claude Code อ่านในเครื่องเรา",
+    (s) => log(s, "🔧 อ่านไฟล์ main.py"), [{ spot: "files", tone: "read" }]);
+  flow.step(withDetail(hop("cc", "model", "เนื้อหาไฟล์"), CODE_BUG),
+    "เนื้อหาไฟล์ถูกส่งไปให้ AI อ่าน (ข้อมูลในเครื่องเราเดินทางออกไปหา AI)", undefined, [{ spot: "model", tone: "read" }]);
+  // Round 2: run the tests.
+  flow.step(withDetail(hop("model", "cc", "ขอใช้เครื่องมือ", "request"), ["🔧 รันเทสต์"]),
+    "AI ขอรันเทสต์ → Claude Code รันในเครื่องเรา: ✗ ไม่ผ่าน",
+    (s) => log({ ...s, agent: { ...s.agent, tests: "fail" } }, "🔧 รันเทสต์ → ✗ ไม่ผ่าน"), [{ spot: "tests", tone: "blocked" }]);
+  flow.step(withDetail(hop("cc", "model", "ผลเทสต์", "blocked"), ["✗ add(2, 3) ได้ −1 (ต้องได้ 5)"]),
+    "ส่งผลเทสต์กลับไปให้ AI คิดต่อ", undefined, [{ spot: "model", tone: "read" }]);
+  // Round 3: edit — Claude Code asks us first.
+  flow.step(withDetail(hop("model", "cc", "ขอใช้เครื่องมือ", "request"), ["✏️ แก้ main.py: a - b → a + b"]),
+    "AI ขอแก้ไฟล์ → Claude Code ถามเราก่อน", undefined, [{ spot: "gate", tone: "read" }]);
+  flow.step(null, "คุณกด “อนุญาต” ✓ → Claude Code แก้ไฟล์ในเครื่องเรา",
+    (s) => log(log({ ...s, agent: { ...s.agent, code: "fixed" } }, "🔐 ขอแก้ไฟล์ → คุณอนุญาต"), "✏️ แก้ main.py แล้ว"),
+    [{ spot: "gate", tone: "allowed" }, { spot: "files", tone: "changed" }]);
+  flow.step(withDetail(hop("cc", "model", "แก้แล้ว"), ["✓ แก้ main.py เรียบร้อย"]), "บอก AI ว่าแก้ไฟล์แล้ว");
+  // Round 4: test again.
+  flow.step(withDetail(hop("model", "cc", "ขอใช้เครื่องมือ", "request"), ["🔧 รันเทสต์อีกรอบ"]),
+    "AI ขอรันเทสต์อีกรอบ: ✓ ผ่าน",
+    (s) => log({ ...s, agent: { ...s.agent, tests: "pass" } }, "🔧 รันเทสต์ → ✓ ผ่าน"), [{ spot: "tests", tone: "allowed" }]);
+  flow.step(withDetail(hop("cc", "model", "ผลเทสต์", "ok"), ["✓ ผ่านทั้งหมด"]), "ส่งผลให้ AI อีกรอบ", undefined, [{ spot: "model", tone: "read" }]);
+  flow.step(withDetail(hop("model", "cc", "เสร็จแล้ว", "ok"), ["✅ แก้แล้ว: a - b → a + b", "เทสต์ผ่านทั้งหมด"]),
+    "AI เห็นว่าเทสต์ผ่าน จึงตอบคำตอบสุดท้าย วงจร “ขอใช้เครื่องมือ → ทำในเครื่อง → ส่งผล” จบ",
+    (s) => log(s, "✅ เสร็จ: แก้ a - b เป็น a + b"), [{ spot: "cc", tone: "allowed" }]);
+  return finish(state, flow, "success", "Claude Code แก้ไฟล์และรันเทสต์ในเครื่องเราเอง (วน 4 รอบ) จนเทสต์ผ่าน");
 }
 
 function agentReset(state: AiState): AiTransition {

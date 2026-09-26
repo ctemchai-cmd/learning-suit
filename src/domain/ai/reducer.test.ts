@@ -93,10 +93,17 @@ describe("step 4 — web AI vs Claude Code", () => {
   it("the web AI only advises; Claude Code loops through tools on our machine until the tests pass", () => {
     const web = applyAiAction(createInitialAiState(), { type: "agent.web" });
     expect(web.nextState.agent).toMatchObject({ code: "bug", tests: "unknown", web: { asked: true } });
+    expect(web.frames[0].hop?.detail).toContain("📋 return a - b");
     const cc = applyAiAction(createInitialAiState(), { type: "agent.cc" });
-    const hops = cc.frames.map((frame) => frame.hop ? `${frame.hop.from}→${frame.hop.to}` : "gate");
-    expect(hops.slice(0, 5)).toEqual(["cc→model", "model→cc", "cc→files", "files→cc", "cc→model"]);
-    expect(hops).toContain("gate");
+    // Every packet goes between Claude Code and the AI; the tools act on the machine in place.
+    const hops = cc.frames.filter((frame) => frame.hop).map((frame) => `${frame.hop!.from}→${frame.hop!.to}`);
+    expect(new Set(hops)).toEqual(new Set(["cc→model", "model→cc"]));
+    expect(hops.filter((item) => item === "model→cc")).toHaveLength(5); // 4 tool requests + the final answer
+    // The file's content travels to the AI; editing waits for our permission.
+    expect(cc.frames.find((frame) => frame.hop?.label === "เนื้อหาไฟล์")?.hop?.detail).toEqual(["def add(a, b):", "    return a - b"]);
+    const permission = cc.frames.findIndex((frame) => frame.marks.some((mark) => mark.spot === "gate" && mark.tone === "allowed"));
+    expect(cc.frames[permission].state.agent.code).toBe("fixed");
+    expect(cc.frames[permission - 1].state.agent.code).toBe("bug");
     expect(cc.nextState.agent).toMatchObject({ code: "fixed", tests: "pass" });
     expect(applyAiAction(cc.nextState, { type: "agent.cc" }).outcome).toBe("noop");
     expect(play(cc.nextState, { type: "agent.reset" }).agent).toEqual(createInitialAiState().agent);
