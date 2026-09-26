@@ -6,7 +6,7 @@ import type { DataSimulatorNode } from "@/domain/document/model";
 import type { DataState, DataView, Mark, MarkTone, PhoneId } from "@/domain/data/model";
 import { PHONE_USER } from "@/domain/data/model";
 import { customerName, menuName, STORAGE_LABEL } from "@/domain/data/reducer";
-import { AppSpinner, CaptionBar, Gate, Label, MARK_STYLE, Packet, Pipe, type Pt } from "@/features/flow/flow-bits";
+import { AppSpinner, CaptionBar, Gate, IconLabel, Label, MARK_STYLE, Packet, Pipe, type Pt } from "@/features/flow/flow-bits";
 import { waitingAt, type FlowPlay, type Waiting } from "@/features/flow/flow-session";
 import { useFlowPlayback } from "@/features/flow/use-flow-playback";
 import {
@@ -62,11 +62,17 @@ function Phone({ frame, screen, title, lines, empty, font, highlight, waiting }:
     <Label x={screen.x + 12} y={screen.y + 10} width={screen.w - 24} text={title} size={15} bold color={C.title} font={font} />
     {lines.length === 0
       ? <Label x={screen.x + 12} y={screen.y + 44} width={screen.w - 24} text={empty} size={14} color={C.muted} font={font} />
-      : lines.slice(0, max).map((line, index) => <Group key={index}>
-        <Rect x={screen.x + 8} y={screen.y + 38 + index * lineH} width={screen.w - 16} height={lineH - 4} cornerRadius={6}
-          fill={line.startsWith("⚠") ? "#FEE2E2" : "#FFFFFF"} stroke={line.startsWith("⚠") ? "#FCA5A5" : "#E2E8F0"} />
-        <Label x={screen.x + 16} y={screen.y + 38 + index * lineH} width={screen.w - 32} text={line} size={13} color={line.startsWith("⚠") ? "#991B1B" : C.text} font={font} lineHeight={lineH - 4} />
-      </Group>)}
+      : lines.slice(0, max).map((line, index) => {
+        // “⚠ …” marks someone else's order that leaked through: drawn with a warning icon.
+        const leaked = line.startsWith("⚠");
+        const y = screen.y + 38 + index * lineH;
+        return <Group key={index}>
+          <Rect x={screen.x + 8} y={y} width={screen.w - 16} height={lineH - 4} cornerRadius={6} fill={leaked ? "#FEE2E2" : "#FFFFFF"} stroke={leaked ? "#FCA5A5" : "#E2E8F0"} />
+          {leaked
+            ? <IconLabel x={screen.x + 16} y={y} width={screen.w - 32} icon="alert" text={line.replace(/^⚠\s*/u, "")} size={13} color="#991B1B" font={font} lineHeight={lineH - 4} />
+            : <Label x={screen.x + 16} y={y} width={screen.w - 32} text={line} size={13} color={C.text} font={font} lineHeight={lineH - 4} />}
+        </Group>;
+      })}
     {lines.length > max && <Label x={screen.x + 12} y={screen.y + screen.h - 20} width={screen.w - 24} text={`… อีก ${lines.length - max} รายการ`} size={12} color={C.muted} font={font} />}
     {waiting && <AppSpinner box={{ x: screen.x, y: screen.y + 34, w: screen.w, h: screen.h - 34 }} kind={waiting} font={font} />}
   </Group>;
@@ -189,13 +195,13 @@ function WhereStep({ state, marks, waiting, font }: { state: DataState; marks: M
       {/* The app window: title bar, order list and — inside it — the app's memory. */}
       <Rect x={p.app.x} y={p.app.y} width={p.app.w} height={p.app.h} cornerRadius={14} fill={C.screen} stroke="#CBD5E1" strokeWidth={1.5} />
       <Rect x={p.app.x} y={p.app.y} width={p.app.w} height={30} cornerRadius={[14, 14, 0, 0]} fill="#E2E8F0" />
-      <Label x={p.app.x + 12} y={p.app.y} width={p.app.w - 50} text="☕ แอปร้านกาแฟ" size={13} bold color={C.title} font={font} lineHeight={30} />
+      <IconLabel x={p.app.x + 12} y={p.app.y} width={p.app.w - 50} icon="coffee" text="แอปร้านกาแฟ" size={13} bold color={C.title} font={font} lineHeight={30} />
       <Label x={p.app.x + p.app.w - 36} y={p.app.y} width={24} text="↻" size={16} bold color={busy === "refresh" ? "#2563EB" : "#64748B"} align="center" font={font} lineHeight={30} />
       {lines.length === 0
         ? <Label x={p.screen.x + 12} y={p.screen.y + 10} width={p.screen.w - 24} text={id === "A" ? "ยังไม่มีออเดอร์" : "ยังไม่ได้เปิดดู"} size={14} color={C.muted} font={font} />
         : lines.slice(0, max).map((line, index) => <Group key={index}>
           <Rect x={p.screen.x + 8} y={p.screen.y + 6 + index * lineH} width={p.screen.w - 16} height={lineH - 4} cornerRadius={6} fill="#FFFFFF" stroke="#E2E8F0" />
-          <Label x={p.screen.x + 16} y={p.screen.y + 6 + index * lineH} width={p.screen.w - 32} text={`☕ ${line}`} size={13} color={C.text} font={font} lineHeight={lineH - 4} />
+          <IconLabel x={p.screen.x + 16} y={p.screen.y + 6 + index * lineH} width={p.screen.w - 32} icon="coffee" text={line} size={13} color={C.text} iconColor="#92400E" font={font} lineHeight={lineH - 4} />
         </Group>)}
       <Zone box={p.memory} title="ความจำของแอป" sub="อยู่ในแอป: หายเมื่อรีเฟรชหรือปิดแอป" items={storage.memory[id]} active={id === "A" && storage.mode === "app"} mark={markOf(marks, `mem${id}`)} font={font} />
       {busy && <AppSpinner box={p.screen} kind={busy} font={font} />}
@@ -259,7 +265,7 @@ function RelationStep({ state, marks, font }: { state: DataState; marks: Marks; 
   return <Group listening={false}>
     <Group x={RELATION.app.x} y={RELATION.app.y}>
       <Rect width={RELATION.app.w} height={RELATION.app.h} cornerRadius={29} fill={C.phone} />
-      <Label x={0} y={0} width={RELATION.app.w} text="📱 แอปร้านกาแฟ" size={16} bold color="#FFFFFF" align="center" font={font} lineHeight={RELATION.app.h} />
+      <IconLabel x={0} y={0} width={RELATION.app.w} icon="phone" text="แอปร้านกาแฟ" size={16} bold color="#FFFFFF" align="center" font={font} lineHeight={RELATION.app.h} />
     </Group>
     <Card box={RELATION.copy} title="แบบ ก๊อปชื่อ" sub="เก็บชื่อลูกค้าซ้ำไว้ในทุกออเดอร์" font={font} />
     <Card box={RELATION.link} title="แบบ อ้างด้วย ID" sub="ออเดอร์เก็บแค่เลขลูกค้า แล้วตามเส้นไปดูชื่อ" font={font} />

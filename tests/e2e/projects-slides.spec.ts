@@ -82,6 +82,28 @@ test("UX-02: slides add/rename/reorder/duplicate/delete with Undo; the last slid
   await expect(slideItems).toHaveText([/สไลด์ 2/, /สไลด์ 1/, /สไลด์ 1 สำเนา/, /สรุป/]);
 });
 
+test("UX-06: the slide list shows a thumbnail of each slide and redraws it after an edit", async ({ page }) => {
+  await createProject(page, "ภาพย่อ");
+  const items = page.getByRole("list", { name: "รายการสไลด์" }).getByRole("listitem");
+  const thumbnail = items.first().locator("img");
+  // An empty slide has no picture, only its background.
+  await expect(thumbnail).toHaveCount(0);
+
+  const box = await stageBox(page);
+  await drawRect(page, box.cx - 80, box.cy - 50, box.cx + 80, box.cy + 50);
+  await expect(thumbnail).toHaveAttribute("src", /^blob:/);
+  const first = await thumbnail.getAttribute("src");
+  await drawRect(page, box.cx + 100, box.cy - 50, box.cx + 180, box.cy + 50);
+  await expect(thumbnail).not.toHaveAttribute("src", first!);
+  // The picture is really drawn (decoded, with the shape inside).
+  expect(await thumbnail.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+
+  await page.getByRole("button", { name: "เพิ่มสไลด์" }).click();
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(1).locator("img")).toHaveCount(0);
+  await expect(items.first().locator("img")).toHaveAttribute("src", /^blob:/);
+});
+
 test("dashboard delete asks for confirmation and removes the local draft", async ({ page }) => {
   await createProject(page, "จะลบทิ้ง");
   await page.getByRole("link", { name: "กลับไปโปรเจกต์" }).click();

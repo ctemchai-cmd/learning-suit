@@ -33,9 +33,9 @@ test("DATA-01: where data lives — the flow plays frame by frame and only the d
   await panel(page).getByRole("button", { name: "ทีละจังหวะ" }).click();
   await panel(page).getByRole("button", { name: /^A สั่ง/ }).click();
   await expect(panel(page)).toContainText("จังหวะ 1/2");
-  await panel(page).getByRole("button", { name: "ถัดไป ▶" }).click();
+  await panel(page).getByRole("button", { name: "ถัดไป" }).click();
   await expect(panel(page)).toContainText("จังหวะ 2/2");
-  await expect(panel(page).getByRole("button", { name: "ถัดไป ▶" })).toBeDisabled();
+  await expect(panel(page).getByRole("button", { name: "ถัดไป" })).toBeDisabled();
   await button(page, "B เปิดแอปดูออเดอร์").click();
   await panel(page).getByRole("button", { name: "ข้ามไปจบ" }).click();
   const node = await dataNode(page);

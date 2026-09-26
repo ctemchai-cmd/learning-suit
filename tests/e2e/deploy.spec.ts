@@ -55,7 +55,7 @@ test("DEPLOY-03/04: the key stays off GitHub; the live site needs it on Vercel; 
   await panel(page).getByRole("button", { name: /^เพื่อนสั่ง/ }).click();
   await expect(panel(page)).toContainText("เว็บจริงต่อฐานข้อมูลไม่ได้");
   expect((await deployNode(page)).state.orders).toEqual([]);
-  await button(page, "🔑 ใส่แล้ว").click();
+  await button(page, "ใส่แล้ว").click();
   await button(page, "Deploy ใหม่").click();
   await expect(panel(page)).toContainText("Deploy ใหม่สำเร็จ: D2 มีกุญแจแล้ว");
   await panel(page).getByRole("button", { name: /^เพื่อนสั่ง/ }).click();

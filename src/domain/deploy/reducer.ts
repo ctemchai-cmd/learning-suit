@@ -116,7 +116,7 @@ function push(state: DeployState, view: DeployView): DeployTransition {
   if (state.github.rev === code.rev) return noop(state, `โค้ดรุ่น ${code.rev} ส่งขึ้น GitHub ไปแล้ว ลองแก้โค้ดก่อน`);
   const flow = new Flow(state);
   if (view === "env" || view === "overall") {
-    flow.step(hop("envfile", "gitignore", "🔑 กุญแจ", "blocked"), "กุญแจใน .env.local ไม่ถูกส่งขึ้น GitHub (อยู่ใน .gitignore) ✓ ปลอดภัย",
+    flow.step(hop("envfile", "gitignore", "กุญแจ", "blocked"), "กุญแจใน .env.local ไม่ถูกส่งขึ้น GitHub (อยู่ใน .gitignore) ✓ ปลอดภัย",
       undefined, [{ spot: "gitignore", tone: "blocked" }]);
   }
   flow.step(hop("code", "github", `โค้ดรุ่น ${code.rev}`), `ส่งโค้ดรุ่น ${code.rev} ขึ้น GitHub`,
@@ -164,7 +164,7 @@ function rollback(state: DeployState): DeployTransition {
 
 function setVercelKey(state: DeployState, on: boolean): DeployTransition {
   if (state.keys.vercel === on) return noop(state, on ? "ใส่กุญแจบน Vercel ไว้แล้ว" : "บน Vercel ยังไม่มีกุญแจ");
-  const flow = new Flow(state).step(on ? hop("envfile", "vercelEnv", "🔑 กุญแจ") : null,
+  const flow = new Flow(state).step(on ? hop("envfile", "vercelEnv", "กุญแจ") : null,
     on ? "ใส่กุญแจฐานข้อมูลในหน้าตั้งค่าของ Vercel แล้ว ต้อง Deploy ใหม่ถึงจะใช้ได้" : "ลบกุญแจออกจาก Vercel: Deploy ครั้งถัดไปจะไม่มีกุญแจ",
     (s) => ({ ...s, keys: { ...s.keys, vercel: on } }), [{ spot: "vercelEnv", tone: on ? "new" : "removed" }]);
   return finish(state, flow, "success", on ? "ใส่กุญแจบน Vercel แล้ว กด Deploy ใหม่" : "ลบกุญแจออกจาก Vercel แล้ว");
@@ -190,11 +190,11 @@ function friendOrder(state: DeployState, raw: string, view: DeployView): DeployT
     return finish(state, flow, "failed", "เว็บจริงต่อฐานข้อมูลไม่ได้: ใส่กุญแจบน Vercel แล้ว Deploy ใหม่");
   }
   if (view === "overall") {
-    flow.step(hop("vercel", "rls", `🔑 ${item}`, "request"), "ใช้กุญแจจากการตั้งค่า Vercel ต่อฐานข้อมูล แล้วผ่านด่านกฎสิทธิ์");
+    flow.step(hop("vercel", "rls", `${item} + กุญแจ`, "request"), "ใช้กุญแจจากการตั้งค่า Vercel ต่อฐานข้อมูล แล้วผ่านด่านกฎสิทธิ์");
     flow.step(hop("rls", "orders", item, "ok"), "กฎสิทธิ์อนุญาต: ลูกค้าเพิ่มออเดอร์ของตัวเองได้ ✓ บันทึกลงตาราง",
       (s) => ({ ...s, orders: [...s.orders, item] }), [{ spot: "rls", tone: "allowed" }, { spot: "orders", tone: "new" }]);
   } else {
-    flow.step(hop("vercel", "supabase", `🔑 ${item}`, "ok"), "ใช้กุญแจจากการตั้งค่า Vercel ต่อฐานข้อมูลได้ ✓ บันทึกออเดอร์",
+    flow.step(hop("vercel", "supabase", `${item} + กุญแจ`, "ok"), "ใช้กุญแจจากการตั้งค่า Vercel ต่อฐานข้อมูลได้ ✓ บันทึกออเดอร์",
       (s) => ({ ...s, orders: [...s.orders, item] }), [{ spot: "supabase", tone: "new" }]);
   }
   flow.step(hop(view === "overall" ? "orders" : "supabase", "friend", "✓ สั่งแล้ว", "ok"), "ออเดอร์ถูกบันทึกในฐานข้อมูล เพื่อนเห็นว่าสั่งสำเร็จ ✓",
@@ -216,8 +216,8 @@ function localOrder(state: DeployState, raw: string): DeployTransition {
       (s) => ({ ...s, laptop: { lines: ["บันทึกไม่สำเร็จ ✗"] } }));
     return finish(state, flow, "failed", "ไม่มีกุญแจใน .env.local เว็บในเครื่องจึงต่อฐานข้อมูลไม่ได้");
   }
-  flow.step(hop("envfile", "server", "🔑 กุญแจ"), "เซิร์ฟเวอร์อ่านกุญแจจาก .env.local", undefined, [{ spot: "envfile", tone: "allowed" }]);
-  flow.step(hop("server", "supabase", `🔑 ${item}`, "ok"), "ใช้กุญแจต่อฐานข้อมูล บันทึกออเดอร์ ✓",
+  flow.step(hop("envfile", "server", "กุญแจ"), "เซิร์ฟเวอร์อ่านกุญแจจาก .env.local", undefined, [{ spot: "envfile", tone: "allowed" }]);
+  flow.step(hop("server", "supabase", `${item} + กุญแจ`, "ok"), "ใช้กุญแจต่อฐานข้อมูล บันทึกออเดอร์ ✓",
     (s) => ({ ...s, orders: [...s.orders, item] }), [{ spot: "supabase", tone: "new" }]);
   flow.step(hop("supabase", "browser", "✓ สั่งแล้ว", "ok"), "เว็บในเครื่องบันทึกออเดอร์ได้ ✓",
     (s) => ({ ...s, laptop: { lines: [`สั่ง${item}แล้ว ✓`] } }));

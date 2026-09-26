@@ -1,4 +1,4 @@
-import type { FlowFrame, FlowTone, Hop, Mark } from "../data/model";
+import type { CarriedLine, FlowFrame, FlowTone, Hop, Mark } from "../data/model";
 import { FACT_LABEL, clip, factsFrom, factsIn, puzzleOf, replyTo } from "./chat";
 import { createInitialAiState } from "./initial";
 import { AI_LIMITS, type AiAction, type AiOutcome, type AiState, type AiTransition, type ChatMsg, type CcSay, type MemoryItem, type PuzzleId } from "./model";
@@ -189,16 +189,17 @@ function memoryClear(state: AiState): AiTransition {
 const log = (state: AiState, line: string): AiState => ({ ...state, agent: { ...state.agent, log: [...state.agent.log, line].slice(-AI_LIMITS.log) } });
 
 const CODE_BUG = ["def add(a, b):", "    return a - b"];
-const withDetail = (move: Hop, detail: string[]): Hop => ({ ...move, detail });
+const withDetail = (move: Hop, detail: CarriedLine[]): Hop => ({ ...move, detail });
+const line = (kind: CarriedLine["kind"]) => (text: string): CarriedLine => ({ kind, text });
 
 function agentWeb(state: AiState): AiTransition {
   if (state.agent.web.asked && state.agent.web.answer) return noop(state, "ถาม AI บนเว็บไปแล้ว ลองสั่ง Claude Code ต่อ");
   const flow = new Flow(state);
-  flow.step(withDetail(hop("web", "model", "คำถาม + โค้ดที่ก๊อปมาวาง", "request"), ["👤 ทำไมเทสต์ไม่ผ่าน?", ...CODE_BUG.map((line) => `📋 ${line.trim()}`)]),
+  flow.step(withDetail(hop("web", "model", "คำถาม + โค้ดที่ก๊อปมาวาง", "request"), [line("user")("ทำไมเทสต์ไม่ผ่าน?"), ...CODE_BUG.map((code) => line("code")(code.trim()))]),
     "บนเว็บ: เราต้องก๊อปโค้ดไปวางเอง เพราะ AI มองไม่เห็นไฟล์ในเครื่องเรา",
     (s) => ({ ...s, agent: { ...s.agent, web: { asked: true, answer: null } } }), [{ spot: "model", tone: "read" }]);
-  flow.step(withDetail(hop("model", "web", "คำแนะนำ", "ok"), ["💬 ลองเปลี่ยน a - b เป็น a + b"]),
-    "AI ตอบเป็นคำแนะนำ → เราต้องไปเปิดไฟล์ แก้เอง และรันเทสต์เอง ✋",
+  flow.step(withDetail(hop("model", "web", "คำแนะนำ", "ok"), [line("ai")("ลองเปลี่ยน a - b เป็น a + b")]),
+    "AI ตอบเป็นคำแนะนำ → เราต้องไปเปิดไฟล์ แก้เอง และรันเทสต์เอง",
     (s) => ({ ...s, agent: { ...s.agent, web: { asked: true, answer: "ลองเปลี่ยน a - b เป็น a + b ในบรรทัดที่ 2" } } }), [{ spot: "web", tone: "changed" }]);
   return finish(state, flow, "success", "AI บนเว็บให้คำแนะนำ (ไฟล์ในเครื่องยังไม่เปลี่ยน เราต้องทำเอง)");
 }
@@ -212,35 +213,35 @@ function agentCc(state: AiState): AiTransition {
   const flow = new Flow(state);
   flow.step(null, "คุณพิมพ์ใน Claude Code: “แก้บั๊กให้เทสต์ผ่าน”",
     (s) => log({ ...s, agent: { ...s.agent, log: [] } }, "> แก้บั๊กให้เทสต์ผ่าน"), [{ spot: "cc", tone: "new" }]);
-  flow.step(withDetail(hop("cc", "model", "งาน + เครื่องมือ", "request"), ["📝 งาน: แก้บั๊กให้เทสต์ผ่าน", "🔧 ใช้ได้: อ่านไฟล์ · รันคำสั่ง · แก้ไฟล์"]),
+  flow.step(withDetail(hop("cc", "model", "งาน + เครื่องมือ", "request"), [line("note")("งาน: แก้บั๊กให้เทสต์ผ่าน"), line("tool")("ใช้ได้: อ่านไฟล์ · รันคำสั่ง · แก้ไฟล์")]),
     "Claude Code ส่งงานไปให้ AI พร้อมบอกว่ามีเครื่องมืออะไรให้ใช้", undefined, [{ spot: "model", tone: "read" }]);
   // Round 1: read the file.
-  flow.step(withDetail(hop("model", "cc", "ขอใช้เครื่องมือ", "request"), ["🔧 อ่านไฟล์ main.py"]),
+  flow.step(withDetail(hop("model", "cc", "ขอใช้เครื่องมือ", "request"), [line("tool")("อ่านไฟล์ main.py")]),
     "AI ยังไม่ตอบ แต่ “ขอใช้เครื่องมือ”: อ่านไฟล์ → Claude Code อ่านในเครื่องเรา",
-    (s) => log(s, "🔧 อ่านไฟล์ main.py"), [{ spot: "files", tone: "read" }]);
-  flow.step(withDetail(hop("cc", "model", "เนื้อหาไฟล์"), CODE_BUG),
+    (s) => log(s, "อ่านไฟล์ main.py"), [{ spot: "files", tone: "read" }]);
+  flow.step(withDetail(hop("cc", "model", "เนื้อหาไฟล์"), CODE_BUG.map(line("code"))),
     "เนื้อหาไฟล์ถูกส่งไปให้ AI อ่าน (ข้อมูลในเครื่องเราเดินทางออกไปหา AI)", undefined, [{ spot: "model", tone: "read" }]);
   // Round 2: run the tests.
-  flow.step(withDetail(hop("model", "cc", "ขอใช้เครื่องมือ", "request"), ["🔧 รันเทสต์"]),
+  flow.step(withDetail(hop("model", "cc", "ขอใช้เครื่องมือ", "request"), [line("tool")("รันเทสต์")]),
     "AI ขอรันเทสต์ → Claude Code รันในเครื่องเรา: ✗ ไม่ผ่าน",
-    (s) => log({ ...s, agent: { ...s.agent, tests: "fail" } }, "🔧 รันเทสต์ → ✗ ไม่ผ่าน"), [{ spot: "tests", tone: "blocked" }]);
-  flow.step(withDetail(hop("cc", "model", "ผลเทสต์", "blocked"), ["✗ add(2, 3) ได้ −1 (ต้องได้ 5)"]),
+    (s) => log({ ...s, agent: { ...s.agent, tests: "fail" } }, "รันเทสต์ → ✗ ไม่ผ่าน"), [{ spot: "tests", tone: "blocked" }]);
+  flow.step(withDetail(hop("cc", "model", "ผลเทสต์", "blocked"), [line("fail")("add(2, 3) ได้ −1 (ต้องได้ 5)")]),
     "ส่งผลเทสต์กลับไปให้ AI คิดต่อ", undefined, [{ spot: "model", tone: "read" }]);
   // Round 3: edit — Claude Code asks us first.
-  flow.step(withDetail(hop("model", "cc", "ขอใช้เครื่องมือ", "request"), ["✏️ แก้ main.py: a - b → a + b"]),
+  flow.step(withDetail(hop("model", "cc", "ขอใช้เครื่องมือ", "request"), [line("edit")("แก้ main.py: a - b → a + b")]),
     "AI ขอแก้ไฟล์ → Claude Code ถามเราก่อน", undefined, [{ spot: "gate", tone: "read" }]);
   flow.step(null, "คุณกด “อนุญาต” ✓ → Claude Code แก้ไฟล์ในเครื่องเรา",
-    (s) => log(log({ ...s, agent: { ...s.agent, code: "fixed" } }, "🔐 ขอแก้ไฟล์ → คุณอนุญาต"), "✏️ แก้ main.py แล้ว"),
+    (s) => log(log({ ...s, agent: { ...s.agent, code: "fixed" } }, "ขอแก้ไฟล์ → คุณอนุญาต"), "แก้ main.py แล้ว"),
     [{ spot: "gate", tone: "allowed" }, { spot: "files", tone: "changed" }]);
-  flow.step(withDetail(hop("cc", "model", "แก้แล้ว"), ["✓ แก้ main.py เรียบร้อย"]), "บอก AI ว่าแก้ไฟล์แล้ว");
+  flow.step(withDetail(hop("cc", "model", "แก้แล้ว"), [line("pass")("แก้ main.py เรียบร้อย")]), "บอก AI ว่าแก้ไฟล์แล้ว");
   // Round 4: test again.
-  flow.step(withDetail(hop("model", "cc", "ขอใช้เครื่องมือ", "request"), ["🔧 รันเทสต์อีกรอบ"]),
+  flow.step(withDetail(hop("model", "cc", "ขอใช้เครื่องมือ", "request"), [line("tool")("รันเทสต์อีกรอบ")]),
     "AI ขอรันเทสต์อีกรอบ: ✓ ผ่าน",
-    (s) => log({ ...s, agent: { ...s.agent, tests: "pass" } }, "🔧 รันเทสต์ → ✓ ผ่าน"), [{ spot: "tests", tone: "allowed" }]);
-  flow.step(withDetail(hop("cc", "model", "ผลเทสต์", "ok"), ["✓ ผ่านทั้งหมด"]), "ส่งผลให้ AI อีกรอบ", undefined, [{ spot: "model", tone: "read" }]);
-  flow.step(withDetail(hop("model", "cc", "เสร็จแล้ว", "ok"), ["✅ แก้แล้ว: a - b → a + b", "เทสต์ผ่านทั้งหมด"]),
+    (s) => log({ ...s, agent: { ...s.agent, tests: "pass" } }, "รันเทสต์ → ✓ ผ่าน"), [{ spot: "tests", tone: "allowed" }]);
+  flow.step(withDetail(hop("cc", "model", "ผลเทสต์", "ok"), [line("pass")("ผ่านทั้งหมด")]), "ส่งผลให้ AI อีกรอบ", undefined, [{ spot: "model", tone: "read" }]);
+  flow.step(withDetail(hop("model", "cc", "เสร็จแล้ว", "ok"), [line("pass")("แก้แล้ว: a - b → a + b"), line("pass")("เทสต์ผ่านทั้งหมด")]),
     "AI เห็นว่าเทสต์ผ่าน จึงตอบคำตอบสุดท้าย วงจร “ขอใช้เครื่องมือ → ทำในเครื่อง → ส่งผล” จบ",
-    (s) => log(s, "✅ เสร็จ: แก้ a - b เป็น a + b"), [{ spot: "cc", tone: "allowed" }]);
+    (s) => log(s, "เสร็จ: แก้ a - b เป็น a + b"), [{ spot: "cc", tone: "allowed" }]);
   return finish(state, flow, "success", "Claude Code แก้ไฟล์และรันเทสต์ในเครื่องเราเอง (วน 4 รอบ) จนเทสต์ผ่าน");
 }
 
@@ -258,8 +259,8 @@ function agentReset(state: AiState): AiTransition {
 const THAI_MEMORY = "ตอบเป็นภาษาไทยเสมอ";
 const baseContext = (state: AiState) => state.cc.rules.length + state.cc.memories.length;
 /** Everything Claude Code sends with each message: CLAUDE.md, the memory files and the whole session so far. */
-export function ccContextLines(state: AiState): string[] {
-  return [...state.cc.rules.map((rule) => `📄 ${rule}`), ...state.cc.memories.map((memory) => `📌 ${memory}`), ...state.cc.chat.map((line) => `💬 ${line}`)];
+export function ccContextLines(state: AiState): CarriedLine[] {
+  return [...state.cc.rules.map(line("file")), ...state.cc.memories.map(line("memory")), ...state.cc.chat.map((text) => line(text.startsWith("คุณ: ") ? "user" : "ai")(text))];
 }
 /** The model holds what it was sent while answering (`on`), and nothing afterwards. */
 const ccRead = (on: boolean) => (s: AiState): AiState => {
@@ -273,11 +274,11 @@ function ccStart(state: AiState): AiTransition {
   const flow = new Flow(state);
   flow.step(null, `เปิด Claude Code session #${session}: เริ่มบทสนทนาใหม่ ของ session ก่อนไม่ติดมาด้วย`,
     (s) => ({ ...s, cc: { rules: s.cc.rules, memories: s.cc.memories, session, context: 0, chat: [], summarized: false } }), [{ spot: "cc", tone: "refresh" }]);
-  flow.step(withDetail(hop("claudeMd", "cc", "อ่าน CLAUDE.md"), state.cc.rules.map((rule) => `📄 ${rule}`)),
+  flow.step(withDetail(hop("claudeMd", "cc", "อ่าน CLAUDE.md"), state.cc.rules.map(line("file"))),
     "Claude Code อ่าน CLAUDE.md (คำสั่งโปรเจกต์ที่เราเขียน) ทุกครั้งที่เปิด session",
     (s) => ({ ...s, cc: { ...s.cc, context: s.cc.rules.length } }), [{ spot: "claudeMd", tone: "read" }]);
   const count = state.cc.memories.length;
-  flow.step(withDetail(hop("memoryDir", "cc", count ? "อ่านไฟล์ความจำ" : "ไฟล์ความจำว่าง", count ? "data" : "lost"), count ? state.cc.memories.map((memory) => `📌 ${memory}`) : ["(ยังไม่มี)"]),
+  flow.step(withDetail(hop("memoryDir", "cc", count ? "อ่านไฟล์ความจำ" : "ไฟล์ความจำว่าง", count ? "data" : "lost"), count ? state.cc.memories.map(line("memory")) : [line("empty")("(ยังไม่มี)")]),
     count ? "อ่านไฟล์ความจำที่ Claude จดไว้จาก session ก่อนๆ ทั้งสองอย่างจะถูกส่งไปกับทุกข้อความ" : "ยังไม่มีไฟล์ความจำ",
     (s) => ({ ...s, cc: { ...s.cc, context: baseContext(s) } }), count ? [{ spot: "memoryDir", tone: "read" }] : []);
   return finish(state, flow, "success", `เปิด session #${session} แล้ว (โหลด CLAUDE.md${count ? ` + ความจำ ${count} เรื่อง` : ""})`);
@@ -303,25 +304,25 @@ function ccSay(state: AiState, say: CcSay): AiTransition {
   const fromChat = !state.cc.summarized && state.cc.chat.some((line) => line.includes("ภาษาไทย"));
   flow.step(withDetail(hop("cc", "model", `ส่ง context ทั้งหมด (${sent.length} ชิ้น)`), sent),
     say === "ask"
-      ? fromMemory ? "ส่งทุกอย่างไปให้ AI — ในนั้นมี “📌 ตอบเป็นภาษาไทยเสมอ” จากไฟล์ความจำ" : fromChat ? "ส่งทุกอย่างไปให้ AI — ในบทสนทนานี้มีบอกไว้ว่าให้ตอบภาษาไทย" : "ส่งทุกอย่างไปให้ AI — แต่ไม่มีเรื่องภาษาอยู่เลย"
+      ? fromMemory ? "ส่งทุกอย่างไปให้ AI — ในนั้นมี “ตอบเป็นภาษาไทยเสมอ” จากไฟล์ความจำ" : fromChat ? "ส่งทุกอย่างไปให้ AI — ในบทสนทนานี้มีบอกไว้ว่าให้ตอบภาษาไทย" : "ส่งทุกอย่างไปให้ AI — แต่ไม่มีเรื่องภาษาอยู่เลย"
       : "ส่งทุกอย่างไปให้ AI: CLAUDE.md + ความจำ + บทสนทนาทั้งหมด (ไม่ใช่แค่ข้อความล่าสุด)",
     ccRead(true), [{ spot: "model", tone: "read" }]);
   if (say === "thai") {
     const known = fromMemory;
-    flow.step(withDetail(hop("model", "cc", known ? "รับทราบ" : "ขอจดความจำ", known ? "ok" : "request"), [known ? "💬 รับทราบครับ (มีในความจำแล้ว)" : `📝 จดลงไฟล์ความจำ: ${THAI_MEMORY}`]),
+    flow.step(withDetail(hop("model", "cc", known ? "รับทราบ" : "ขอจดความจำ", known ? "ok" : "request"), [known ? line("ai")("รับทราบครับ (มีในความจำแล้ว)") : line("note")(`จดลงไฟล์ความจำ: ${THAI_MEMORY}`)]),
       known ? "AI เห็นว่ามีในความจำแล้ว ตอบรับทราบ แล้วลืมทันที" : "AI เห็นว่าเป็นเรื่องที่ควรจำข้าม session จึงขอให้จดลงไฟล์ แล้วลืมทันที",
       (s) => add("Claude: รับทราบครับ", 1)(ccRead(false)(s)), [{ spot: "model", tone: "removed" }]);
     if (!known) {
-      flow.step(withDetail(hop("cc", "memoryDir", "เขียนไฟล์ความจำ"), [`📌 ${THAI_MEMORY}`]), "Claude Code เขียนไฟล์ความจำลงเครื่องเรา (อยู่ถาวร เปิดอ่าน/ลบเองได้)",
+      flow.step(withDetail(hop("cc", "memoryDir", "เขียนไฟล์ความจำ"), [line("memory")(THAI_MEMORY)]), "Claude Code เขียนไฟล์ความจำลงเครื่องเรา (อยู่ถาวร เปิดอ่าน/ลบเองได้)",
         (s) => ({ ...s, cc: { ...s.cc, memories: [...s.cc.memories, THAI_MEMORY].slice(-AI_LIMITS.ccMemories) } }), [{ spot: "memoryDir", tone: "new" }]);
     }
   } else if (say === "work") {
-    flow.step(withDetail(hop("model", "cc", "คำตอบยาว", "ok"), ["💬 เขียนโค้ด login 5 ไฟล์", "💬 + อธิบาย + ผลรันเทสต์ยาวๆ"]),
+    flow.step(withDetail(hop("model", "cc", "คำตอบยาว", "ok"), [line("ai")("เขียนโค้ด login 5 ไฟล์"), line("ai")("+ อธิบาย + ผลรันเทสต์ยาวๆ")]),
       "คำตอบยาว (โค้ดหลายไฟล์ + ผลของเครื่องมือ) ถูกต่อท้ายบทสนทนา → context ถูกใช้ไปเยอะ",
       (s) => add("Claude: เขียนโค้ด login 5 ไฟล์ + รันเทสต์", 4)(ccRead(false)(s)), [{ spot: "cc", tone: "changed" }, { spot: "model", tone: "removed" }]);
   } else {
     const known = fromMemory || fromChat;
-    flow.step(withDetail(hop("model", "cc", known ? "ภาษาไทย ✓" : "ไม่รู้ ✗", known ? "ok" : "blocked"), [known ? "💬 ภาษาไทยครับ" : "💬 ไม่มีข้อมูลครับ"]),
+    flow.step(withDetail(hop("model", "cc", known ? "ภาษาไทย ✓" : "ไม่รู้ ✗", known ? "ok" : "blocked"), [line("ai")(known ? "ภาษาไทยครับ" : "ไม่มีข้อมูลครับ")]),
       fromMemory ? "AI ตอบได้เพราะในสิ่งที่ส่งมามีไฟล์ความจำ ✓" : fromChat ? "ตอบได้จากบทสนทนาใน session นี้ ✓ (ปิด session แล้วจะหาย)" : "ในสิ่งที่ส่งมาไม่มีเรื่องนี้ AI จึงไม่รู้ ✗",
       (s) => add(known ? "Claude: ภาษาไทยครับ" : "Claude: ไม่มีข้อมูลครับ", 1)(ccRead(false)(s)), [{ spot: "cc", tone: known ? "allowed" : "blocked" }, { spot: "model", tone: "removed" }]);
     if (flow.state.cc.context > AI_LIMITS.ccContext) compact(flow, true);

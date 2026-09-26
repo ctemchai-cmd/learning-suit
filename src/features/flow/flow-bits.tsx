@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode } from "react";
-import { Arc, Circle, Group, Line, Rect, Text } from "react-konva";
+import { Arc, Circle, Group, Line, Path, Rect, Text } from "react-konva";
 import type Konva from "konva";
 import type { FlowTone, MarkTone } from "@/domain/data/model";
+import { ICON_PATHS, type IconName } from "./icon-paths";
 
 // Shared Konva pieces of the flow simulators (plan 07 §2): text that never overflows, pipes,
 // gates, the moving packet and the caption bar. Deterministic for export (the packet only animates
@@ -31,6 +32,29 @@ type LabelProps = { x: number; y: number; width: number; text: string; size: num
 export function Label({ x, y, width, text, size, color = "#1E293B", bold = false, align = "left", font, lineHeight }: LabelProps) {
   return <Text x={x} y={y} width={width} text={text} fontSize={size} fontFamily={font} fontStyle={bold ? "bold" : "normal"}
     fill={color} align={align} wrap="none" ellipsis listening={false} lineHeight={lineHeight ? lineHeight / size : 1} />;
+}
+
+/** A Lucide icon drawn as a vector path (crisp at any zoom, included in exports). */
+export function Icon({ name, x, y, size = 16, color = "#334155" }: { name: IconName; x: number; y: number; size?: number; color?: string }) {
+  const scale = size / 24;
+  return <Path x={x} y={y} data={ICON_PATHS[name]} stroke={color} strokeWidth={2} lineCap="round" lineJoin="round" scaleX={scale} scaleY={scale} listening={false} />;
+}
+
+/** Icon followed by single-line text, vertically centred on the text line. */
+export function IconLabel({ x, y, width, icon, text, size, color = "#1E293B", iconColor, bold = false, align = "left", font, lineHeight }: {
+  x: number; y: number; width: number; icon: IconName; text: string; size: number; color?: string; iconColor?: string; bold?: boolean; align?: "left" | "center"; font: string; lineHeight?: number;
+}) {
+  const iconSize = Math.round(size * 1.1);
+  const gap = Math.max(4, Math.round(size * 0.4));
+  const line = lineHeight ?? size;
+  const iconY = y + (line - iconSize) / 2;
+  // Centred: estimate the text width so icon + text sit together in the middle.
+  const estimated = align === "center" ? Math.min(width - iconSize - gap, [...text].length * size * 0.55) : 0;
+  const start = align === "center" ? x + (width - iconSize - gap - estimated) / 2 : x;
+  return <Group listening={false}>
+    <Icon name={icon} x={start} y={iconY} size={iconSize} color={iconColor ?? color} />
+    <Label x={start + iconSize + gap} y={y} width={Math.max(10, x + width - start - iconSize - gap)} text={text} size={size} bold={bold} color={color} font={font} lineHeight={lineHeight} />
+  </Group>;
 }
 
 /** A pipe between two places; `active` draws it in the colour of what is travelling. */

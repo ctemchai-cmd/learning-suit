@@ -93,14 +93,14 @@ describe("step 4 — web AI vs Claude Code", () => {
   it("the web AI only advises; Claude Code loops through tools on our machine until the tests pass", () => {
     const web = applyAiAction(createInitialAiState(), { type: "agent.web" });
     expect(web.nextState.agent).toMatchObject({ code: "bug", tests: "unknown", web: { asked: true } });
-    expect(web.frames[0].hop?.detail).toContain("📋 return a - b");
+    expect(web.frames[0].hop?.detail).toContainEqual({ kind: "code", text: "return a - b" });
     const cc = applyAiAction(createInitialAiState(), { type: "agent.cc" });
     // Every packet goes between Claude Code and the AI; the tools act on the machine in place.
     const hops = cc.frames.filter((frame) => frame.hop).map((frame) => `${frame.hop!.from}→${frame.hop!.to}`);
     expect(new Set(hops)).toEqual(new Set(["cc→model", "model→cc"]));
     expect(hops.filter((item) => item === "model→cc")).toHaveLength(5); // 4 tool requests + the final answer
     // The file's content travels to the AI; editing waits for our permission.
-    expect(cc.frames.find((frame) => frame.hop?.label === "เนื้อหาไฟล์")?.hop?.detail).toEqual(["def add(a, b):", "    return a - b"]);
+    expect(cc.frames.find((frame) => frame.hop?.label === "เนื้อหาไฟล์")?.hop?.detail).toEqual([{ kind: "code", text: "def add(a, b):" }, { kind: "code", text: "    return a - b" }]);
     const permission = cc.frames.findIndex((frame) => frame.marks.some((mark) => mark.spot === "gate" && mark.tone === "allowed"));
     expect(cc.frames[permission].state.agent.code).toBe("fixed");
     expect(cc.frames[permission - 1].state.agent.code).toBe("bug");
@@ -120,7 +120,10 @@ describe("step 5 — Claude Code's memory", () => {
     const ask = applyAiAction(state, { type: "cc.say", say: "ask" });
     // Each message carries CLAUDE.md + the memory files + the whole session to the AI, which forgets after answering.
     const sent = ask.frames.find((frame) => frame.hop?.from === "cc" && frame.hop.to === "model")!;
-    expect(sent.hop!.detail).toEqual(["📄 ใช้ pnpm ติดตั้งแพ็กเกจ", "📄 เขียนเทสต์ทุกครั้งที่แก้โค้ด", "📌 ตอบเป็นภาษาไทยเสมอ", "💬 คุณ: ต้องตอบเป็นภาษาอะไร?"]);
+    expect(sent.hop!.detail).toEqual([
+      { kind: "file", text: "ใช้ pnpm ติดตั้งแพ็กเกจ" }, { kind: "file", text: "เขียนเทสต์ทุกครั้งที่แก้โค้ด" },
+      { kind: "memory", text: "ตอบเป็นภาษาไทยเสมอ" }, { kind: "user", text: "คุณ: ต้องตอบเป็นภาษาอะไร?" },
+    ]);
     expect(sent.state.cc.reading).toBe(true);
     expect(ask.nextState.cc.reading).toBeUndefined();
     expect(ask.outcome).toBe("success");

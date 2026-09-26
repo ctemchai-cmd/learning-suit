@@ -47,8 +47,8 @@ export function replyTo(text: string, facts: Facts): Reply {
   const stated = factsIn(text);
   if (stated.name) return { text: `ยินดีที่ได้รู้จักครับ คุณ${stated.name}!`, asked: null, known: true };
   if (stated.job || stated.like) return { text: `จดไว้แล้วครับ ${stated.job ? `คุณเป็น${stated.job}` : `คุณชอบ${stated.like}`}`, asked: null, known: true };
-  if (/แมว/u.test(text)) return { text: "แมวนอนวันละ 12–16 ชั่วโมงเลยครับ 🐱", asked: null, known: true };
-  return { text: "เข้าใจแล้วครับ 🙂", asked: null, known: true };
+  if (/แมว/u.test(text)) return { text: "แมวนอนวันละ 12–16 ชั่วโมงเลยครับ", asked: null, known: true };
+  return { text: "เข้าใจแล้วครับ", asked: null, known: true };
 }
 
 /** Presets the panel offers (the teacher can also type). */

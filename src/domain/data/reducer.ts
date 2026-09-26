@@ -106,7 +106,7 @@ function storageRefresh(state: DataState, phone: PhoneId): DataTransition {
   const flow = new Flow(state);
   const count = state.storage.memory[phone].length;
   // Every refresh restarts the app first: its screen and the app's own memory are wiped.
-  flow.step(count ? hop(`mem${phone}`, `vanish${phone}`, `💨 ${count} รายการ`, "lost") : null,
+  flow.step(count ? hop(`mem${phone}`, `vanish${phone}`, `หายไป ${count} รายการ`, "lost") : null,
     count ? `${phone} รีเฟรชหน้า: แอปเริ่มใหม่ หน่วยความจำของแอปถูกล้าง ออเดอร์ ${count} รายการหายไป ✗` : `${phone} รีเฟรชหน้า: แอปเริ่มใหม่ หน้าจอว่างก่อน`,
     (s) => withStorage(s, { memory: setFor(s.storage.memory, phone, []), screen: setFor(s.storage.screen, phone, []) }),
     [{ spot: `phone${phone}`, tone: "refresh" }, ...(count ? [{ spot: `mem${phone}`, tone: "removed" as const }] : [])]);

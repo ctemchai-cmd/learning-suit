@@ -6,7 +6,8 @@ import type { MarkTone } from "@/domain/data/model";
 import type { DeploySimulatorNode } from "@/domain/document/model";
 import { SITE_URL, type DeployState, type DeployView } from "@/domain/deploy/model";
 import { deploymentOf } from "@/domain/deploy/reducer";
-import { AppSpinner, CaptionBar, Gate, Label, MARK_STYLE, Packet, Pipe, type Pt } from "@/features/flow/flow-bits";
+import { AppSpinner, CaptionBar, Gate, Icon, IconLabel, Label, MARK_STYLE, Packet, Pipe, type Pt } from "@/features/flow/flow-bits";
+import type { IconName } from "@/features/flow/icon-paths";
 import { waitingAt, type FlowPlay, type Waiting } from "@/features/flow/flow-session";
 import { useFlowPlayback } from "@/features/flow/use-flow-playback";
 import { CAPTION_BOX, DEPLOY_H, DEPLOY_VIEWS, DEPLOY_W, deploymentRows, hopPath, sceneOf, type Box } from "./deploy-layout";
@@ -29,13 +30,16 @@ const IDLE: Record<DeployView, string> = {
 type Marks = Map<string, { tone: MarkTone }>;
 const toneOf = (marks: Marks, spot: string) => marks.get(spot)?.tone;
 
-function Card({ box, title, sub, mark, fill = C.card, stroke = C.cardStroke, dark = false, font, children }: {
-  box: Box; title?: string; sub?: string; mark?: MarkTone; fill?: string; stroke?: string; dark?: boolean; font: string; children?: ReactNode;
+function Card({ box, title, icon, sub, mark, fill = C.card, stroke = C.cardStroke, dark = false, font, children }: {
+  box: Box; title?: string; icon?: IconName; sub?: string; mark?: MarkTone; fill?: string; stroke?: string; dark?: boolean; font: string; children?: ReactNode;
 }) {
   const style = mark ? MARK_STYLE[mark] : null;
+  const titleColor = dark ? "#F8FAFC" : C.title;
   return <Group listening={false}>
     <Rect x={box.x} y={box.y} width={box.w} height={box.h} cornerRadius={12} fill={style && !dark ? style.fill : fill} stroke={style?.stroke ?? stroke} strokeWidth={style ? 3 : 1.5} />
-    {title && <Label x={box.x + 12} y={box.y + 10} width={box.w - 24} text={title} size={15} bold color={dark ? "#F8FAFC" : C.title} font={font} />}
+    {title && (icon
+      ? <IconLabel x={box.x + 12} y={box.y + 10} width={box.w - 24} icon={icon} text={title} size={15} bold color={titleColor} font={font} />
+      : <Label x={box.x + 12} y={box.y + 10} width={box.w - 24} text={title} size={15} bold color={titleColor} font={font} />)}
     {sub && <Label x={box.x + 12} y={box.y + 30} width={box.w - 24} text={sub} size={11} color={dark ? "#94A3B8" : C.muted} font={font} />}
     {children}
   </Group>;
@@ -46,7 +50,7 @@ function Laptop({ box, font }: { box: Box; font: string }) {
   return <Group listening={false}>
     <Rect x={box.x} y={box.y} width={box.w} height={box.h} cornerRadius={16} fill="#F8FAFC" stroke={C.dark} strokeWidth={6} />
     <Line points={[box.x - 6, base + 4, box.x + box.w + 6, base + 4, box.x + box.w + 18, base + 18, box.x - 18, base + 18]} closed fill="#CBD5E1" stroke="#94A3B8" strokeWidth={1} />
-    <Label x={box.x + 14} y={box.y + 12} width={box.w - 28} text="💻 เครื่องเรา" size={15} bold color={C.title} font={font} />
+    <IconLabel x={box.x + 14} y={box.y + 12} width={box.w - 28} icon="laptop" text="เครื่องเรา" size={15} bold color={C.title} font={font} />
   </Group>;
 }
 
@@ -71,7 +75,7 @@ function BrowserCard({ box, state, mark, waiting, font }: { box: Box; state: Dep
     {shown ? <>
       <Label x={box.x + 10} y={box.y + 38} width={box.w - 20} text={state.code.title} size={box.w > 150 ? 18 : 13} bold color={C.title} font={font} />
       <Label x={box.x + 10} y={box.y + 62} width={box.w - 20} text={`รุ่น ${state.local.showing}`} size={12} color={C.muted} font={font} />
-      {state.code.broken && <Label x={box.x + 10} y={box.y + 82} width={box.w - 20} text="⚠ โค้ดมีข้อผิดพลาด" size={11} bold color={C.bad} font={font} />}
+      {state.code.broken && <IconLabel x={box.x + 10} y={box.y + 82} width={box.w - 20} icon="alert" text="โค้ดมีข้อผิดพลาด" size={11} bold color={C.bad} font={font} />}
       {state.laptop.lines.map((line, index) => <Label key={index} x={box.x + 10} y={box.y + box.h - 26 - index * 18} width={box.w - 20} text={line} size={12} bold color={line.includes("✗") ? C.bad : C.ok} font={font} />)}
     </> : <Label x={box.x + 10} y={box.y + 40} width={box.w - 20} text="ยังไม่ได้เปิดเซิร์ฟเวอร์" size={12} color={C.muted} font={font} />}
     {waiting && <AppSpinner box={{ x: box.x + 1, y: box.y + 27, w: box.w - 2, h: box.h - 28 }} kind={waiting} font={font} />}
@@ -86,7 +90,7 @@ function FriendPhone({ frame, screen, state, mark, waiting, font }: { frame: Box
     <Rect x={frame.x} y={frame.y} width={frame.w} height={frame.h} cornerRadius={28} fill={C.dark} />
     <Rect x={frame.x + frame.w / 2 - 28} y={frame.y + 12} width={56} height={7} cornerRadius={4} fill="#334155" />
     <Rect x={screen.x} y={screen.y} width={screen.w} height={screen.h} cornerRadius={12} fill={style?.fill ?? fill} stroke={style?.stroke} strokeWidth={style ? 2.5 : 0} />
-    <Label x={screen.x + 10} y={screen.y + 10} width={screen.w - 20} text="📱 มือถือเพื่อน" size={13} bold color={C.muted} font={font} />
+    <IconLabel x={screen.x + 10} y={screen.y + 10} width={screen.w - 20} icon="phone" text="มือถือเพื่อน" size={13} bold color={C.muted} font={font} />
     {friend.tone === "empty"
       ? <Label x={screen.x + 10} y={screen.y + 40} width={screen.w - 20} text="ยังไม่ได้เปิดเว็บ" size={13} color={C.muted} font={font} />
       : <>
@@ -94,6 +98,15 @@ function FriendPhone({ frame, screen, state, mark, waiting, font }: { frame: Box
         {friend.lines.map((line, index) => <Label key={index} x={screen.x + 10} y={screen.y + 68 + index * 22} width={screen.w - 20} text={line} size={12} color={friend.tone === "error" ? C.bad : C.text} font={font} />)}
       </>}
     {waiting && <AppSpinner box={{ x: screen.x, y: screen.y + 32, w: screen.w, h: screen.h - 32 }} kind={waiting} font={font} />}
+  </Group>;
+}
+
+/** Whether a deployment was built with the database key: a key, or a crossed-out key. */
+function KeyBadge({ x, y, has, light }: { x: number; y: number; has: boolean; light: boolean }) {
+  const color = has ? (light ? "#B45309" : "#FCD34D") : "#F87171";
+  return <Group x={x} y={y} listening={false}>
+    <Icon name="key" x={0} y={0} size={18} color={color} />
+    {!has && <Line points={[1, 17, 17, 1]} stroke={color} strokeWidth={2} lineCap="round" />}
   </Group>;
 }
 
@@ -112,8 +125,9 @@ function Deployments({ view, state, marks, font }: { view: DeployView; state: De
       return <Group key={id}>
         <Rect x={box.x} y={box.y} width={box.w} height={box.h} cornerRadius={8} fill={style?.fill ?? (live ? "#F0FDF4" : "#1F2937")} stroke={style?.stroke ?? (live ? "#22C55E" : "#374151")} strokeWidth={style || live ? 2 : 1} />
         <Label x={box.x + 10} y={box.y} width={44} text={`D${id}`} size={13} bold color={live || style ? C.title : "#F8FAFC"} font={font} lineHeight={box.h} />
-        <Label x={box.x + 48} y={box.y} width={box.w - 150} text={`${item.ok ? "✓" : "✗ ล้ม"} รุ่น ${item.rev}${showKey ? (item.hasKey ? " 🔑" : " ไม่มี🔑") : ""}`} size={12}
+        <Label x={box.x + 48} y={box.y} width={box.w - (showKey ? 176 : 150)} text={`${item.ok ? "✓" : "✗ ล้ม"} รุ่น ${item.rev}`} size={12}
           color={item.ok ? (live || style ? C.ok : "#86EFAC") : "#FCA5A5"} font={font} lineHeight={box.h} />
+        {showKey && <KeyBadge x={box.x + box.w - 124} y={box.y + (box.h - 18) / 2} has={item.hasKey} light={live || Boolean(style)} />}
         {live && <Group x={box.x + box.w - 96} y={box.y + (box.h - 20) / 2}>
           <Rect width={88} height={20} cornerRadius={10} fill="#16A34A" />
           <Label x={0} y={0} width={88} text="ใช้งานจริง" size={11} bold color="#FFFFFF" align="center" font={font} lineHeight={20} />
@@ -161,8 +175,11 @@ export function DeployWidgetView({ node, play, fontFamily: font }: { node: Deplo
     </Card>}
     {scene.browser && <BrowserCard box={scene.browser} state={state} mark={toneOf(marks, "browser")} waiting={waitingAt(play, "browser")} font={font} />}
     {scene.envfile && <Card box={scene.envfile} title=".env.local" mark={toneOf(marks, "envfile")} fill={state.keys.local ? "#FFFBEB" : "#F8FAFC"} stroke={state.keys.local ? "#FCD34D" : "#CBD5E1"} font={font}>
-      <Label x={scene.envfile.x + 12} y={scene.envfile.y + (scene.envfile.h > 100 ? 48 : 34)} width={scene.envfile.w - 24} text={state.keys.local ? "🔑 กุญแจฐานข้อมูล" : "ไม่มีกุญแจ"}
-        size={scene.envfile.h > 100 ? 15 : 11} bold={scene.envfile.h > 100} color={state.keys.local ? "#92400E" : C.bad} font={font} />
+      {state.keys.local
+        ? <IconLabel x={scene.envfile.x + 12} y={scene.envfile.y + (scene.envfile.h > 100 ? 48 : 34)} width={scene.envfile.w - 24} icon="key" text="กุญแจฐานข้อมูล"
+          size={scene.envfile.h > 100 ? 15 : 11} bold={scene.envfile.h > 100} color="#92400E" font={font} />
+        : <Label x={scene.envfile.x + 12} y={scene.envfile.y + (scene.envfile.h > 100 ? 48 : 34)} width={scene.envfile.w - 24} text="ไม่มีกุญแจ"
+          size={scene.envfile.h > 100 ? 15 : 11} bold={scene.envfile.h > 100} color={C.bad} font={font} />}
       {scene.envfile.h > 100 && <Label x={scene.envfile.x + 12} y={scene.envfile.y + 76} width={scene.envfile.w - 24} text="ไฟล์ลับ: อยู่แค่ในเครื่อง" size={11} color={C.muted} font={font} />}
     </Card>}
     {scene.localhostGate && <Gate at={scene.localhostGate} label="นอกเครื่องเรา" tone={gate("localhostGate")} font={font} />}
@@ -176,9 +193,11 @@ export function DeployWidgetView({ node, play, fontFamily: font }: { node: Deplo
     {scene.build && <Gate at={scene.build} label="Build" labelColor="#CBD5E1" tone={gate("build")} font={font} />}
     {scene.deployments && <Deployments view={view} state={state} marks={marks} font={font} />}
     {scene.vercelEnv && <Card box={scene.vercelEnv} title="Environment Variables" mark={toneOf(marks, "vercelEnv")} fill="#1F2937" stroke="#4B5563" dark font={font}>
-      <Label x={scene.vercelEnv.x + 12} y={scene.vercelEnv.y + 50} width={scene.vercelEnv.w - 24} text={state.keys.vercel ? "🔑 มีกุญแจฐานข้อมูล" : "ยังไม่มีกุญแจ"} size={15} bold color={state.keys.vercel ? "#86EFAC" : "#FCA5A5"} font={font} />
+      {state.keys.vercel
+        ? <IconLabel x={scene.vercelEnv.x + 12} y={scene.vercelEnv.y + 50} width={scene.vercelEnv.w - 24} icon="key" text="มีกุญแจฐานข้อมูล" size={15} bold color="#86EFAC" font={font} />
+        : <Label x={scene.vercelEnv.x + 12} y={scene.vercelEnv.y + 50} width={scene.vercelEnv.w - 24} text="ยังไม่มีกุญแจ" size={15} bold color="#FCA5A5" font={font} />}
     </Card>}
-    {scene.url && <Card box={scene.url} title="🌐 เว็บจริง" mark={toneOf(marks, "url")} fill="#EFF6FF" stroke="#93C5FD" font={font}>
+    {scene.url && <Card box={scene.url} title="เว็บจริง" icon="globe" mark={toneOf(marks, "url")} fill="#EFF6FF" stroke="#93C5FD" font={font}>
       <Label x={scene.url.x + 12} y={scene.url.y + 36} width={scene.url.w - 24} text={SITE_URL} size={12} bold color="#1D4ED8" font={font} />
       <Label x={scene.url.x + 12} y={scene.url.y + 60} width={scene.url.w - 24} text={live ? `${live.title} · รุ่น ${live.rev} (D${live.id})` : "ยังไม่มีเว็บ"} size={12} color={live ? C.text : C.muted} font={font} />
     </Card>}

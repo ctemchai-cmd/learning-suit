@@ -115,7 +115,7 @@ function LocalEnvControls(props: Props) {
   return <>
     <Section title="กุญแจใน .env.local">
       <Segmented label="กุญแจใน .env.local" value={state.keys.local} disabled={!writable} onChange={(on: boolean) => run({ type: "env.setLocal", on })}
-        options={[{ value: true, label: "🔑 มีกุญแจ", tone: "good" }, { value: false, label: "ไม่มี", tone: "bad" }]} />
+        options={[{ value: true, label: "มีกุญแจ", icon: <KeyRound size={13} />, tone: "good" }, { value: false, label: "ไม่มี", tone: "bad" }]} />
     </Section>
     <Section title="ลองกด">
       <div className="space-y-1.5">
@@ -160,7 +160,7 @@ function EnvControls(props: Props) {
   return <>
     <Section title="กุญแจบน Vercel">
       <Segmented label="กุญแจบน Vercel" value={state.keys.vercel} disabled={!writable} onChange={(on: boolean) => run({ type: "env.setVercel", on })}
-        options={[{ value: true, label: "🔑 ใส่แล้ว", tone: "good" }, { value: false, label: "ยังไม่ใส่", tone: "bad" }]} />
+        options={[{ value: true, label: "ใส่แล้ว", icon: <KeyRound size={13} />, tone: "good" }, { value: false, label: "ยังไม่ใส่", tone: "bad" }]} />
     </Section>
     <Section title="ลองกด">
       <div className="space-y-1.5">

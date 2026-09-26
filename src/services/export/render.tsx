@@ -84,3 +84,21 @@ export async function renderSlidePng(slide: SlideDocument, options: {
     root.unmount();
   }
 }
+
+/** Content smaller than this (world units) is not enlarged to fill a thumbnail, so a nearly empty slide looks nearly empty. */
+const THUMBNAIL_MIN_REGION = { width: 960, height: 600 };
+
+/**
+ * Small PNG of a slide for the slide list: the same renderer as the export, fitted into `width`×`height` px.
+ * Returns null for an empty slide.
+ */
+export async function renderSlideThumbnail(slide: SlideDocument, options: { width: number; height: number; images: ImageCache; signal?: AbortSignal }): Promise<Blob | null> {
+  if (!slide.nodes.length) return null;
+  await ensureCanvasFonts();
+  const padding = 24;
+  const bounds = planRaster(slide.nodes, { padding, scale: 1 }, konvaFontMetrics);
+  if (bounds.status !== "ok") return null;
+  const scale = Math.min(options.width / Math.max(bounds.region.width, THUMBNAIL_MIN_REGION.width), options.height / Math.max(bounds.region.height, THUMBNAIL_MIN_REGION.height));
+  const { blob } = await renderSlidePng(slide, { padding, scale, transparent: false, images: options.images, signal: options.signal });
+  return blob;
+}

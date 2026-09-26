@@ -131,10 +131,10 @@ test("CAN-13: laser pointer (K) shows a dot with a fading trail and never draws,
   await page.mouse.move(box.cx + 100, box.cy + 60, { steps: 12 });
   const laser = page.getByTestId("laser-pointer");
   await expect(laser.locator("circle")).toHaveCount(2); // dot + halo
-  expect(await laser.locator("line").count()).toBeGreaterThan(0); // trail
+  expect(await laser.locator("path").count()).toBeGreaterThan(0); // trail: smooth curves, not dotted segments
   await page.mouse.up();
   // The trail fades by itself; the dot stays while the pointer is on the board.
-  await expect(laser.locator("line")).toHaveCount(0, { timeout: 3000 });
+  await expect(laser.locator("path")).toHaveCount(0, { timeout: 3000 });
   await expect(laser.locator("circle")).toHaveCount(2);
 
   expect(JSON.stringify((await readDraft(page))!.content)).toBe(before);

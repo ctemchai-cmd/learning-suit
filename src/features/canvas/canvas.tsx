@@ -76,16 +76,16 @@ function withGitDraft(node: CanvasNode, edit: PendingEdit | null): CanvasNode {
 }
 
 /** Minor grid spacing (world units) at 100%; every GRID_MAJOR-th line is a major line. */
-const GRID_MINOR = 20;
+const GRID_MINOR = 10;
 const GRID_MAJOR = 5;
 
 /**
  * draw.io-style background grid (screen-space, never exported): dashed minor lines and solid major lines.
- * When zoomed out the spacing grows by the major factor so lines never get denser than ~10 px.
+ * When zoomed out the spacing grows by the major factor so lines never get denser than ~8 px.
  */
 function gridSpacing(zoom: number): { minor: number; major: number } {
   let minor = GRID_MINOR;
-  while (minor * zoom < 10) minor *= GRID_MAJOR;
+  while (minor * zoom < 8) minor *= GRID_MAJOR;
   return { minor, major: minor * GRID_MAJOR };
 }
 
@@ -111,12 +111,12 @@ function GridLayer({ camera, size }: { camera: Camera; size: { width: number; he
       };
       const native = context._context;
       native.lineWidth = 1;
-      native.setLineDash([3, 3]);
-      native.strokeStyle = "rgba(100,116,139,0.16)";
+      native.setLineDash([2, 3]);
+      native.strokeStyle = "rgba(100,116,139,0.13)";
       lines(false);
       native.stroke();
       native.setLineDash([]);
-      native.strokeStyle = "rgba(100,116,139,0.30)";
+      native.strokeStyle = "rgba(100,116,139,0.26)";
       lines(true);
       native.stroke();
     }} />

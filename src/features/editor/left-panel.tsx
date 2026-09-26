@@ -1,8 +1,10 @@
 "use client";
 
-import { useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useContext, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Bot, ChevronDown, ChevronUp, Copy, Database, GitBranch, Rocket, PanelLeftClose, PanelLeftOpen, PenLine, Plus, Star, Trash2 } from "lucide-react";
 import type { SlideDocument } from "@/domain/document/model";
+import { ImageCacheContext } from "@/features/canvas/image-cache";
+import { useSlideThumbnails } from "./slide-thumbnails";
 import { isActionTool, TOOL_ITEMS } from "./tools";
 import type { EditorTool } from "./store";
 
@@ -60,6 +62,7 @@ export default function LeftPanel({ slides, activeSlideId, tool, setTool, favori
   const collapsed = autoCollapsed ? !overlayOpen : storedCollapsed;
   const drag = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const activeIndex = slides.findIndex((slide) => slide.id === activeSlideId);
+  const thumbnails = useSlideThumbnails(slides, useContext(ImageCacheContext), !collapsed);
   const toggle = () => {
     if (autoCollapsed) { setOverlayOpen(!overlayOpen); return; }
     const next = !storedCollapsed;
@@ -138,10 +141,21 @@ export default function LeftPanel({ slides, activeSlideId, tool, setTool, favori
           draggable={writable} onDragStart={(event) => { setDragging(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); }}
           onDragOver={(event) => { if (dragging) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
           onDrop={(event) => { event.preventDefault(); dropOn(item.id); setDragging(null); }} onDragEnd={() => setDragging(null)}
-          title="คลิกเพื่อเปิด · ลากเพื่อจัดลำดับ" className={`flex w-full items-center gap-2 rounded-lg px-3 py-3 text-left text-sm ${item.id === activeSlideId ? "bg-slate-900 font-semibold text-white" : "hover:bg-slate-100"} ${dragging === item.id ? "opacity-50" : ""}`}><span className="shrink-0 text-xs opacity-60">{String(index + 1).padStart(2, "0")}</span><span className="truncate">{item.name}</span></button></li>)}</ul>
+          title="คลิกเพื่อเปิด · ลากเพื่อจัดลำดับ" className={`flex w-full items-center gap-2.5 rounded-lg p-1 text-left !text-sm ${item.id === activeSlideId ? "bg-slate-900 font-semibold text-white" : "hover:bg-slate-100"} ${dragging === item.id ? "opacity-50" : ""}`}>
+            <SlideThumbnail url={thumbnails[item.id] ?? null} background={item.background} active={item.id === activeSlideId} />
+            <span className="min-w-0 flex-1 leading-snug"><span className="block text-[11px] font-normal opacity-60">{String(index + 1).padStart(2, "0")}</span><span className="line-clamp-2 break-words">{item.name}</span></span>
+          </button></li>)}</ul>
         <div className="grid grid-cols-4 gap-1 border-t border-slate-200 p-2"><button className="app-button icon-button" title="เปลี่ยนชื่อสไลด์" aria-label="เปลี่ยนชื่อสไลด์" disabled={!writable} onClick={onRenameSlide}><PenLine size={15} /></button><button className="app-button icon-button" title="ทำสำเนาสไลด์" aria-label="ทำสำเนาสไลด์" disabled={!writable} onClick={onCopySlide}><Copy size={15} /></button><button className="app-button icon-button" title="เลื่อนสไลด์ขึ้น" aria-label="เลื่อนสไลด์ขึ้น" disabled={!writable || activeIndex <= 0} onClick={() => onMoveSlide(-1)}><ChevronUp size={17} /></button><button className="app-button icon-button" title="เลื่อนสไลด์ลง" aria-label="เลื่อนสไลด์ลง" disabled={!writable || activeIndex >= slides.length - 1} onClick={() => onMoveSlide(1)}><ChevronDown size={17} /></button><button className="app-button col-span-4 !border-red-200 !text-red-700" disabled={!writable || slides.length <= 1} title={slides.length <= 1 ? "ลบไม่ได้: บทเรียนต้องมีอย่างน้อยหนึ่งสไลด์" : "ลบสไลด์นี้ (เลิกทำได้)"} aria-describedby={slides.length <= 1 ? "delete-slide-reason" : undefined} onClick={onDeleteSlide}><Trash2 size={15} /> ลบสไลด์</button>{slides.length <= 1 && <p id="delete-slide-reason" className="col-span-4 px-1 text-xs muted">ต้องมีอย่างน้อยหนึ่งสไลด์ จึงลบสไลด์สุดท้ายไม่ได้</p>}</div>
       </>}
     </aside>
     {!collapsed && !overlay && <div role="separator" aria-label="ปรับความกว้างแถบซ้าย" aria-orientation="vertical" aria-valuemin={MIN_WIDTH} aria-valuemax={MAX_WIDTH} aria-valuenow={width} tabIndex={0} className="group absolute -right-1 top-0 z-30 h-full w-2 cursor-col-resize touch-none outline-none" onPointerDown={startResize} onPointerMove={moveResize} onPointerUp={(event) => endResize(event)} onPointerCancel={(event) => endResize(event, true)} onLostPointerCapture={(event) => endResize(event, true)} onKeyDown={separatorKey}><div className="mx-auto h-full w-px bg-transparent group-hover:bg-blue-500 group-focus:bg-blue-500" /></div>}
   </div>;
+}
+
+/** Picture of a slide in the list (drawn by the export renderer); the slide's background while it is being drawn or empty. */
+function SlideThumbnail({ url, background, active }: { url: string | null; background: string; active: boolean }) {
+  return <span aria-hidden className={`block aspect-[16/10] w-[76px] shrink-0 overflow-hidden rounded border ${active ? "border-slate-600" : "border-slate-200"}`} style={{ background }}>
+    {/* eslint-disable-next-line @next/next/no-img-element -- a local blob URL, not an optimisable asset */}
+    {url && <img src={url} alt="" draggable={false} className="pointer-events-none h-full w-full object-contain" />}
+  </span>;
 }

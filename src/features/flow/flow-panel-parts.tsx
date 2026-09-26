@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { ChevronDown, CircleCheck, CircleX, Info, RotateCcw, SkipForward, Snail, TriangleAlert } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleCheck, CircleX, Info, RotateCcw, SkipForward, Snail, TriangleAlert } from "lucide-react";
 import { useFlowSession, type FlowResult } from "./flow-session";
 
 // Clean DOM pieces shared by the flow simulators' panels (plan 07 §2): few words, one control per idea.
@@ -42,14 +42,17 @@ export function Section({ title, children, aside }: { title: string; children: R
 
 /** One choice out of a few (aria-pressed buttons). */
 export function Segmented<V extends string | boolean>({ label, value, options, onChange, disabled }: {
-  label: string; value: V; options: { value: V; label: string; tone?: "good" | "bad" }[]; onChange: (value: V) => void; disabled?: boolean;
+  label: string; value: V; options: { value: V; label: string; icon?: ReactNode; tone?: "good" | "bad" }[]; onChange: (value: V) => void; disabled?: boolean;
 }) {
   return <div role="group" aria-label={label} className="grid gap-1 rounded-xl bg-slate-100 p-1" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
     {options.map((option) => {
       const active = option.value === value;
       const color = !active ? "text-slate-500 hover:text-slate-800" : option.tone === "good" ? "bg-white text-green-700 shadow-sm" : option.tone === "bad" ? "bg-white text-red-700 shadow-sm" : "bg-white text-slate-900 shadow-sm";
       return <button key={String(option.value)} type="button" aria-pressed={active} disabled={disabled} onClick={() => onChange(option.value)}
-        className={`truncate rounded-lg px-2 py-1.5 text-xs font-semibold transition-colors ${color}`}>{option.label}</button>;
+        className={`flex min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-semibold transition-colors ${color}`}>
+        {option.icon && <span aria-hidden className="shrink-0">{option.icon}</span>}
+        <span className="truncate">{option.label}</span>
+      </button>;
     })}
   </div>;
 }
@@ -105,7 +108,7 @@ export function PlaybackControls({ nodeId }: { nodeId: string }) {
         <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${((play.index + (play.phase === "landed" ? 1 : 0.5)) / play.frames.length) * 100}%` }} />
       </div>
       {!auto && <button type="button" disabled={!canNext} onClick={() => flow.next(nodeId)}
-        className="whitespace-nowrap rounded-lg bg-blue-600 px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-40">ถัดไป ▶</button>}
+        className="flex items-center gap-0.5 whitespace-nowrap rounded-lg bg-blue-600 py-1 pl-2 pr-1 text-[11px] font-semibold text-white disabled:opacity-40">ถัดไป<ChevronRight aria-hidden size={13} /></button>}
       <button type="button" aria-label="ข้ามไปจบ" title="ข้ามไปจบ" disabled={!busy} onClick={() => flow.finish(nodeId)}
         className="grid h-6 w-6 place-items-center rounded-md text-slate-500 hover:bg-white disabled:opacity-30"><SkipForward size={14} /></button>
       <button type="button" aria-label="เล่นซ้ำ" title="เล่นซ้ำ" onClick={() => flow.replay(nodeId)}

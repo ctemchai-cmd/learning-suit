@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState, type JSX } from "react";
-import { Bot, Brain, Eraser, FilePlus2, FolderSync, Globe, Lightbulb, MessageSquarePlus, Send, ShieldQuestion, Terminal, Trash2, Wrench } from "lucide-react";
+import { Bot, Brain, Eraser, FilePlus2, FolderOpen, FolderSync, Globe, Lightbulb, MessageSquarePlus, Send, ShieldQuestion, Terminal, Trash2, Wrench } from "lucide-react";
 import type { DocumentTransaction } from "@/domain/document/commands";
 import type { AiSimulatorNode } from "@/domain/document/model";
 import { AI_LIMITS, type AiAction, type AiState, type AiView } from "@/domain/ai/model";
@@ -113,7 +113,7 @@ function ThinkingControls({ state, writable, run }: Props) {
   return <>
     <Section title="คิดก่อนตอบ (Chain of Thought)">
       <Segmented label="คิดก่อนตอบ" value={state.thinking.on} disabled={!writable} onChange={(on: boolean) => run({ type: "think.set", on })}
-        options={[{ value: false, label: "ปิด: ตอบทันที", tone: "bad" }, { value: true, label: "💭 เปิด", tone: "good" }]} />
+        options={[{ value: false, label: "ปิด: ตอบทันที", tone: "bad" }, { value: true, label: "เปิด", icon: <Lightbulb size={13} />, tone: "good" }]} />
     </Section>
     <Section title="ถามโจทย์">
       <div className="space-y-1.5">
@@ -127,7 +127,7 @@ function MemoryControls({ state, writable, run, ids }: Props) {
   return <>
     <Section title="Memory ของแอป">
       <Segmented label="Memory ของแอป" value={state.memory.on} disabled={!writable} onChange={(on: boolean) => run({ type: "memory.set", on })}
-        options={[{ value: true, label: "🗂 เปิด", tone: "good" }, { value: false, label: "ปิด", tone: "bad" }]} />
+        options={[{ value: true, label: "เปิด", icon: <FolderOpen size={13} />, tone: "good" }, { value: false, label: "ปิด", tone: "bad" }]} />
     </Section>
     <Composer id={ids} presets={MEMORY_PRESETS} writable={writable} onSend={(text) => run({ type: "memory.send", text })} />
     <div className="space-y-1.5">

@@ -2,13 +2,14 @@
 
 import type { JSX, ReactNode } from "react";
 import { Group, Rect, Text } from "react-konva";
-import type { MarkTone } from "@/domain/data/model";
+import type { CarriedLine, MarkTone } from "@/domain/data/model";
 import type { AiSimulatorNode } from "@/domain/document/model";
 import type { AiState, AiView, ChatMsg } from "@/domain/ai/model";
 import { AI_LIMITS } from "@/domain/ai/model";
 import { FACT_LABEL, factsFrom, puzzleOf, type Facts } from "@/domain/ai/chat";
 import { ccContextLines, contextWindow } from "@/domain/ai/reducer";
-import { CaptionBar, Label, MARK_STYLE, Packet, Pipe, TONE_COLOR, type Pt } from "@/features/flow/flow-bits";
+import { CaptionBar, Icon, IconLabel, Label, MARK_STYLE, Packet, Pipe, TONE_COLOR, type Pt } from "@/features/flow/flow-bits";
+import type { IconName } from "@/features/flow/icon-paths";
 import { waitingAt, type FlowPlay } from "@/features/flow/flow-session";
 import { useFlowPlayback } from "@/features/flow/use-flow-playback";
 import { AI_H, AI_VIEWS, AI_W, CAPTION_BOX, hopPath, sceneOf, type Box } from "./ai-layout";
@@ -40,13 +41,16 @@ function Para({ x, y, width, height, text, size, color = C.text, bold = false, a
     fill={color} align={align} verticalAlign="middle" wrap="word" ellipsis lineHeight={1.25} listening={false} />;
 }
 
-function Card({ box, title, sub, mark, fill = C.card, stroke = C.cardStroke, dark = false, font, children }: {
-  box: Box; title?: string; sub?: string; mark?: MarkTone; fill?: string; stroke?: string; dark?: boolean; font: string; children?: ReactNode;
+function Card({ box, title, icon, iconColor, sub, mark, fill = C.card, stroke = C.cardStroke, dark = false, font, children }: {
+  box: Box; title?: string; icon?: IconName; iconColor?: string; sub?: string; mark?: MarkTone; fill?: string; stroke?: string; dark?: boolean; font: string; children?: ReactNode;
 }) {
   const style = mark ? MARK_STYLE[mark] : null;
+  const titleColor = dark ? "#F8FAFC" : C.title;
   return <Group listening={false}>
     <Rect x={box.x} y={box.y} width={box.w} height={box.h} cornerRadius={14} fill={style && !dark ? style.fill : fill} stroke={style?.stroke ?? stroke} strokeWidth={style ? 3 : 1.5} />
-    {title && <Label x={box.x + 14} y={box.y + 12} width={box.w - 28} text={title} size={16} bold color={dark ? "#F8FAFC" : C.title} font={font} />}
+    {title && (icon
+      ? <IconLabel x={box.x + 14} y={box.y + 12} width={box.w - 28} icon={icon} text={title} size={16} bold color={titleColor} iconColor={iconColor} font={font} />
+      : <Label x={box.x + 14} y={box.y + 12} width={box.w - 28} text={title} size={16} bold color={titleColor} font={font} />)}
     {sub && <Label x={box.x + 14} y={box.y + 34} width={box.w - 28} text={sub} size={11} color={dark ? "#94A3B8" : C.muted} font={font} />}
     {children}
   </Group>;
@@ -85,15 +89,17 @@ function Bubbles({ area, messages, typing, font }: { area: Box; messages: ChatMs
   </Group>;
 }
 
-function ChatScreen({ box, title, sub, messages, typing, mark, font, children }: {
-  box: Box; title: string; sub?: string; messages: ChatMsg[]; typing: boolean; mark?: MarkTone; font: string; children?: ReactNode;
+function ChatScreen({ box, title, icon, sub, messages, typing, mark, font, children }: {
+  box: Box; title: string; icon?: IconName; sub?: string; messages: ChatMsg[]; typing: boolean; mark?: MarkTone; font: string; children?: ReactNode;
 }) {
   const style = mark ? MARK_STYLE[mark] : null;
   const head = sub ? 58 : 40;
   return <Group listening={false}>
     <Rect x={box.x} y={box.y} width={box.w} height={box.h} cornerRadius={16} fill="#FFFFFF" stroke={style?.stroke ?? "#94A3B8"} strokeWidth={style ? 3 : 1.5} />
     <Rect x={box.x} y={box.y} width={box.w} height={head} cornerRadius={[16, 16, 0, 0]} fill="#E2E8F0" />
-    <Label x={box.x + 14} y={box.y + (sub ? 8 : 0)} width={box.w - 28} text={title} size={sub ? 16 : 14} bold color={C.title} font={font} lineHeight={sub ? 22 : 40} />
+    {icon
+      ? <IconLabel x={box.x + 14} y={box.y + (sub ? 8 : 0)} width={box.w - 28} icon={icon} text={title} size={sub ? 16 : 14} bold color={C.title} font={font} lineHeight={sub ? 22 : 40} />
+      : <Label x={box.x + 14} y={box.y + (sub ? 8 : 0)} width={box.w - 28} text={title} size={sub ? 16 : 14} bold color={C.title} font={font} lineHeight={sub ? 22 : 40} />}
     {sub && <Label x={box.x + 14} y={box.y + 32} width={box.w - 28} text={sub} size={12} color={C.muted} font={font} />}
     {children ?? <>
       {messages.length === 0 && !typing && <Label x={box.x + 14} y={box.y + head + 20} width={box.w - 28} text="ยังไม่มีข้อความ" size={13} color={C.muted} align="center" font={font} />}
@@ -102,39 +108,55 @@ function ChatScreen({ box, title, sub, messages, typing, mark, font, children }:
   </Group>;
 }
 
-type Row = { icon: string; text: string; tone: "user" | "ai" | "memory" | "file" };
+type Row = { icon: IconName; text: string; tone: "user" | "ai" | "memory" | "file" | "tool" | "code" | "pass" | "fail" };
 const ROW_FILL: Record<Row["tone"], { fill: string; text: string }> = {
   user: { fill: "#2563EB", text: "#FFFFFF" }, ai: { fill: "#E2E8F0", text: "#1E293B" }, memory: { fill: "#FEF3C7", text: "#92400E" }, file: { fill: "#DBEAFE", text: "#1E3A8A" },
+  tool: { fill: "#EDE9FE", text: "#5B21B6" }, code: { fill: "#0F172A", text: "#E2E8F0" }, pass: { fill: "#DCFCE7", text: "#166534" }, fail: { fill: "#FEE2E2", text: "#991B1B" },
 };
-/** A carried line coloured by what it is: 📄 CLAUDE.md, 📌 memory, 💬 คุณ… (us), other (the AI / plain). */
-const rowOfLine = (line: string): Row => ({
-  icon: "", text: line,
-  tone: line.startsWith("📄") ? "file" : line.startsWith("📌") ? "memory" : line.startsWith("💬 คุณ") || line.startsWith("👤") ? "user" : "ai",
-});
-const rowsOf = (messages: ChatMsg[]): Row[] => messages.map((message) => ({ icon: message.role === "user" ? "👤" : "🤖", text: message.text, tone: message.role }));
+/** How a carried line is drawn: its icon and colour come from what it is (CLAUDE.md, memory, us, the AI, a tool …). */
+const CARRIED: Record<CarriedLine["kind"], Pick<Row, "icon" | "tone">> = {
+  file: { icon: "file", tone: "file" }, memory: { icon: "pin", tone: "memory" }, user: { icon: "user", tone: "user" }, ai: { icon: "bot", tone: "ai" },
+  tool: { icon: "wrench", tone: "tool" }, edit: { icon: "pencil", tone: "tool" }, note: { icon: "note", tone: "tool" }, code: { icon: "code", tone: "code" },
+  pass: { icon: "check", tone: "pass" }, fail: { icon: "fail", tone: "fail" }, empty: { icon: "empty", tone: "ai" },
+};
+const rowOfLine = (line: CarriedLine): Row => ({ ...CARRIED[line.kind], text: line.text });
+const rowsOf = (messages: ChatMsg[]): Row[] => messages.map((message) => ({ icon: message.role === "user" ? "user" : "bot", text: message.text, tone: message.role }));
 
-/** Mini chat rows: what travels to the model, or what the model is holding right now. */
+/** Mini chat rows: what travels to the model, or what the model is holding right now. Our lines sit right, the AI's left. */
 function Rows({ x, y, w, rows, font, size = 12, rowH = 26 }: { x: number; y: number; w: number; rows: Row[]; font: string; size?: number; rowH?: number }) {
   return <Group listening={false}>{rows.map((row, index) => {
     const style = ROW_FILL[row.tone];
-    const inset = row.tone === "memory" || row.tone === "file" ? 0 : 36;
+    const inset = row.tone === "user" || row.tone === "ai" ? 36 : 0;
+    const left = row.tone === "user" ? x + inset : x;
+    const top = y + index * (rowH + 4);
     return <Group key={index}>
-      <Rect x={row.tone === "user" ? x + inset : x} y={y + index * (rowH + 4)} width={w - inset} height={rowH} cornerRadius={rowH / 2.6} fill={style.fill} />
-      <Label x={(row.tone === "user" ? x + inset : x) + 10} y={y + index * (rowH + 4)} width={w - inset - 20} text={row.icon ? `${row.icon} ${row.text}` : row.text} size={size} color={style.text} font={font} lineHeight={rowH} />
+      <Rect x={left} y={top} width={w - inset} height={rowH} cornerRadius={rowH / 2.6} fill={style.fill} />
+      <IconLabel x={left + 9} y={top} width={w - inset - 18} icon={row.icon} text={row.text} size={size} color={style.text} font={font} lineHeight={rowH} />
     </Group>;
   })}</Group>;
 }
 
 /** The travelling card: everything that is sent, so learners see that the WHOLE conversation goes each time. */
-function Payload({ title, rows, color = "#2563EB", font }: { title: string; rows: Row[]; color?: string; font: string }) {
+function Payload({ title, icon, rows, color = "#2563EB", font }: { title: string; icon: IconName; rows: Row[]; color?: string; font: string }) {
   const w = 320, rowH = 26, h = 44 + rows.length * (rowH + 4);
   return <Group x={-w / 2} y={-h / 2} listening={false}>
     <Rect width={w} height={h} cornerRadius={14} fill="#FFFFFF" stroke={color} strokeWidth={3} shadowColor="#0F172A" shadowOpacity={0.35} shadowBlur={18} shadowOffsetY={6} />
     <Rect width={w} height={32} cornerRadius={[14, 14, 0, 0]} fill={color} />
-    <Label x={12} y={0} width={w - 24} text={title} size={14} bold color="#FFFFFF" font={font} lineHeight={32} />
+    <IconLabel x={12} y={0} width={w - 24} icon={icon} text={title} size={14} bold color="#FFFFFF" font={font} lineHeight={32} />
     <Rows x={10} y={40} w={w - 20} rows={rows} font={font} rowH={rowH} />
   </Group>;
 }
+
+/** What the model holds between answers: nothing. */
+function EmptyMind({ x, y, w, h, font }: { x: number; y: number; w: number; h: number; font: string }) {
+  return <Group listening={false}>
+    <Icon name="eyeOff" x={x + w / 2 - 18} y={y + h / 2 - 44} size={36} color="#C4B5FD" />
+    <Label x={x} y={y + h / 2 + 4} width={w} text="ว่างเปล่า — ตอบเสร็จแล้วลืมหมด" size={15} color="#A78BFA" align="center" font={font} />
+  </Group>;
+}
+
+/** “Received this time” heading above what the model is holding. */
+const receivedTitle = (reading: boolean, count: number) => (reading ? `ได้รับรอบนี้ (${count} ชิ้น)` : "ได้รับรอบนี้");
 
 /** The model: holds what it was sent only while answering, then is empty again. */
 function ModelMind({ box, reading, received, facts, used, total, note, mark, font }: {
@@ -142,11 +164,11 @@ function ModelMind({ box, reading, received, facts, used, total, note, mark, fon
 }) {
   const shown = received.slice(-7);
   return <ModelCard box={box} sub="ไม่มีความจำของตัวเอง" mark={mark} font={font}>
-    <Label x={box.x + 16} y={box.y + 64} width={box.w - 32} text={reading ? `📥 ได้รับรอบนี้ (${received.length} ชิ้น)` : "📥 ได้รับรอบนี้"} size={14} bold color={C.title} font={font} />
+    <IconLabel x={box.x + 16} y={box.y + 64} width={box.w - 32} icon="inbox" text={receivedTitle(reading, received.length)} size={14} bold color={C.title} iconColor={C.violet} font={font} />
     <Rect x={box.x + 16} y={box.y + 90} width={box.w - 32} height={226} cornerRadius={12} fill="#FFFFFF" stroke="#DDD6FE" dash={reading ? undefined : [6, 5]} />
     {reading
       ? <Rows x={box.x + 26} y={box.y + 100} w={box.w - 52} rows={shown} font={font} />
-      : <Para x={box.x + 26} y={box.y + 100} width={box.w - 52} height={206} text="ว่างเปล่า — ตอบเสร็จแล้วลืมหมด 🫥" size={15} color="#A78BFA" align="center" font={font} />}
+      : <EmptyMind x={box.x + 26} y={box.y + 100} w={box.w - 52} h={206} font={font} />}
     {total !== undefined && <Meter x={box.x + 16} y={box.y + 330} w={box.w - 32} used={used} total={total} label={`Context window: รับได้ ${total} ข้อความล่าสุด`} font={font} />}
     <Label x={box.x + 16} y={box.y + (total !== undefined ? 390 : 336)} width={box.w - 32} text="รู้อะไรตอนนี้:" size={13} bold color={C.title} font={font} />
     {reading
@@ -175,7 +197,7 @@ function FactsList({ x, y, w, facts, empty, font }: { x: number; y: number; w: n
 }
 
 function ModelCard({ box, sub, mark, font, children }: { box: Box; sub: string; mark?: MarkTone; font: string; children?: ReactNode }) {
-  return <Card box={box} title="🧠 โมเดล AI" sub={sub} mark={mark} fill={C.model} stroke={C.modelStroke} font={font}>{children}</Card>;
+  return <Card box={box} title="โมเดล AI" icon="brain" iconColor={C.violet} sub={sub} mark={mark} fill={C.model} stroke={C.modelStroke} font={font}>{children}</Card>;
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +211,7 @@ function HistoryStep({ state, marks, play, font }: StepProps) {
   const { messages, shown, reading } = state.history;
   const window = contextWindow(messages);
   return <>
-    <ChatScreen box={scene.chat!} title="💬 แอปแชท" sub="ที่เราพิมพ์คุยกับ AI · แอปเก็บประวัติแชทไว้เอง" messages={messages.slice(0, shown)}
+    <ChatScreen box={scene.chat!} title="แอปแชท" icon="chat" sub="ที่เราพิมพ์คุยกับ AI · แอปเก็บประวัติแชทไว้เอง" messages={messages.slice(0, shown)}
       typing={Boolean(waitingAt(play, "chat"))} mark={toneOf(marks, "chat")} font={font} />
     <ModelMind box={scene.model} reading={Boolean(reading)} received={rowsOf(window)} facts={factsFrom(window)} used={window.length} total={AI_LIMITS.window}
       note="AI จำแชทได้เพราะแอปส่งทั้งบทสนทนามาให้อ่านใหม่ทุกครั้ง ถ้ายาวเกินที่รับได้ ข้อความเก่าจะไม่ถูกส่ง" mark={toneOf(marks, "model")} font={font} />
@@ -203,7 +225,7 @@ function ThinkingStep({ state, marks, play, font }: StepProps) {
   const chat = scene.chat!, model = scene.model, box = scene.thoughts!;
   const typing = Boolean(waitingAt(play, "chat"));
   return <>
-    <ChatScreen box={chat} title="💬 หน้าแชท" messages={[]} typing={false} mark={toneOf(marks, "chat")} font={font}>
+    <ChatScreen box={chat} title="หน้าแชท" icon="chat" messages={[]} typing={false} mark={toneOf(marks, "chat")} font={font}>
       {question ? <>
         {/* The whole question: a trick question only works if it can be read in full. */}
         <Rect x={chat.x + 40} y={chat.y + 58} width={chat.w - 52} height={112} cornerRadius={14} fill={C.user} />
@@ -221,7 +243,7 @@ function ThinkingStep({ state, marks, play, font }: StepProps) {
         <Label x={0} y={0} width={180} text={on ? "คิดก่อนตอบ: เปิด" : "คิดก่อนตอบ: ปิด"} size={13} bold color="#FFFFFF" align="center" font={font} lineHeight={30} />
       </Group>
     </ModelCard>
-    <Card box={box} title="💭 ความคิด (Chain of Thought)" mark={toneOf(marks, "thoughts")} fill="#FFFFFF" stroke="#DDD6FE" font={font}>
+    <Card box={box} title="ความคิด (Chain of Thought)" icon="thought" iconColor={C.violet} mark={toneOf(marks, "thoughts")} fill="#FFFFFF" stroke="#DDD6FE" font={font}>
       {thoughts.length === 0
         ? <Label x={box.x + 16} y={box.y + 60} width={box.w - 32} text={on ? "ยังไม่มีคำถาม" : "ปิดอยู่: AI ตอบทันทีโดยไม่เขียนความคิด"} size={14} color={C.muted} font={font} />
         : thoughts.map((thought, index) => <Group key={index}>
@@ -230,8 +252,8 @@ function ThinkingStep({ state, marks, play, font }: StepProps) {
           <Label x={box.x + 58} y={box.y + 52 + index * 58} width={box.w - 74} text={thought} size={17} color={C.text} font={font} />
         </Group>)}
     </Card>
-    <Label x={model.x + 26} y={box.y + box.h + 18} width={model.w - 52}
-      text={answer ? `⏱ ใช้เวลาประมาณ ${seconds} วินาที · ✍️ เขียนความคิด ${thoughts.length} ขั้น` : "⏱ คิดก่อนตอบ = ช้ากว่าและใช้ context มากกว่า แต่ถูกกว่าในโจทย์ที่ต้องคิดหลายขั้น"}
+    <IconLabel x={model.x + 26} y={box.y + box.h + 18} width={model.w - 52} icon="timer"
+      text={answer ? `ใช้เวลาประมาณ ${seconds} วินาที · เขียนความคิด ${thoughts.length} ขั้น` : "คิดก่อนตอบ = ช้ากว่าและใช้ context มากกว่า แต่ถูกกว่าในโจทย์ที่ต้องคิดหลายขั้น"}
       size={14} bold={Boolean(answer)} color={answer ? (correct ? C.ok : C.bad) : C.muted} font={font} />
     {answer && <Label x={model.x + 26} y={box.y + box.h + 44} width={model.w - 52}
       text={correct ? `คำตอบ: ${answer} ✓ ถูกต้อง` : `คำตอบ: ${answer} ✗ ผิด (ที่ถูกคือ ${question!.answer})`} size={18} bold color={correct ? C.ok : C.bad} font={font} />}
@@ -241,7 +263,7 @@ function ThinkingStep({ state, marks, play, font }: StepProps) {
 /** What the app sends in step 3: its memory (when on and not empty), then this chat's messages. */
 function memoryRows(state: AiState): Row[] {
   const { on, items, messages } = state.memory;
-  const memory: Row[] = on && items.length ? [{ icon: "🗂", text: `ความจำ: ${items.map((item) => `${FACT_LABEL[item.key]} ${item.value}`).join(", ")}`, tone: "memory" }] : [];
+  const memory: Row[] = on && items.length ? [{ icon: "folder", text: `ความจำ: ${items.map((item) => `${FACT_LABEL[item.key]} ${item.value}`).join(", ")}`, tone: "memory" }] : [];
   return [...memory, ...rowsOf(messages)];
 }
 
@@ -250,22 +272,33 @@ function MemoryStep({ state, marks, play, font }: StepProps) {
   const { on, items, messages, shown, chat, reading } = state.memory;
   const memory = scene.memory!, frame = scene.appFrame!;
   return <>
-    <Card box={frame} title="💬 แอปแชท" sub="ที่เราพิมพ์คุยกับ AI · มีแชทหลายห้อง และมี Memory ของแอปเอง" fill={C.app} font={font} />
+    <Card box={frame} title="แอปแชท" icon="chat" sub="ที่เราพิมพ์คุยกับ AI · มีแชทหลายห้อง และมี Memory ของแอปเอง" fill={C.app} font={font} />
     <ChatScreen box={scene.chat!} title={`แชท #${chat}`} messages={messages.slice(0, shown)} typing={Boolean(waitingAt(play, "chat"))} mark={toneOf(marks, "chat")} font={font} />
-    <Card box={memory} title="🗂 Memory ของแอป" sub="เก็บที่แอป ไม่ได้อยู่ในตัว AI" mark={toneOf(marks, "memory")} fill={on ? "#FFFBEB" : "#F8FAFC"} stroke={on ? "#FCD34D" : "#CBD5E1"} font={font}>
+    <Card box={memory} title="Memory ของแอป" icon="folder" iconColor="#B45309" sub="เก็บที่แอป ไม่ได้อยู่ในตัว AI" mark={toneOf(marks, "memory")} fill={on ? "#FFFBEB" : "#F8FAFC"} stroke={on ? "#FCD34D" : "#CBD5E1"} font={font}>
       <Group x={memory.x + 14} y={memory.y + 58}>
         <Rect width={memory.w - 28} height={26} cornerRadius={13} fill={on ? "#16A34A" : "#94A3B8"} />
         <Label x={0} y={0} width={memory.w - 28} text={on ? "เปิด: จดและแนบไปทุกแชท" : "ปิด: ไม่จด ไม่แนบ"} size={12} bold color="#FFFFFF" align="center" font={font} lineHeight={26} />
       </Group>
       {items.length === 0
         ? <Label x={memory.x + 14} y={memory.y + 104} width={memory.w - 28} text="ยังไม่ได้จดอะไร" size={13} color={C.muted} font={font} />
-        : items.map((item, index) => <Label key={item.key} x={memory.x + 14} y={memory.y + 100 + index * 30} width={memory.w - 28} text={`📌 ${FACT_LABEL[item.key]}: ${item.value}`} size={14} bold color="#92400E" font={font} />)}
+        : items.map((item, index) => <IconLabel key={item.key} x={memory.x + 14} y={memory.y + 100 + index * 30} width={memory.w - 28} icon="pin" text={`${FACT_LABEL[item.key]}: ${item.value}`} size={14} bold color="#92400E" font={font} />)}
       <Para x={memory.x + 14} y={memory.y + memory.h - 110} width={memory.w - 28} height={96}
         text="เปิดแชทใหม่ ข้อความเก่าไม่ถูกส่ง แต่แอปแนบความจำนี้ไปด้วยเสมอ" size={12} color={C.muted} font={font} />
     </Card>
     <ModelMind box={scene.model} reading={Boolean(reading)} received={memoryRows(state)} facts={factsFrom(messages, on ? items : [])} used={0}
       note="AI “จำเราได้” ข้ามแชท เพราะแอปแนบความจำมาให้อ่าน ไม่ใช่เพราะตัว AI เรียนรู้เพิ่ม" mark={toneOf(marks, "model")} font={font} />
   </>;
+}
+
+/** Older saved logs start with an emoji; the board shows an icon instead. */
+const LEGACY_PREFIX = /^(?:\p{Extended_Pictographic}\uFE0F?\s*)+/u;
+/** A Claude Code log line: our prompt (“> …”) plain, tool steps with the icon of what happened. */
+function logLine(raw: string): { icon: IconName | null; text: string; color: string } {
+  const text = raw.replace(LEGACY_PREFIX, "");
+  if (text.startsWith(">")) return { icon: null, text, color: "#FDE68A" };
+  const color = text.startsWith("เสร็จ") || text.includes("✓") ? "#86EFAC" : text.includes("✗") ? "#FCA5A5" : C.terminalText;
+  const icon: IconName = text.startsWith("เสร็จ") ? "check" : text.startsWith("ขอแก้") ? "lock" : text.startsWith("แก้") ? "pencil" : "wrench";
+  return { icon, text, color };
 }
 
 function AgentStep({ state, marks, play, font }: StepProps) {
@@ -276,43 +309,51 @@ function AgentStep({ state, marks, play, font }: StepProps) {
   const gateMark = toneOf(marks, "gate");
   return <>
     {/* Left: the web chat — it can only talk. */}
-    <ChatScreen box={webBox} title="🌐 AI บนเว็บ (แชท)" sub="คุยได้ แต่แตะเครื่องเราไม่ได้" messages={webMessages} typing={Boolean(waitingAt(play, "web"))} mark={toneOf(marks, "web")} font={font}>
+    <ChatScreen box={webBox} title="AI บนเว็บ (แชท)" icon="globe" sub="คุยได้ แต่แตะเครื่องเราไม่ได้" messages={webMessages} typing={Boolean(waitingAt(play, "web"))} mark={toneOf(marks, "web")} font={font}>
       <Bubbles area={{ x: webBox.x + 12, y: webBox.y + 76, w: webBox.w - 24, h: 200 }} messages={webMessages} typing={Boolean(waitingAt(play, "web"))} font={font} />
       {webMessages.length === 0 && <Label x={webBox.x + 14} y={webBox.y + 96} width={webBox.w - 28} text="ยังไม่ได้ถาม" size={13} color={C.muted} align="center" font={font} />}
       <Rect x={webBox.x + 12} y={webBox.y + webBox.h - 150} width={webBox.w - 24} height={136} cornerRadius={12} fill="#FFF7ED" stroke="#FDBA74" />
-      <Label x={webBox.x + 26} y={webBox.y + webBox.h - 138} width={webBox.w - 52} text={web.answer ? "✋ ต่อจากนี้เราต้องทำเอง:" : "บนเว็บ AI…"} size={14} bold color="#9A3412" font={font} />
+      {web.answer
+        ? <IconLabel x={webBox.x + 26} y={webBox.y + webBox.h - 138} width={webBox.w - 52} icon="hand" text="ต่อจากนี้เราต้องทำเอง:" size={14} bold color="#9A3412" font={font} />
+        : <Label x={webBox.x + 26} y={webBox.y + webBox.h - 138} width={webBox.w - 52} text="บนเว็บ AI…" size={14} bold color="#9A3412" font={font} />}
       {(web.answer ? ["เปิดไฟล์ในเครื่อง", "แก้โค้ดเอง", "รันเทสต์เอง"] : ["มองไม่เห็นไฟล์ในเครื่องเรา", "ต้องก๊อปโค้ดไปวางเอง", "ให้ได้แค่คำแนะนำ"]).map((line, index) =>
         <Label key={index} x={webBox.x + 30} y={webBox.y + webBox.h - 108 + index * 28} width={webBox.w - 60} text={`• ${line}`} size={14} color="#9A3412" font={font} />)}
     </ChatScreen>
 
     {/* Middle: the same AI serves both — it only sees what is sent to it. */}
     <ModelCard box={model} sub="ตัวเดียวกันทั้งสองฝั่ง · อยู่บนคลาวด์" mark={toneOf(marks, "model")} font={font}>
-      {["👀 มองไม่เห็นเครื่องเรา", "📥 รู้แค่สิ่งที่ถูกส่งมา", "🔧 ใน Claude Code “ขอใช้เครื่องมือ” ได้"].map((line, index) =>
-        <Label key={index} x={model.x + 18} y={model.y + 76 + index * 34} width={model.w - 36} text={line} size={15} bold={index === 2} color={index === 2 ? C.violet : C.text} font={font} />)}
+      {([["eyeOff", "มองไม่เห็นเครื่องเรา"], ["inbox", "รู้แค่สิ่งที่ถูกส่งมา"], ["wrench", "ใน Claude Code “ขอใช้เครื่องมือ” ได้"]] as const).map(([icon, line], index) =>
+        <IconLabel key={index} x={model.x + 18} y={model.y + 76 + index * 34} width={model.w - 36} icon={icon} text={line} size={15} bold={index === 2} color={index === 2 ? C.violet : C.text} iconColor={C.violet} font={font} />)}
       <Rect x={model.x + 18} y={model.y + 196} width={model.w - 36} height={164} cornerRadius={12} fill="#FFFFFF" stroke="#DDD6FE" />
-      <Label x={model.x + 30} y={model.y + 206} width={model.w - 60} text="🔁 วงจรของ Claude Code" size={14} bold color={C.violet} font={font} />
+      <IconLabel x={model.x + 30} y={model.y + 206} width={model.w - 60} icon="repeat" text="วงจรของ Claude Code" size={14} bold color={C.violet} font={font} />
       {["1. AI ขอใช้เครื่องมือ", "2. Claude Code ทำในเครื่องเรา", "3. ส่งผลกลับให้ AI", "4. วนจนเสร็จ แล้วตอบ"].map((line, index) =>
         <Label key={index} x={model.x + 30} y={model.y + 236 + index * 28} width={model.w - 60} text={line} size={14} color={C.text} font={font} />)}
     </ModelCard>
 
     {/* Right: our machine — Claude Code acts here, and asks before editing. */}
-    <Card box={machine} title="💻 เครื่องเรา" sub="Claude Code ลงมือทำให้ในเครื่องนี้" fill="#F8FAFC" font={font} />
-    <Card box={cc} title="⌨️ Claude Code" mark={toneOf(marks, "cc")} fill={C.terminal} stroke="#334155" dark font={font}>
+    <Card box={machine} title="เครื่องเรา" icon="laptop" sub="Claude Code ลงมือทำให้ในเครื่องนี้" fill="#F8FAFC" font={font} />
+    <Card box={cc} title="Claude Code" icon="terminal" iconColor="#86EFAC" mark={toneOf(marks, "cc")} fill={C.terminal} stroke="#334155" dark font={font}>
       {log.length === 0
         ? <Label x={cc.x + 14} y={cc.y + 44} width={cc.w - 28} text="$ claude" size={14} color="#86EFAC" font={font} />
-        : log.slice(-7).map((line, index) => <Label key={index} x={cc.x + 14} y={cc.y + 40 + index * 24} width={cc.w - 28} text={line} size={14}
-          color={line.startsWith("✅") || line.includes("✓") ? "#86EFAC" : line.includes("✗") ? "#FCA5A5" : line.startsWith(">") ? "#FDE68A" : C.terminalText} font={font} />)}
+        : log.slice(-7).map((raw, index) => {
+          const { icon, text, color } = logLine(raw);
+          const y = cc.y + 40 + index * 24;
+          return icon
+            ? <IconLabel key={index} x={cc.x + 14} y={y} width={cc.w - 28} icon={icon} text={text} size={14} color={color} font={font} />
+            : <Label key={index} x={cc.x + 14} y={y} width={cc.w - 28} text={text} size={14} color={color} font={font} />;
+        })}
     </Card>
-    <Card box={files} title="📄 main.py" mark={toneOf(marks, "files")} font={font}>
+    <Card box={files} title="main.py" icon="file" mark={toneOf(marks, "files")} font={font}>
       <Label x={files.x + 14} y={files.y + 38} width={files.w - 28} text="def add(a, b):" size={15} color={C.text} font={font} />
       <Label x={files.x + 14} y={files.y + 62} width={files.w - 28} text={code === "bug" ? "    return a - b   ← บั๊ก" : "    return a + b   ✓"} size={15} bold color={code === "bug" ? C.bad : C.ok} font={font} />
     </Card>
     <Card box={testBox} mark={toneOf(marks, "tests")} font={font}>
-      <Label x={testBox.x + 14} y={testBox.y} width={testBox.w - 28} text={`🧪 เทสต์: ${tests === "unknown" ? "ยังไม่ได้รัน" : tests === "fail" ? "✗ ไม่ผ่าน" : "✓ ผ่าน"}`} size={15} bold
+      <IconLabel x={testBox.x + 14} y={testBox.y} width={testBox.w - 28} icon="flask" text={`เทสต์: ${tests === "unknown" ? "ยังไม่ได้รัน" : tests === "fail" ? "✗ ไม่ผ่าน" : "✓ ผ่าน"}`} size={15} bold
         color={tests === "pass" ? C.ok : tests === "fail" ? C.bad : C.muted} font={font} lineHeight={testBox.h} />
     </Card>
     <Card box={gate} mark={gateMark} fill="#F5F3FF" stroke="#C4B5FD" font={font}>
-      <Label x={gate.x + 14} y={gate.y} width={gate.w - 28} text={gateMark === "allowed" ? "🔐 ✓ คุณกดอนุญาตแล้ว" : gateMark === "read" ? "🔐 ขอแก้ไฟล์… อนุญาตไหม?" : "🔐 ถามเราก่อนแก้ไฟล์เสมอ"} size={14} bold color={C.violet} font={font} lineHeight={gate.h} />
+      <IconLabel x={gate.x + 14} y={gate.y} width={gate.w - 28} icon={gateMark === "allowed" ? "shield" : "lock"}
+        text={gateMark === "allowed" ? "คุณกดอนุญาตแล้ว ✓" : gateMark === "read" ? "ขอแก้ไฟล์… อนุญาตไหม?" : "ถามเราก่อนแก้ไฟล์เสมอ"} size={14} bold color={gateMark === "allowed" ? C.ok : C.violet} font={font} lineHeight={gate.h} />
     </Card>
   </>;
 }
@@ -340,18 +381,18 @@ function CcMemoryStep({ state, marks, font }: StepProps) {
   const received = ccContextLines(state).map(rowOfLine);
   return <>
     {/* Left: files on our disk — they stay when the session ends. */}
-    <Card box={scene.machine!} title="💾 ไฟล์ในเครื่องเรา" sub="อยู่ถาวร ปิด session ก็ไม่หาย" fill="#F8FAFC" font={font} />
-    <Card box={md} title="📄 CLAUDE.md" sub="คำสั่งโปรเจกต์ · เราเขียนเอง" mark={toneOf(marks, "claudeMd")} fill="#EFF6FF" stroke="#93C5FD" font={font}>
+    <Card box={scene.machine!} title="ไฟล์ในเครื่องเรา" icon="disk" sub="อยู่ถาวร ปิด session ก็ไม่หาย" fill="#F8FAFC" font={font} />
+    <Card box={md} title="CLAUDE.md" icon="file" iconColor="#2563EB" sub="คำสั่งโปรเจกต์ · เราเขียนเอง" mark={toneOf(marks, "claudeMd")} fill="#EFF6FF" stroke="#93C5FD" font={font}>
       {rules.map((rule, index) => <Label key={index} x={md.x + 14} y={md.y + 64 + index * 28} width={md.w - 28} text={`• ${rule}`} size={14} color="#1E3A8A" font={font} />)}
     </Card>
-    <Card box={dir} title="📌 ไฟล์ความจำ" sub="Claude จดเองข้าม session · เปิดอ่าน/ลบได้" mark={toneOf(marks, "memoryDir")} fill="#FFFBEB" stroke="#FCD34D" font={font}>
+    <Card box={dir} title="ไฟล์ความจำ" icon="pin" iconColor="#B45309" sub="Claude จดเองข้าม session · เปิดอ่าน/ลบได้" mark={toneOf(marks, "memoryDir")} fill="#FFFBEB" stroke="#FCD34D" font={font}>
       {memories.length === 0
         ? <Label x={dir.x + 14} y={dir.y + 70} width={dir.w - 28} text="ยังไม่มี" size={14} color={C.muted} font={font} />
         : memories.map((memory, index) => <Label key={index} x={dir.x + 14} y={dir.y + 64 + index * 28} width={dir.w - 28} text={`• ${memory}`} size={15} bold color="#92400E" font={font} />)}
     </Card>
 
     {/* Middle: the session — temporary; everything in it is sent with every message. */}
-    <Card box={cc} title={session ? `⌨️ Claude Code · session #${session}` : "⌨️ Claude Code"} sub="บทสนทนาชั่วคราว ปิด session แล้วหาย" mark={toneOf(marks, "cc")} fill={C.terminal} stroke="#334155" dark font={font}>
+    <Card box={cc} title={session ? `Claude Code · session #${session}` : "Claude Code"} icon="terminal" iconColor="#86EFAC" sub="บทสนทนาชั่วคราว ปิด session แล้วหาย" mark={toneOf(marks, "cc")} fill={C.terminal} stroke="#334155" dark font={font}>
       {session === 0
         ? <Label x={cc.x + 16} y={cc.y + 70} width={cc.w - 32} text="ยังไม่ได้เปิด session" size={15} color="#94A3B8" font={font} />
         : <>
@@ -369,11 +410,11 @@ function CcMemoryStep({ state, marks, font }: StepProps) {
 
     {/* Right: the AI holds what it was sent only while answering. */}
     <ModelCard box={model} sub="ไม่มีความจำของตัวเอง" mark={toneOf(marks, "model")} font={font}>
-      <Label x={model.x + 16} y={model.y + 64} width={model.w - 32} text={reading ? `📥 ได้รับรอบนี้ (${received.length} ชิ้น)` : "📥 ได้รับรอบนี้"} size={14} bold color={C.title} font={font} />
+      <IconLabel x={model.x + 16} y={model.y + 64} width={model.w - 32} icon="inbox" text={receivedTitle(Boolean(reading), received.length)} size={14} bold color={C.title} iconColor={C.violet} font={font} />
       <Rect x={model.x + 16} y={model.y + 90} width={model.w - 32} height={336} cornerRadius={12} fill="#FFFFFF" stroke="#DDD6FE" dash={reading ? undefined : [6, 5]} />
       {reading
         ? <Rows x={model.x + 26} y={model.y + 100} w={model.w - 52} rows={received.slice(-10)} font={font} />
-        : <Para x={model.x + 26} y={model.y + 100} width={model.w - 52} height={316} text="ว่างเปล่า — ตอบเสร็จแล้วลืมหมด 🫥" size={15} color="#A78BFA" align="center" font={font} />}
+        : <EmptyMind x={model.x + 26} y={model.y + 100} w={model.w - 52} h={316} font={font} />}
       <Para x={model.x + 16} y={model.y + model.h - 96} width={model.w - 32} height={84}
         text="Claude “จำ” ข้าม session ได้ เพราะ Claude Code ส่งไฟล์ CLAUDE.md กับไฟล์ความจำไปด้วยทุกข้อความ" size={13} color={C.muted} font={font} />
     </ModelCard>
@@ -398,15 +439,15 @@ export function AiWidgetView({ node, play, fontFamily: font }: { node: AiSimulat
   let body: ReactNode = undefined;
   if (move?.detail) {
     const rows: Row[] = move.detail.slice(-12).map(rowOfLine);
-    // 📤 = sent to the AI, 🧠 = the AI answers or asks for a tool.
-    body = <Payload title={`${move.to === "model" ? "📤" : "🧠"} ${move.label}`} rows={rows} color={TONE_COLOR[move.tone]} font={font} />;
+    // Send = on its way to the AI, brain = the AI answers or asks for a tool.
+    body = <Payload title={move.label} icon={move.to === "model" ? "send" : "brain"} rows={rows} color={TONE_COLOR[move.tone]} font={font} />;
   } else if (move && after && (view === "history" || view === "memory")) {
     if (move.from === "chat" && move.to === "model") {
       const rows = view === "history" ? rowsOf(contextWindow(flow.state.history.messages)) : memoryRows(flow.state);
-      body = <Payload title={`📨 ${move.label}`} rows={rows.slice(-8)} font={font} />;
+      body = <Payload title={move.label} icon="send" rows={rows.slice(-8)} font={font} />;
     } else if (move.from === "model" && move.to === "chat") {
       const reply = (view === "history" ? after.history.messages : after.memory.messages).at(-1);
-      if (reply) body = <Payload title="🤖 คำตอบของ AI" rows={[{ icon: "🤖", text: reply.text, tone: "ai" }]} color={move.tone === "blocked" ? "#DC2626" : "#16A34A"} font={font} />;
+      if (reply) body = <Payload title="คำตอบของ AI" icon="bot" rows={[{ icon: "bot", text: reply.text, tone: "ai" }]} color={move.tone === "blocked" ? "#DC2626" : "#16A34A"} font={font} />;
     }
   }
   return <Group scaleX={node.scale} scaleY={node.scale} clipX={0} clipY={0} clipWidth={AI_W} clipHeight={AI_H}>

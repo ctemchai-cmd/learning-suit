@@ -45,7 +45,7 @@ test("AI-01: chat history is resent every time and falls out of the window; chai
   await step(page, "thinking");
   await button(page, "ปากกากับยางลบ").click();
   await expect(panel(page)).toContainText("ตอบเร็วแต่ผิด (10 บาท)");
-  await button(page, "💭 เปิด").click();
+  await button(page, "เปิด").click();
   await button(page, "ปากกากับยางลบ").click();
   await expect(panel(page)).toContainText("ตอบถูก (5 บาท)");
   node = await aiNode(page);
@@ -75,8 +75,8 @@ test("AI-02: Claude Code loops through tools on our machine; its memory files su
   await expect(panel(page)).toContainText("จนเทสต์ผ่าน");
   let node = await aiNode(page);
   expect(node.state.agent).toMatchObject({ code: "fixed", tests: "pass" });
-  expect(node.state.agent.log).toContain("✏️ แก้ main.py แล้ว");
-  expect(node.state.agent.log).toContain("🔐 ขอแก้ไฟล์ → คุณอนุญาต");
+  expect(node.state.agent.log).toContain("แก้ main.py แล้ว");
+  expect(node.state.agent.log).toContain("ขอแก้ไฟล์ → คุณอนุญาต");
   await expect(button(page, "สั่ง Claude Code แก้บั๊ก")).toBeDisabled();
 
   await step(page, "ccMemory");
