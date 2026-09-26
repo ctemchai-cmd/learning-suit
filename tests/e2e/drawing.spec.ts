@@ -160,3 +160,38 @@ test("CAN-14: shapes draw by press-drag-release too; “วาดต่อเน
   const nodes = (await readDraft(page))!.content.document.slides[0].nodes as { type: string }[];
   expect(nodes.filter((node) => node.type === "pen")).toHaveLength(1);
 });
+
+test("CAN-15: keys 1–8 pick favorites in toolbar order; dragging a favorite reorders it (kept after reload); ⌥→ moves it too", async ({ page }) => {
+  await createProject(page, "เครื่องมือโปรด");
+  const toolbar = page.getByRole("toolbar", { name: "เครื่องมือโปรด" });
+  const order = () => toolbar.getByRole("button", { name: /^เครื่องมือโปรด: / }).evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")!.replace("เครื่องมือโปรด: ", "")));
+  const pressed = (name: string) => page.getByRole("button", { name, exact: true }).first();
+  expect(await order()).toEqual(["เลือก", "ปากกา", "สี่เหลี่ยม", "วงกลม", "ลูกศร", "ข้อความ"]);
+
+  await page.keyboard.press("2");
+  await expect(pressed("ปากกา")).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("6");
+  await expect(pressed("ข้อความ")).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("1");
+
+  // Drag “ข้อความ” to the front: the drag does not pick it, and the number keys follow the new order.
+  const from = (await toolbar.getByRole("button", { name: "เครื่องมือโปรด: ข้อความ" }).boundingBox())!;
+  const to = (await toolbar.getByRole("button", { name: "เครื่องมือโปรด: เลือก" }).boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + 4, to.y + to.height / 2, { steps: 12 });
+  await page.mouse.up();
+  expect(await order()).toEqual(["ข้อความ", "เลือก", "ปากกา", "สี่เหลี่ยม", "วงกลม", "ลูกศร"]);
+  await expect(pressed("เลือก")).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("1");
+  await expect(pressed("ข้อความ")).toHaveAttribute("aria-pressed", "true");
+
+  // Keyboard reordering on a focused favorite.
+  await toolbar.getByRole("button", { name: "เครื่องมือโปรด: ลูกศร" }).focus();
+  await page.keyboard.press("Alt+ArrowLeft");
+  expect(await order()).toEqual(["ข้อความ", "เลือก", "ปากกา", "สี่เหลี่ยม", "ลูกศร", "วงกลม"]);
+
+  await page.reload();
+  await expect(toolbar).toBeVisible();
+  expect(await order()).toEqual(["ข้อความ", "เลือก", "ปากกา", "สี่เหลี่ยม", "ลูกศร", "วงกลม"]);
+});

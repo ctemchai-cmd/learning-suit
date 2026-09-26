@@ -27,12 +27,17 @@ test("draws by two clicks, edits properties and Thai text, then restores the dra
   await textarea.press("Meta+Enter");
   await page.getByRole("tab", { name: "Objects" }).click();
   await expect(page.getByText("text: สวัสดี Git")).toBeVisible();
-  await page.mouse.dblclick(box.x + box.width / 2 + 140, box.y + box.height / 2 - 70);
-  await expect(textarea).toBeVisible();
+  // Double-click to edit. Right after an editor closes the text is back on the board only after the next
+  // canvas frame; a human never clicks that fast, the test retries instead.
+  const editText = () => expect(async () => {
+    await page.mouse.dblclick(box.x + box.width / 2 + 140, box.y + box.height / 2 - 70);
+    await expect(textarea).toBeVisible({ timeout: 1000 });
+  }).toPass();
+  await editText();
   await textarea.fill("ข้อความที่ยกเลิก");
   await textarea.press("Escape");
   await expect(page.getByText("text: สวัสดี Git")).toBeVisible();
-  await page.mouse.dblclick(box.x + box.width / 2 + 140, box.y + box.height / 2 - 70);
+  await editText();
   await textarea.fill("แก้แล้ว Git");
   await textarea.press("Meta+Enter");
   await expect(page.getByText("text: แก้แล้ว Git")).toBeVisible();

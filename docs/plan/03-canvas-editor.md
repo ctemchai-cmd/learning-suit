@@ -6,6 +6,8 @@
 
 Stage มีขนาดเท่า viewport ที่มองเห็น ใช้ ResizeObserver ไม่สร้าง canvas bitmap ขนาดเท่าโลกทั้งใบ ภายในแยกอย่างน้อย background/grid layer (ไม่รับ hit), document layer, transient preview และ selection overlay ทุก node renderer รับข้อมูลจาก document เท่านั้น
 
+Grid พื้นหลัง (ปรับ 2026-09-26 ตาม feedback ให้เหมือน draw.io): เส้นย่อยเส้นประทุก 20 หน่วยโลก และเส้นหลักทึบทุก 5 เส้นย่อย (100 หน่วย) ผูกกับพิกัดโลก เมื่อซูมออกจนเส้นย่อยห่างกันน้อยกว่า 10 px ระยะจะคูณ 5 ต่อไปเรื่อยๆ วาดเป็นเส้นบน screen space ใน layer ที่ไม่รับ hit และไม่ถูก export
+
 ```text
 screen = world * camera.zoom + camera.translation
 world  = (screen - camera.translation) / camera.zoom
@@ -160,6 +162,7 @@ Clone/duplicate widget ต้อง copy state อย่างอิสระ �
 |---|---|
 | V/H/P/R/O/A/T | Select/Hand/Pen/Rectangle/Ellipse/Arrow/Text |
 | Shift+P / L / E | Highlighter / Line / Eraser (L และ E ใช้ได้ทั้งมีและไม่มี Shift) |
+| 1 – 8 | เครื่องมือโปรดตามลำดับในแถบ (อ่าน `event.code` Digit1–8 จึงใช้ได้กับแป้นไทย) รูปภาพ = เปิดตัวเลือกไฟล์; ลำดับเครื่องมือโปรดสลับได้โดยลากไอคอนในแถบ (เกิน 6 px = ลาก คลิกเฉยๆ = เลือก) หรือ ⌥←/→ บนปุ่มที่โฟกัส เก็บใน localStorage |
 | K | Laser pointer: จุดแดงตามเมาส์ + หางที่จางเองใน 0.7 วินาที (SVG overlay, session-only) ไม่วาด ไม่เลือก ไม่เข้า Undo/Save/Export; จุดค้างเมื่อเมาส์นิ่งและหายเมื่อออกจากกระดาน |
 | Cmd+Z / Cmd+Shift+Z | Undo / Redo |
 | Cmd+S | Flush edit แล้วส่ง save queue ทันที; ระหว่าง active pointer gesture ให้ตั้ง `pendingSave` และรอ pointerup โดยไม่บังคับจบ stroke; ไม่เปิด Save Page ของ browser |

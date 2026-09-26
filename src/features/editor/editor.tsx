@@ -29,7 +29,8 @@ import { ingestImage } from "@/services/assets/ingest";
 import { getLocalAsset, putLocalAsset, putThumbnail } from "@/services/persistence/local-db";
 import { renderSlidePng } from "@/services/export/render";
 import { onHistoryNavigate, useEditorStore, type CloudStatusView, type EditorTool, type LocalStatus, type ProjectOpener } from "./store";
-import { DEFAULT_FAVORITES, TOOL_ITEMS } from "./tools";
+import { DEFAULT_FAVORITES, TOOL_ITEMS, isActionTool } from "./tools";
+import { favoriteForKey } from "./favorites";
 import LeftPanel from "./left-panel";
 import type { ToolbarPosition } from "@/features/canvas/favorite-toolbar";
 import ObjectsPanel from "./objects-panel";
@@ -175,6 +176,9 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
   useEffect(() => { store(FAVORITES_KEY, JSON.stringify(favorites)); }, [favorites]);
   useEffect(() => { store(TOOLBAR_KEY, JSON.stringify(toolbarPosition)); }, [toolbarPosition]);
   const toggleFavorite = (id: EditorTool) => setFavorites((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  // Keys 1–8 read the latest favorites without re-binding the keyboard listener.
+  const favoritesRef = useRef(favorites);
+  useEffect(() => { favoritesRef.current = favorites; }, [favorites]);
 
   // Images: local blobs first, then authenticated cloud download (cached locally).
   const images = useMemo(() => new ImageCache(async (assetId) => {
@@ -455,6 +459,16 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
       }
       if (event.key === "?" || (event.code === "Slash" && event.shiftKey)) { event.preventDefault(); setHelpOpen(true); return; }
       if (event.altKey) return;
+      // 1–8 = the favorites in toolbar order (event.code, so it also works with the Thai keyboard layout).
+      const digit = /^Digit([1-8])$/.exec(event.code);
+      if (digit && !event.shiftKey) {
+        const favorite = favoriteForKey(favoritesRef.current, Number(digit[1]));
+        if (!favorite) return;
+        event.preventDefault();
+        if (isActionTool(favorite)) { if (state.writable) fileInput.current?.click(); }
+        else state.setTool(favorite);
+        return;
+      }
       const shortcuts: Record<string, EditorTool> = { v: "select", h: "hand", p: event.shiftKey ? "highlighter" : "pen", r: "rectangle", o: "ellipse", a: "arrow", l: "line", t: "text", e: "eraser", k: "laser" };
       if (shortcuts[key]) { event.preventDefault(); state.setTool(shortcuts[key]); }
     };
@@ -598,7 +612,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
           onReorderSlides={(orderedIds) => slide && transact({ label: "จัดลำดับสไลด์", affectedSlideId: slide.id, commands: [{ type: "slide.reorder", orderedIds }] })}
           onInsertGit={() => insertWidget("git")} onInsertData={() => insertWidget("data")} onInsertDeploy={() => insertWidget("deploy")} onInsertAi={() => insertWidget("ai")} onImage={() => fileInput.current?.click()} />}
         <div className="min-w-0 flex-1">{slide
-          ? <Canvas key={slide.id} slide={slide} favorites={favorites} toolbarPosition={toolbarPosition} onToolbarPositionChange={setToolbarPosition}
+          ? <Canvas key={slide.id} slide={slide} favorites={favorites} onFavoritesReorder={setFavorites} toolbarPosition={toolbarPosition} onToolbarPositionChange={setToolbarPosition}
             onImageFiles={(files, world) => void insertImages(files, world)} onRequestImagePicker={() => fileInput.current?.click()} onWidgetSelected={showWidgetPanel} />
           : <div className="flex h-full items-center justify-center muted">กำลังโหลดกระดาน…</div>}</div>
         {rightVisible && <aside aria-label="แผงคุณสมบัติ" className={`w-[280px] shrink-0 overflow-y-auto border-l border-slate-200 bg-white ${narrowLayout || teachingMode ? "absolute right-0 top-0 z-40 h-full shadow-2xl" : ""}`}>{panelContent}</aside>}

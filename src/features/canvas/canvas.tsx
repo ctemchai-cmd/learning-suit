@@ -72,26 +72,60 @@ function withGitDraft(node: CanvasNode, edit: PendingEdit | null): CanvasNode {
   return projection.state === node.state ? node : { ...node, state: projection.state };
 }
 
+/** Minor grid spacing (world units) at 100%; every GRID_MAJOR-th line is a major line. */
+const GRID_MINOR = 20;
+const GRID_MAJOR = 5;
+
+/**
+ * draw.io-style background grid (screen-space, never exported): dashed minor lines and solid major lines.
+ * When zoomed out the spacing grows by the major factor so lines never get denser than ~10 px.
+ */
+function gridSpacing(zoom: number): { minor: number; major: number } {
+  let minor = GRID_MINOR;
+  while (minor * zoom < 10) minor *= GRID_MAJOR;
+  return { minor, major: minor * GRID_MAJOR };
+}
+
 function GridLayer({ camera, size }: { camera: Camera; size: { width: number; height: number } }) {
-  const spacing = camera.zoom >= 0.5 ? 40 : camera.zoom >= 0.2 ? 200 : 1000;
   return <Layer listening={false}>
     <Shape sceneFunc={(context) => {
-      const step = spacing * camera.zoom;
-      if (step < 8) return;
-      const offsetX = ((camera.x % step) + step) % step, offsetY = ((camera.y % step) + step) % step;
-      context.fillStyle = "rgba(100,116,139,0.18)";
-      for (let x = offsetX; x < size.width; x += step) {
-        for (let y = offsetY; y < size.height; y += step) context.fillRect(x - 0.75, y - 0.75, 1.5, 1.5);
-      }
+      const { minor } = gridSpacing(camera.zoom);
+      const step = minor * camera.zoom;
+      // World index of the first line on screen, so “every 5th line is major” stays fixed to the world.
+      const firstX = Math.ceil(-camera.x / step), firstY = Math.ceil(-camera.y / step);
+      const lines = (major: boolean) => {
+        context.beginPath();
+        for (let i = firstX; i * step + camera.x <= size.width; i++) {
+          if ((i % GRID_MAJOR === 0) !== major) continue;
+          const x = Math.round(i * step + camera.x) + 0.5;
+          context.moveTo(x, 0); context.lineTo(x, size.height);
+        }
+        for (let j = firstY; j * step + camera.y <= size.height; j++) {
+          if ((j % GRID_MAJOR === 0) !== major) continue;
+          const y = Math.round(j * step + camera.y) + 0.5;
+          context.moveTo(0, y); context.lineTo(size.width, y);
+        }
+      };
+      const native = context._context;
+      native.lineWidth = 1;
+      native.setLineDash([3, 3]);
+      native.strokeStyle = "rgba(100,116,139,0.16)";
+      lines(false);
+      native.stroke();
+      native.setLineDash([]);
+      native.strokeStyle = "rgba(100,116,139,0.30)";
+      lines(true);
+      native.stroke();
     }} />
   </Layer>;
 }
 
-export default function Canvas({ slide, favorites, toolbarPosition, onToolbarPositionChange, onImageFiles, onRequestImagePicker, onWidgetSelected }: {
+export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPosition, onToolbarPositionChange, onImageFiles, onRequestImagePicker, onWidgetSelected }: {
   slide: SlideDocument;
   /** A teaching widget was clicked: show its panel (the editor knows where the panel lives in this layout). */
   onWidgetSelected: () => void;
   favorites: EditorTool[];
+  onFavoritesReorder: (order: EditorTool[]) => void;
   toolbarPosition: ToolbarPosition;
   onToolbarPositionChange: (position: ToolbarPosition) => void;
   onImageFiles: (files: File[], world: Point | null) => void;
@@ -708,7 +742,7 @@ export default function Canvas({ slide, favorites, toolbarPosition, onToolbarPos
         setPendingEdit({ kind: "text", slideId: next.slideId, nodeId: draft.id, before: next.before, draft });
       }}
       onFinish={finishText} />}
-    <FavoriteToolbar favorites={favorites} position={toolbarPosition} viewport={size} onPositionChange={onToolbarPositionChange} onImage={onRequestImagePicker} />
+    <FavoriteToolbar favorites={favorites} position={toolbarPosition} viewport={size} onPositionChange={onToolbarPositionChange} onReorder={onFavoritesReorder} onImage={onRequestImagePicker} />
     <div className="pointer-events-none absolute bottom-4 left-4 rounded-lg border border-slate-200 bg-white/90 px-3 py-2 text-xs text-slate-600 shadow-sm">{Math.round(camera.zoom * 100)}% · scroll เลื่อน · ⌘/pinch ซูม · Space ลากเลื่อน</div>
     <div className="absolute bottom-4 right-4 flex gap-1 rounded-lg border border-slate-200 bg-white/95 p-1 shadow-sm" role="group" aria-label="การซูม">
       <button className="app-button icon-button" aria-label="ซูมออก" title="ซูมออก" onClick={() => setCamera(slide.id, zoomAt(camera, { x: size.width / 2, y: size.height / 2 }, camera.zoom / 1.25))}>−</button>
