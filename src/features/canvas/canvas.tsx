@@ -31,8 +31,11 @@ type Gesture =
   | { kind: "drawing"; pointerId: number; tool: "pen" | "highlighter"; samples: Point[]; zoom: number; lastScreen: Point }
   | { kind: "erasing"; pointerId: number; path: Point[]; hits: Set<string> }
   | { kind: "panning"; pointerId: number; screen: Point; camera: Camera }
-  /** Text/shape tools. Shapes: a click places a point; pressing and dragging draws from `start` (then `dragging`). */
-  | { kind: "click"; pointerId: number; screen: Point; start: Point; dragging: boolean };
+  /**
+   * Text/shape tools. Shapes: a click places a point (`hadPending` = this press is the second click);
+   * pressing and dragging draws from `start` (then `dragging`).
+   */
+  | { kind: "click"; pointerId: number; screen: Point; start: Point; dragging: boolean; hadPending: boolean };
 
 type StepDraft = { slideId: string; tool: StepTool; toolVersion: number; start: Point; current: Point; drag?: true };
 type MovePreview = { ids: string[]; dx: number; dy: number; clone: boolean } | null;
@@ -71,6 +74,9 @@ function withGitDraft(node: CanvasNode, edit: PendingEdit | null): CanvasNode {
   const projection = projectState(node.state, edit.machine, edit.draft);
   return projection.state === node.state ? node : { ...node, state: projection.state };
 }
+
+/** Shorter drags with a shape tool count as clicks (a trackpad click often moves a few pixels). */
+const DRAG_DRAW_MIN_PX = 12;
 
 /** Minor grid spacing (world units) at 100%; every GRID_MAJOR-th line is a major line. */
 const GRID_MINOR = 20;
@@ -183,6 +189,16 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     return () => { active = false; };
   }, []);
 
+  // `?debug=pointer`: a small on-board log of the pointer lifecycle, to diagnose strokes that vanish on
+  // real devices (trackpad, pen tablet, screen-sharing apps). Off by default; nothing is saved.
+  const [debugPointer] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "pointer");
+  const [traceLines, setTraceLines] = useState<string[]>([]);
+  const trace = useCallback((line: string) => {
+    if (!debugPointer) return;
+    const time = new Date().toISOString().slice(17, 23);
+    setTraceLines((lines) => [...lines.slice(-11), `${time} ${line}`]);
+  }, [debugPointer]);
+
   const cancelGesture = useCallback(() => {
     const current = gesture.current;
     gesture.current = null;
@@ -192,6 +208,27 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     setMarquee(null); setMovePreview(null); setErasing(null); setFreehandPreview(null);
     if (current) setGestureActive(false);
   }, [setGestureActive]);
+
+  /** Finishes a pen/highlighter stroke with the latest props (tool defaults, transaction target). */
+  const finishStrokeRef = useRef<(stroke: Extract<Gesture, { kind: "drawing" }>) => void>(() => {});
+  useLayoutEffect(() => {
+    finishStrokeRef.current = (stroke) => {
+      const node = freehandNode(stroke.tool, stroke.samples, stroke.zoom, crypto.randomUUID(), toolDefaults);
+      trace(`stroke ${stroke.samples.length} pts → ${node.type === "pen" || node.type === "highlighter" ? node.points.length : 0} kept`);
+      const saved = transact({ label: stroke.tool === "pen" ? "วาดปากกา" : "วาดไฮไลต์", affectedSlideId: slide.id, commands: [{ type: "nodes.insert", slideId: slide.id, nodes: [node] }] });
+      trace(saved ? "stroke saved ✓" : `stroke NOT saved ✗ (writable=${useEditorStore.getState().writable})`);
+    };
+  });
+  /**
+   * Something outside the teacher's control ended the gesture (window blur — e.g. macOS Force Click / a
+   * screen-sharing app taking focus —, pointercancel, lost capture). A pen stroke keeps what was drawn;
+   * everything else is cancelled. Only Escape throws a stroke away on purpose.
+   */
+  const interruptGesture = useCallback(() => {
+    const current = gesture.current;
+    cancelGesture();
+    if (current?.kind === "drawing") finishStrokeRef.current(current);
+  }, [cancelGesture]);
 
   // Unmount (slide switch, undo to another slide) must not leave a half gesture or a stuck blocker.
   useEffect(() => () => {
@@ -210,8 +247,10 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       const previous = sizeRef.current;
       if (next.width === previous.width && next.height === previous.height) return;
       sizeRef.current = next;
-      // Cancel any uncommitted gesture before the coordinate frame changes (plan03 §1).
-      if (gesture.current) cancelGesture();
+      trace(`resize ${next.width}x${next.height}${gesture.current ? ` during ${gesture.current.kind}` : ""}`);
+      // Cancel any uncommitted gesture before the coordinate frame changes (plan03 §1) — except a pen
+      // stroke: its samples are world points, so it simply keeps going (a banner appearing must not eat it).
+      if (gesture.current && gesture.current.kind !== "drawing") cancelGesture();
       const state = useEditorStore.getState();
       const current = state.cameras[slide.id];
       if (current && previous.width && previous.height) {
@@ -223,7 +262,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     });
     observer.observe(container);
     return () => observer.disconnect();
-  }, [slide.id, cancelGesture]);
+  }, [slide.id, cancelGesture, trace]);
 
   // ------------------------------------------------------------------ derived render data
   const overrides = useMemo(() => {
@@ -342,6 +381,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
 
   // ------------------------------------------------------------------ pointer handling
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    trace(`down ${event.pointerType} b${event.button} ${tool}${gesture.current ? ` (busy: ${gesture.current.kind})` : ""}${event.target !== event.currentTarget && !(event.target instanceof HTMLCanvasElement) ? " (on overlay)" : ""}`);
     if (event.target !== event.currentTarget && !(event.target instanceof HTMLCanvasElement)) return;
     if (gesture.current || (event.button !== 0 && event.button !== 1)) return;
     // Any open Text/Git DOM draft is flushed (or refuses) before the canvas changes selection.
@@ -397,7 +437,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       return;
     }
     const pending = stepDraft && stepDraft.slideId === slide.id && stepDraft.tool === tool && stepDraft.toolVersion === toolVersion ? stepDraft : null;
-    beginGesture({ kind: "click", pointerId: event.pointerId, screen, start: pending?.start ?? world, dragging: false }, event);
+    beginGesture({ kind: "click", pointerId: event.pointerId, screen, start: pending?.start ?? world, dragging: false, hadPending: Boolean(pending) }, event);
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -488,6 +528,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   };
 
   const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    trace(`up ${event.pointerType}${gesture.current ? ` ${gesture.current.kind}` : " (no gesture)"}`);
     const current = gesture.current;
     if (!current || current.pointerId !== event.pointerId) return;
     const screen = pointerOf(event);
@@ -533,8 +574,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       case "drawing": {
         setFreehandPreview(null);
         if (Math.hypot(screen.x - current.lastScreen.x, screen.y - current.lastScreen.y) >= 0.8) current.samples.push(world);
-        const node = freehandNode(current.tool, current.samples, current.zoom, crypto.randomUUID(), toolDefaults);
-        transact({ label: current.tool === "pen" ? "วาดปากกา" : "วาดไฮไลต์", affectedSlideId: slide.id, commands: [{ type: "nodes.insert", slideId: slide.id, nodes: [node] }] });
+        finishStrokeRef.current(current);
         return;
       }
       case "erasing": {
@@ -544,12 +584,18 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
         return;
       }
       case "click": {
-        if (current.dragging && isStepTool(tool)) {
-          setStepDraft(null); // a drag too small to make a shape just disappears
-          finishStep(tool, current.start, event.shiftKey ? constrainPoint(tool, current.start, world) : world);
+        const moved = Math.hypot(screen.x - current.screen.x, screen.y - current.screen.y);
+        if (isStepTool(tool)) {
+          const point = event.shiftKey ? constrainPoint(tool, current.start, world) : world;
+          // A real drag draws the shape at once. A small wobble while clicking (trackpads move a few
+          // pixels) is still a click: the first click places the start, the second one finishes.
+          if (current.dragging && moved >= DRAG_DRAW_MIN_PX) { setStepDraft(null); finishStep(tool, current.start, point); return; }
+          if (current.hadPending) { finishStep(tool, current.start, point); return; }
+          setSelectedIds([]);
+          setStepDraft({ slideId: slide.id, tool, toolVersion, start: current.start, current: world });
           return;
         }
-        if (Math.hypot(screen.x - current.screen.x, screen.y - current.screen.y) > 6) return;
+        if (moved > 6) return;
         if (tool === "text") {
           const hit = nodeAt(screen);
           if (hit?.type === "text") { startEditingText(hit); return; }
@@ -565,20 +611,12 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
           });
           return;
         }
-        if (!isStepTool(tool)) return;
-        const active = stepDraft && stepDraft.slideId === slide.id && stepDraft.tool === tool && stepDraft.toolVersion === toolVersion ? stepDraft : null;
-        if (!active) {
-          setSelectedIds([]);
-          setStepDraft({ slideId: slide.id, tool, toolVersion, start: world, current: world });
-          return;
-        }
-        finishStep(active.tool, active.start, event.shiftKey ? constrainPoint(active.tool, active.start, world) : world);
         return;
       }
     }
   };
 
-  const onPointerCancel = () => cancelGesture();
+  const onPointerCancel = () => { trace("pointercancel"); interruptGesture(); };
 
   const onDoubleClick = (event: React.MouseEvent<HTMLDivElement>) => {
     // Pointer capture retargets the click/dblclick to the viewport container.
@@ -655,12 +693,12 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       if (event.code === "Space") setSpaceDown(false);
       if (event.key.startsWith("Arrow") && nudge.current) commitNudge();
     };
-    const blur = () => { setSpaceDown(false); cancelGesture(); if (nudge.current) commitNudge(); };
+    const blur = () => { trace("window blur"); setSpaceDown(false); interruptGesture(); if (nudge.current) commitNudge(); };
     window.addEventListener("keydown", down, true);
     window.addEventListener("keyup", up);
     window.addEventListener("blur", blur);
     return () => { window.removeEventListener("keydown", down, true); window.removeEventListener("keyup", up); window.removeEventListener("blur", blur); };
-  }, [slide.nodes, stepDraft, cancelGesture, commitNudge]);
+  }, [slide.nodes, stepDraft, cancelGesture, interruptGesture, commitNudge, trace]);
 
   // Changing tool or slide cancels a pending two-click draft.
   const activeStep = stepDraft && stepDraft.slideId === slide.id && stepDraft.tool === tool && stepDraft.toolVersion === toolVersion ? stepDraft : null;
@@ -679,7 +717,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   return <div ref={containerRef} data-testid="canvas-viewport" className="relative h-full w-full touch-none select-none overflow-hidden outline-none"
     style={{ background: slide.background, cursor }}
     onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel}
-    onLostPointerCapture={(event) => { if (gesture.current?.pointerId === event.pointerId) cancelGesture(); }}
+    onLostPointerCapture={(event) => { if (gesture.current?.pointerId === event.pointerId) { trace("lostpointercapture"); interruptGesture(); } }}
     onPointerLeave={() => laserRef.current?.hide()}
     onDoubleClick={onDoubleClick}
     onDragOver={(event) => { if (writable && [...event.dataTransfer.items].some((item) => item.kind === "file")) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }}
@@ -731,6 +769,10 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       onPreview={setTransformPreview} onGesture={setGestureActive}
       onCommit={(nodes) => transact({ label: "ปรับขนาด/หมุนวัตถุ", affectedSlideId: slide.id, commands: [{ type: "nodes.replace", slideId: slide.id, nodes }] })} />}
     {tool === "laser" && <LaserPointer handleRef={laserRef} />}
+    {debugPointer && <div aria-hidden className="pointer-events-none absolute right-2 top-2 z-30 max-w-[360px] rounded-md bg-black/80 p-2 font-mono text-[10px] leading-snug text-green-300">
+      <div className="mb-1 text-white">debug=pointer</div>
+      {traceLines.map((line, index) => <div key={index}>{line}</div>)}
+    </div>}
     {/* The file editor is for the Select tool; with pen/shapes/text/eraser the board underneath takes the clicks. */}
     {selectedGit && tool === "select" && <GitCanvasOverlay node={selectedGit} slideId={slide.id} camera={camera} writable={writable} />}
     {activeStep && <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full border border-slate-300 bg-white/95 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">{activeStep.drag ? "ปล่อยเพื่อจบ" : "คลิกจุดที่ 2 เพื่อจบ"} · Shift จัดมุม · Esc ยกเลิก</div>}

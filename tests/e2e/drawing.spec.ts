@@ -72,18 +72,49 @@ test("CAN-03: Shift constrains square/45° lines, arrow keeps start→end direct
   await expect(await objectRows(page)).toHaveCount(2);
 });
 
-test("CAN-12: window blur during a pen stroke cancels the preview without creating an object", async ({ page }) => {
-  await createProject(page, "ยกเลิกเส้น");
+test("CAN-12: an interruption (window blur) keeps the pen stroke drawn so far; Escape still throws it away", async ({ page }) => {
+  await createProject(page, "เส้นไม่หาย");
   const box = await stageBox(page);
   await page.getByRole("button", { name: "ปากกา", exact: true }).click();
   await page.mouse.move(box.cx - 100, box.cy);
   await page.mouse.down();
   await page.mouse.move(box.cx, box.cy + 30, { steps: 5 });
+  // e.g. macOS Force Click / a screen-sharing app taking focus mid-stroke.
   await page.evaluate(() => window.dispatchEvent(new Event("blur")));
   await page.mouse.move(box.cx + 100, box.cy, { steps: 3 });
   await page.mouse.up();
-  await expect(await objectRows(page)).toHaveCount(0);
-  expect((await readDraft(page))!.content.document.slides[0].nodes).toHaveLength(0);
+  await expect(await objectRows(page)).toHaveText(["pen"]);
+  const stroke = (await readDraft(page))!.content.document.slides[0].nodes[0] as { points: unknown[] };
+  expect(stroke.points.length).toBeGreaterThan(1);
+
+  await page.getByRole("button", { name: "ปากกา", exact: true }).click();
+  await page.mouse.move(box.cx - 100, box.cy + 120);
+  await page.mouse.down();
+  await page.mouse.move(box.cx, box.cy + 150, { steps: 5 });
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect(await objectRows(page)).toHaveText(["pen"]);
+});
+
+test("CAN-16: a wobbly click still places the rectangle's points (trackpad), and the second click always finishes", async ({ page }) => {
+  await createProject(page, "คลิกมือสั่น");
+  const box = await stageBox(page);
+  await page.getByRole("button", { name: "สี่เหลี่ยม", exact: true }).click();
+  const wobblyClick = async (x: number, y: number) => {
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + 5, y + 6, { steps: 3 }); // 8 px of travel while pressed
+    await page.mouse.up();
+  };
+  await wobblyClick(box.cx - 200, box.cy - 120);
+  await expect(page.getByText(/คลิกจุดที่ 2 เพื่อจบ/)).toBeVisible();
+  await page.mouse.move(box.cx - 40, box.cy - 20, { steps: 4 });
+  await wobblyClick(box.cx - 40, box.cy - 20);
+  await expect(page.getByText(/คลิกจุดที่ 2 เพื่อจบ|ปล่อยเพื่อจบ/)).toHaveCount(0);
+  await expect(await objectRows(page)).toHaveText(["rectangle"]);
+  const rect = (await readDraft(page))!.content.document.slides[0].nodes[0] as { width: number; height: number };
+  expect(rect.width).toBeGreaterThan(140);
+  expect(rect.height).toBeGreaterThan(80);
 });
 
 test("CAN-13: laser pointer (K) shows a dot with a fading trail and never draws, selects or saves", async ({ page }) => {
