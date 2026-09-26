@@ -31,7 +31,7 @@
 |---|---|
 | `/login` | email/password สำหรับ owner ที่สร้างไว้แล้ว **ไม่มีสมัครสมาชิกและไม่มีลืมรหัสผ่าน** (ตาม feedback 2026-09-26); มี session อยู่แล้ว → ไป `next` ทันที; แสดงข้อความตาม `?notice=signed-out` |
 | `/change-password` | เปลี่ยนรหัสผ่านของบัญชีที่ login อยู่: ตรวจรหัสปัจจุบันด้วยการ login ซ้ำ (นับเป็น recent login ของ `secure_password_change`) แล้วตั้งรหัสใหม่ ≥ 12 ตัวอักษร ไม่ใช้อีเมล; ไม่มี session → `/login?next=/change-password` |
-| `/projects` | รายการโปรเจกต์ล่าสุด, สร้าง, เปิด, เปลี่ยนชื่อ, ทำสำเนา, ลบ และ Import |
+| `/projects` | รายการโปรเจกต์ล่าสุด, สร้าง, เปิด, เปลี่ยนชื่อ, ทำสำเนา, ลบ และ Import; ช่องค้นหาตามชื่อ (ทุกคำ ไม่สนลำดับ/ตัวพิมพ์, กด `/` เพื่อพิมพ์, Esc/✕ ล้าง, บอกจำนวนที่พบ; เพิ่ม 2026-09-26); ปุ่ม “ติดตั้งแอป” เมื่อ browser รองรับ |
 | `/projects/[projectId]` | editor; UUID ของ draft และ cloud project ใช้ค่าเดียวกัน |
 | `/` | redirect ตาม session ไป `/projects` หรือ `/login` |
 

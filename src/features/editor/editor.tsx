@@ -14,7 +14,7 @@ import { useFlowSession } from "@/features/flow/flow-session";
 import { GitPanel } from "@/features/git-simulator/git-panel";
 import { flushGitDraft } from "@/features/git-simulator/git-draft";
 import { useGitSessionStore } from "@/features/git-simulator/session-store";
-import { isWidgetNode, widgetNodeSize, type AssetReference, type CanvasNode, type Point, type SlideDocument, type StencilNode, type TableNode, type WidgetNode } from "@/domain/document/model";
+import { isWidgetNode, widgetNodeSize, type AssetReference, type CanvasNode, type Point, type CodeNode, type SlideDocument, type StencilNode, type TableNode, type TextNode, type WidgetNode } from "@/domain/document/model";
 import { createSlide, duplicateSlide, nextSlideName } from "@/domain/document/model";
 import { fitBounds, screenToWorld } from "@/domain/document/camera";
 import { getContentBounds } from "@/domain/document/geometry";
@@ -41,6 +41,7 @@ import ShortcutHelp from "./shortcut-help";
 import ContextMenu, { type MenuEntry } from "./context-menu";
 import StencilPicker from "./stencil-picker";
 import type { StencilSpec } from "@/domain/document/stencils";
+import { codeLayout, DEFAULT_CODE } from "@/domain/document/code";
 import { expandToGroups, groupNodes, isGrouped, ungroupNodes, withFreshGroups } from "@/domain/document/groups";
 import { createClassBox, createGridTable, insertColumn, insertRow, removeColumn, removeRow, tableCellAt, tableLayout, toggleDivider } from "@/domain/document/table";
 
@@ -88,7 +89,7 @@ function reorderSelection(action: ZOrderAction) {
 /** What “ล้าง…” in the board menu removes (locked objects always stay). */
 const CLEARABLE: Record<"freehand" | "drawings", ReadonlySet<CanvasNode["type"]>> = {
   freehand: new Set(["pen", "highlighter"]),
-  drawings: new Set(["pen", "highlighter", "rectangle", "ellipse", "line", "arrow", "text"]),
+  drawings: new Set(["pen", "highlighter", "rectangle", "ellipse", "line", "arrow", "text", "stencil", "table", "code"]),
 };
 
 const FAVORITES_KEY = "learning-suit-favorites-v1";
@@ -261,7 +262,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
   const selected = slide?.nodes.filter((node) => selectedIds.includes(node.id) && !node.locked) ?? [];
   const activeIndex = slide ? slides.findIndex((item) => item.id === slide.id) : -1;
   const selectedWidget = selected.length === 1 && isWidgetNode(selected[0]) ? selected[0] : null;
-  const editingText = pendingEdit?.kind === "text";
+  const editingText = pendingEdit?.kind === "text" || pendingEdit?.kind === "code";
   const status = statusText(localStatus, cloudStatus, editingText, writable);
 
   const viewportCenterWorld = (): Point => {
@@ -353,7 +354,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
   }, [insertNodes]);
   /**
    * Clears what was drawn on this slide in one Undo step: `freehand` = pen/highlighter strokes only,
-   * `drawings` = strokes + shapes + lines/arrows + text. Locked objects, images and simulators stay.
+   * `drawings` = strokes + shapes + lines/arrows + text + ready-made pictures + tables. Locked objects, images and simulators stay.
    */
   const clearSlide = useCallback((what: "freehand" | "drawings") => {
     const state = useEditorStore.getState();
@@ -431,6 +432,22 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
     if (!current || !insertNodes([node], [], variant === "grid" ? "เพิ่มตาราง" : "เพิ่มกล่องคลาส")) return;
     useEditorStore.getState().setTableEdit({ slideId: current.id, nodeId: node.id, row: 0, col: 0, selectAll: true });
   };
+  /** A Python code block in the middle of the view, sample code selected so typing replaces it. */
+  const insertCode = () => {
+    setStencilOpen(false);
+    const state = useEditorStore.getState();
+    const current = state.history?.content.document.slides.find((item) => item.id === state.activeSlideId);
+    const draft = { type: "code" as const, code: DEFAULT_CODE.python, language: "python" as const, theme: "dark" as const, fontSize: 18, lineNumbers: true, rotation: 0, opacity: 1, locked: false };
+    const size = codeLayout({ ...draft, id: "", x: 0, y: 0 }, konvaFontMetrics);
+    const center = viewportCenterWorld();
+    let x = center.x - size.width / 2, y = center.y - size.height / 2;
+    while (current?.nodes.some((node) => node.type === "code" && Math.abs(node.x - x) < 8 && Math.abs(node.y - y) < 8)) { x += 32; y += 32; }
+    const node: CodeNode = { ...draft, id: crypto.randomUUID(), x, y };
+    if (!current || !insertNodes([node], [], "เพิ่มบล็อกโค้ด")) return;
+    useEditorStore.getState().setCodeEdit({ slideId: current.id, nodeId: node.id, selectAll: true });
+  };
+  const insertCodeRef = useRef(insertCode);
+  useEffect(() => { insertCodeRef.current = insertCode; });
   const insertTableRef = useRef(insertTable);
   useEffect(() => { insertTableRef.current = insertTable; });
   /** Tool entries that open a picker instead of becoming a canvas mode (image file, ready-made pictures). */
@@ -439,6 +456,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
     if (tool === "image") fileInput.current?.click();
     else if (tool === "stencil") setStencilOpen(true);
     else if (tool === "table") insertTableRef.current("grid");
+    else if (tool === "code") insertCodeRef.current();
   }, [setStencilOpen]);
   const insertImages = useCallback(async (files: File[], world: Point | null) => {
     const state = useEditorStore.getState();
@@ -513,6 +531,15 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
         if (key === "c" && current && state.selectedIds.length) { event.preventDefault(); copySelected(); return; }
         if (key === "d" && current) { event.preventDefault(); duplicateSelected(); return; }
         if (key === "g" && current) { event.preventDefault(); groupSelected(!event.shiftKey); return; }
+        if (key === "b" && current) {
+          // ⌘B: selected text boxes bold (or back to normal when all already are).
+          const texts = current.nodes.filter((node): node is TextNode => state.selectedIds.includes(node.id) && node.type === "text" && !node.locked);
+          if (!texts.length || !state.writable) return;
+          event.preventDefault();
+          const bold = !texts.every((node) => node.bold);
+          state.transact({ label: bold ? "ตัวหนา" : "ตัวปกติ", affectedSlideId: current.id, commands: [{ type: "nodes.replace", slideId: current.id, nodes: texts.map((node) => ({ ...node, bold })) }] });
+          return;
+        }
         if (key === "v") {
           // Let the native paste event deliver system images; fall back to the in-app clipboard.
           if (pasteTimer.current) clearTimeout(pasteTimer.current);
@@ -776,7 +803,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
         activeSlideId={activeSlideId} selectedIds={selectedIds} images={images} exportArchive={exportArchive} />}
       <ShortcutHelp open={helpOpen} onOpenChange={setHelpOpen} />
       {menuAt && slide && <ContextMenu at={menuAt} onClose={closeMenu} entries={boardMenu(slide, menuAt.world)} />}
-      <StencilPicker open={stencilOpen} onOpenChange={setStencilOpen} onPick={insertStencil} onPickTable={insertTable} />
+      <StencilPicker open={stencilOpen} onOpenChange={setStencilOpen} onPick={insertStencil} onPickTable={insertTable} onPickCode={insertCode} />
       <Dialog.Root open={dialog !== null} onOpenChange={(open) => { if (!open) setDialog(null); }}>
         <Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><Dialog.Content className="dialog-content">
           <Dialog.Title className="text-xl font-semibold">{dialog?.kind === "rename-project" ? "เปลี่ยนชื่อบทเรียน" : dialog?.kind === "rename-slide" ? "เปลี่ยนชื่อสไลด์" : "ลบสไลด์"}</Dialog.Title>

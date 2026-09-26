@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlignCenter, AlignLeft, AlignRight, BetweenHorizontalEnd, BetweenVerticalEnd, Lock, Trash2 } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, BetweenHorizontalEnd, Bold, BetweenVerticalEnd, Lock, Trash2 } from "lucide-react";
 import { isWidgetNode, type CanvasNode, type SlideDocument } from "@/domain/document/model";
 import { DEFAULTS, LIMITS } from "@/domain/document/limits";
 import { useEditorStore, type EditorTool } from "./store";
@@ -9,8 +9,10 @@ import { getNodeFrame } from "@/domain/document/transform";
 import { konvaFontMetrics } from "@/features/canvas/font-metrics";
 import type { ToolDefaults } from "./tool-defaults";
 import { insertColumn, insertRow } from "@/domain/document/table";
+import { CODE_LABEL } from "@/domain/document/code";
+import { CODE_LANGUAGES, type CodeLanguage } from "@/domain/document/model";
 
-type Field = "opacity" | "stroke" | "strokeWidth" | "strokeStyle" | "fill" | "headLength" | "headWidth" | "color" | "fontSize" | "align" | "rotation" | "label" | "headerFill" | "header";
+type Field = "opacity" | "stroke" | "strokeWidth" | "strokeStyle" | "fill" | "headLength" | "headWidth" | "color" | "fontSize" | "align" | "rotation" | "label" | "headerFill" | "header" | "bold" | "language" | "theme" | "lineNumbers";
 
 const STROKED = new Set(["rectangle", "ellipse", "line", "arrow", "pen", "highlighter"]);
 const supports = (node: CanvasNode, field: Field): boolean => {
@@ -22,8 +24,9 @@ const supports = (node: CanvasNode, field: Field): boolean => {
     case "fill": return node.type === "rectangle" || node.type === "ellipse";
     case "headLength": case "headWidth": return node.type === "arrow";
     case "color": return node.type === "text" || node.type === "stencil" || node.type === "table";
-    case "fontSize": return node.type === "text" || node.type === "table";
-    case "align": return node.type === "text";
+    case "fontSize": return node.type === "text" || node.type === "table" || node.type === "code";
+    case "language": case "theme": case "lineNumbers": return node.type === "code";
+    case "align": case "bold": return node.type === "text";
     case "label": return node.type === "stencil";
     case "headerFill": return node.type === "table";
     case "header": return node.type === "table" && node.variant === "grid";
@@ -58,6 +61,8 @@ function applyField(nodes: CanvasNode[], field: Field, value: unknown): CanvasNo
     ? rotateAboutCenter(node, clean as number)
     : node.type === "table" && field === "fontSize"
       ? { ...node, fontSize: clamp(clean as number, LIMITS.tableFontMin, LIMITS.tableFontMax) }
+      : node.type === "code" && field === "fontSize"
+        ? { ...node, fontSize: clamp(clean as number, LIMITS.codeFontMin, LIMITS.codeFontMax) }
       : ({ ...node, [field]: clean } as CanvasNode));
 }
 
@@ -272,6 +277,21 @@ export default function PropertiesPanel({ slide, selected, writable, lockSelecte
       <ColorField label="สี" value={String(valueOf("color").value)} mixed={valueOf("color").mixed} disabled={!writable} onPreview={(value) => preview("color", value)} onCommit={(value) => commit("color", value)} onCancel={() => setPropertyPreview(null)} />
       <TextField label={stencilLabelName(selected)} value={String(valueOf("label").value ?? "")} mixed={valueOf("label").mixed} maxLength={LIMITS.stencilLabelCodePoints} disabled={!writable} onCommit={(value) => commit("label", value)} />
     </>}
+    {common("language") && <>
+      <p className="muted text-xs">ดับเบิลคลิกเพื่อแก้โค้ด · Tab เยื้อง (⇧Tab ถอย) · Enter ขึ้นบรรทัดพร้อมเยื้องให้ · ลากมุมเพื่อย่อ/ขยาย</p>
+      <label className="block">ภาษา{valueOf("language").mixed && <span className="ml-1 text-xs muted">(หลายค่า)</span>}
+        <select className="field mt-2" aria-label="ภาษาของโค้ด" value={valueOf("language").mixed ? "" : String(valueOf("language").value)} disabled={!writable}
+          onChange={(event) => commit("language", event.target.value as CodeLanguage)}>
+          {valueOf("language").mixed && <option value="" disabled>หลายค่า</option>}
+          {CODE_LANGUAGES.map((language) => <option key={language} value={language}>{CODE_LABEL[language]}</option>)}
+        </select>
+      </label>
+      <Segmented label="ธีม" value={valueOf("theme").mixed ? null : valueOf("theme").value as "dark" | "light"} disabled={!writable}
+        options={[{ value: "dark", label: "มืด" }, { value: "light", label: "สว่าง" }]} onChange={(value) => commit("theme", value)} />
+      <NumberField label="ขนาดตัวอักษรโค้ด" value={Number(valueOf("fontSize").value)} mixed={valueOf("fontSize").mixed} min={LIMITS.codeFontMin} max={LIMITS.codeFontMax} step={1} disabled={!writable} onCommit={(value) => commit("fontSize", value)} />
+      <label className="flex items-center gap-2"><input type="checkbox" aria-label="เลขบรรทัด" checked={valueOf("lineNumbers").value === true} disabled={!writable}
+        onChange={(event) => commit("lineNumbers", event.target.checked)} />แสดงเลขบรรทัด{valueOf("lineNumbers").mixed && <span className="text-xs muted">(หลายค่า)</span>}</label>
+    </>}
     {common("headerFill") && <>
       <p className="muted text-xs">ดับเบิลคลิกช่องเพื่อพิมพ์ (Tab ไปช่องถัดไป, Enter ลงบรรทัด) · คลิกขวาที่ช่องเพื่อเพิ่ม/ลบแถว{common("header") ? "-คอลัมน์" : ""}</p>
       {common("header") && <label className="flex items-center gap-2"><input type="checkbox" aria-label="แถวหัวตาราง" checked={valueOf("header").value === true} disabled={!writable}
@@ -295,6 +315,11 @@ export default function PropertiesPanel({ slide, selected, writable, lockSelecte
       <Segmented label="จัดแนว" value={valueOf("align").mixed ? null : valueOf("align").value as "left" | "center" | "right"} disabled={!writable}
         options={[{ value: "left", label: "ชิดซ้าย", icon: <AlignLeft size={15} /> }, { value: "center", label: "กึ่งกลาง", icon: <AlignCenter size={15} /> }, { value: "right", label: "ชิดขวา", icon: <AlignRight size={15} /> }]}
         onChange={(value) => commit("align", value)} />
+      {(() => {
+        const bold = selected.filter((node) => node.type === "text").every((node) => node.type === "text" && node.bold);
+        return <button type="button" className={`app-button w-full ${bold ? "!border-slate-800 !bg-slate-900 !text-white" : ""}`} aria-pressed={bold} disabled={!writable}
+          title="ตัวหนาทั้งกล่อง (⌘B)" onClick={() => commit("bold", !bold)}><Bold size={15} /> ตัวหนา</button>;
+      })()}
     </>}
     {common("rotation") && <NumberField label="มุมหมุน (องศา)" value={Number(rotation.value)} mixed={rotation.mixed} min={-360} max={360} step={1} disabled={!writable || selected.length > 1}
       disabledReason={selected.length > 1 ? "หลายวัตถุ: ใช้จุดจับหมุนบนกระดานเพื่อหมุนทั้งชุดรอบจุดกลาง" : "เปิดแบบอ่านอย่างเดียว"}

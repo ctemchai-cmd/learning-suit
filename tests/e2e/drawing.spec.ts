@@ -313,6 +313,14 @@ test("CAN-18: ready-made pictures — I opens the picker, a pick lands selected 
   await page.reload();
   await expect(await objectRows(page)).toHaveCount(2);
   await expect(page.getByText("หน้าต่าง Browser: example.com")).toBeVisible();
+
+  // “Clear all drawings” includes ready-made pictures (one Undo brings them back).
+  // An empty spot on the board (away from the floating favorites toolbar).
+  await page.mouse.click(box.x + 60, box.cy, { button: "right" });
+  await page.getByRole("menuitem", { name: "ล้างสิ่งที่วาดทั้งหมด (2)" }).click();
+  await expect(await objectRows(page)).toHaveCount(0);
+  await page.getByRole("button", { name: "เลิกทำ" }).click();
+  await expect(await objectRows(page)).toHaveCount(2);
 });
 
 test("CAN-19: tables — type across cells with Tab, each cell is one Undo step, double-click / right-click a cell, drag a column border; class boxes add lines with Enter", async ({ page }) => {
@@ -366,6 +374,12 @@ test("CAN-19: tables — type across cells with Tab, each cell is one Undo step,
   await page.reload();
   await expect(await objectRows(page)).toHaveCount(2);
   await expect(page.getByText("กล่องคลาส: Order")).toBeVisible();
+
+  // Tables are cleared by “clear all drawings” too.
+  const stage = await stageBox(page);
+  await page.mouse.click(stage.x + 60, stage.cy, { button: "right" });
+  await page.getByRole("menuitem", { name: "ล้างสิ่งที่วาดทั้งหมด (2)" }).click();
+  await expect(await objectRows(page)).toHaveCount(0);
 });
 
 test("CAN-20: groups — right-click groups the selection, a click selects and moves the whole group, double-click picks one piece, ungroup; ⌘G works too", async ({ page }) => {
@@ -460,4 +474,63 @@ test("CAN-21: dragging snaps — edges line up with a nearby object (pink guide)
   await page.mouse.up();
   await page.keyboard.up("ControlOrMeta");
   await expect.poll(async () => (await nodes())[1].x - current.x).toBeCloseTo(7, 5);
+});
+
+test("CAN-22: code blocks — sample code is replaced by typing, Enter keeps the indentation, Tab indents, language/theme in Properties, Esc cancels, a draft survives reload", async ({ page }) => {
+  await createProject(page, "โค้ด");
+  const box = await stageBox(page);
+  const block = async () => ((await readDraft(page))!.content.document.slides[0].nodes as unknown as { type: string; code: string; language: string; theme: string }[])[0];
+  await page.getByRole("button", { name: "บล็อกโค้ด", exact: true }).first().click();
+  const editor = page.getByRole("textbox", { name: "แก้โค้ด" });
+  await expect(editor).toBeFocused();
+  await page.keyboard.type("for i in range(3):");
+  await page.keyboard.press("Enter");
+  await expect(editor).toHaveValue("for i in range(3):\n    ");
+  await page.keyboard.type("print(i)");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.type("done()");
+  await page.keyboard.press("ControlOrMeta+Enter");
+  await expect(editor).toHaveCount(0);
+  await expect.poll(async () => (await block()).code).toBe("for i in range(3):\n    print(i)\ndone()");
+
+  await page.getByRole("combobox", { name: "ภาษาของโค้ด" }).selectOption("javascript");
+  await page.getByRole("group", { name: "ธีม" }).getByRole("button", { name: "สว่าง" }).click();
+  await expect.poll(async () => (await block())).toMatchObject({ language: "javascript", theme: "light" });
+
+  // Double-click opens it again; Tab inserts four spaces; Esc throws the change away.
+  await page.mouse.dblclick(box.cx, box.cy);
+  await expect(editor).toBeFocused();
+  await page.keyboard.press("Tab");
+  await page.keyboard.type("x");
+  await expect(editor).toHaveValue(/ {4}x$/);
+  await page.keyboard.press("Escape");
+  await expect(editor).toHaveCount(0);
+  expect((await block()).code).toBe("for i in range(3):\n    print(i)\ndone()");
+
+  // Unfinished typing is kept as a draft: after a reload the block opens again with it.
+  await page.mouse.dblclick(box.cx, box.cy);
+  await page.keyboard.type(" // ยังไม่จบ");
+  await expect.poll(async () => JSON.stringify((await readDraft(page))!.pendingEdit ?? null)).toContain("ยังไม่จบ");
+  await page.reload();
+  await expect(page.getByRole("textbox", { name: "แก้โค้ด" })).toHaveValue(/done\(\) \/\/ ยังไม่จบ$/);
+  await page.keyboard.press("ControlOrMeta+Enter");
+  await expect.poll(async () => (await block()).code).toBe("for i in range(3):\n    print(i)\ndone() // ยังไม่จบ");
+});
+
+test("CAN-23: bold text — ⌘B on a selected text box and the Properties button", async ({ page }) => {
+  await createProject(page, "ตัวหนา");
+  const box = await stageBox(page);
+  const text = async () => ((await readDraft(page))!.content.document.slides[0].nodes as unknown as { bold?: boolean; text: string }[])[0];
+  await page.keyboard.press("t");
+  await page.mouse.click(box.cx - 100, box.cy - 50);
+  await page.getByRole("textbox", { name: "แก้ข้อความบนกระดาน" }).fill("หัวข้อสำคัญ");
+  await page.keyboard.press("ControlOrMeta+Enter");
+  await expect.poll(async () => (await text())?.text).toBe("หัวข้อสำคัญ");
+  await page.keyboard.press("ControlOrMeta+b");
+  await expect.poll(async () => (await text()).bold).toBe(true);
+  const button = page.getByRole("button", { name: "ตัวหนา" });
+  await expect(button).toHaveAttribute("aria-pressed", "true");
+  await button.click();
+  await expect.poll(async () => (await text()).bold).toBe(false);
 });

@@ -13,6 +13,7 @@ import { CANVAS_FONT } from "./font-metrics";
 import { useAssetImage } from "./image-cache";
 import { StencilBody } from "./stencil-view";
 import { TableBody } from "./table-view";
+import { CodeBody } from "./code-view";
 
 // Shared node renderer (ADR 0002): the editor and the offscreen export draw the same views
 // from Drawing info. Selection chrome is never drawn here.
@@ -59,14 +60,16 @@ export function NodeBody({ node, hitWidth = 8, git, flow }: { node: CanvasNode; 
       return <Line points={flat(node.points)} stroke={node.stroke} strokeWidth={node.strokeWidth} dash={dashFor(node.strokeStyle, node.strokeWidth)}
         tension={0} lineCap="round" lineJoin="round" hitStrokeWidth={Math.max(node.strokeWidth, hitWidth)} />;
     case "text":
-      return <Text text={node.text} width={node.width} fontSize={node.fontSize} fontFamily={CANVAS_FONT} lineHeight={node.lineHeight}
-        fill={node.color} align={node.align} wrap="word" />;
+      return <Text text={node.text} width={node.width} fontSize={node.fontSize} fontFamily={CANVAS_FONT} fontStyle={node.bold ? "bold" : "normal"}
+        lineHeight={node.lineHeight} fill={node.color} align={node.align} wrap="word" />;
     case "image":
       return <ImageBody node={node} hitWidth={hitWidth} />;
     case "stencil":
       return <StencilBody node={node} />;
     case "table":
       return <TableBody node={node} />;
+    case "code":
+      return <CodeBody node={node} />;
     case "git-simulator":
       return <GitWidgetView node={node} activeTab={git?.activeTab ?? null} transfer={git?.transfer ?? null} preview={git?.preview ?? null} fontFamily={CANVAS_FONT} />;
     case "data-simulator":

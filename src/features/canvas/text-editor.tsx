@@ -59,7 +59,7 @@ export function TextEditorOverlay({ session, camera, onChange, onFinish }: {
       left: origin.x, top: origin.y, width: draft.width,
       minHeight: draft.fontSize * draft.lineHeight,
       transform: `rotate(${draft.rotation}deg) scale(${camera.zoom})`, transformOrigin: "top left",
-      fontFamily: `"${CANVAS_FONT}", sans-serif`, fontSize: draft.fontSize, lineHeight: draft.lineHeight,
+      fontFamily: `"${CANVAS_FONT}", sans-serif`, fontSize: draft.fontSize, lineHeight: draft.lineHeight, fontWeight: draft.bold ? 700 : 400,
       color: draft.color, textAlign: draft.align, whiteSpace: "pre-wrap", wordBreak: "break-word",
     }}
     value={draft.text}
@@ -86,6 +86,8 @@ export function TextEditorOverlay({ session, camera, onChange, onFinish }: {
         if (!event.nativeEvent.isComposing && !composing.current) onFinish(true);
         return;
       }
+      // ⌘B: the whole text box bold / normal (kept in the same edit session).
+      if ((event.metaKey || event.ctrlKey) && event.code === "KeyB") { event.preventDefault(); onChange({ ...draft, bold: !draft.bold }); return; }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
         if (!event.nativeEvent.isComposing && !composing.current && onFinish(true)) void useEditorStore.getState().save();

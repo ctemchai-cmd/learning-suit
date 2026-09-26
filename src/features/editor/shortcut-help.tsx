@@ -26,6 +26,8 @@ const ROWS: [string, string][] = [
   ["PageUp / PageDown", "เปลี่ยนสไลด์"],
   ["Esc", "ยกเลิกสิ่งที่กำลังวาด/ลาก → ล้างการเลือก"],
   ["⌘Enter", "จบการแก้ข้อความ"],
+  ["⌘B", "ตัวหนาทั้งกล่องข้อความ (ตอนเลือกหรือตอนพิมพ์)"],
+  ["บล็อกโค้ด: Tab / ⇧Tab / Enter", "เยื้อง / ถอย (หลายบรรทัดได้) / ขึ้นบรรทัดพร้อมเยื้องตามบรรทัดบน · ดับเบิลคลิกเพื่อแก้ · Esc ยกเลิก"],
 ];
 
 export default function ShortcutHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {

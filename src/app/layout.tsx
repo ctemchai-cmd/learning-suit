@@ -2,6 +2,9 @@ import type { Metadata, Viewport } from "next";
 // Self-hosted Noto Sans Thai (Thai + Latin subsets) so Canvas, measurement and export use the same font.
 import "@fontsource/noto-sans-thai/400.css";
 import "@fontsource/noto-sans-thai/700.css";
+// Monospace font of code blocks (same in the editor, the typing overlay and the export).
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/400-italic.css";
 import "./globals.css";
 import PwaRegistrar from "@/features/pwa/pwa-registrar";
 

@@ -3,7 +3,7 @@ import { DATA_LIMITS } from "../data/model";
 import { DEPLOY_LIMITS } from "../deploy/model";
 import { AI_LIMITS } from "../ai/model";
 import { LIMITS } from "./limits";
-import { STENCIL_FRAMES, STENCIL_ICONS, type ProjectContent } from "./model";
+import { CODE_LANGUAGES, STENCIL_FRAMES, STENCIL_ICONS, type ProjectContent } from "./model";
 
 const codePoints = (value: string) => [...value].length;
 const uuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
@@ -37,9 +37,15 @@ const text = z.strictObject({
   ...base, type: z.literal("text"), text: z.string().refine((v) => codePoints(v) <= LIMITS.textCodePoints),
   width: z.number().finite().min(24).max(LIMITS.coordinate), fontFamily: z.literal("Noto Sans Thai"),
   fontSize: z.number().finite().min(8).max(160), lineHeight: z.number().finite().positive().max(10),
-  color, align: z.enum(["left", "center", "right"]),
+  color, align: z.enum(["left", "center", "right"]), bold: z.boolean().optional(),
 });
 const image = z.strictObject({ ...base, type: z.literal("image"), assetId: uuid, width: size, height: size });
+const code = z.strictObject({
+  ...base, type: z.literal("code"),
+  code: z.string().refine((v) => codePoints(v) <= LIMITS.codeCodePoints && v.split("\n").length <= LIMITS.codeLines, "Code is at most 10,000 characters and 300 lines"),
+  language: z.enum(CODE_LANGUAGES), theme: z.enum(["dark", "light"]),
+  fontSize: z.number().finite().min(LIMITS.codeFontMin).max(LIMITS.codeFontMax), lineNumbers: z.boolean(),
+});
 const tableRow = z.strictObject({
   cells: z.array(z.string().refine((v) => codePoints(v) <= LIMITS.tableCellCodePoints, "Cell text is at most 500 characters")),
   divider: z.boolean(),
@@ -210,7 +216,7 @@ const aiSimulator = z.strictObject({
   scale: z.number().finite().min(0.5).max(4), view: z.enum(["history", "thinking", "memory", "agent", "ccMemory"]), state: aiState,
 });
 
-export const canvasNodeSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, arrow, pen, highlighter, text, image, stencil, table, gitSimulator, dataSimulator, deploySimulator, aiSimulator]);
+export const canvasNodeSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, arrow, pen, highlighter, text, image, stencil, table, code, gitSimulator, dataSimulator, deploySimulator, aiSimulator]);
 export const slideSchema = z.strictObject({ id: uuid, name: title, background: color, nodes: z.array(canvasNodeSchema) });
 export const assetSchema = z.strictObject({
   id: uuid, mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]),

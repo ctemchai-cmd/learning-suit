@@ -3,7 +3,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   AppWindow, Bot, Cloud, CodeXml, Database, FileCode2, FileText, Folder, GitBranch, Globe, KeyRound, Laptop, Lock, Monitor,
-  PanelTop, Server, Smartphone, SquareTerminal, Table, User, Users, Webhook, X, type LucideIcon,
+  PanelTop, Server, Smartphone, SquareCode, SquareTerminal, Table, User, Users, Webhook, X, type LucideIcon,
 } from "lucide-react";
 import type { StencilKind } from "@/domain/document/model";
 import { STENCILS, type StencilSpec } from "@/domain/document/stencils";
@@ -25,8 +25,8 @@ function Item({ spec, onPick }: { spec: StencilSpec; onPick: (spec: StencilSpec)
 }
 
 /** Picker of ready-made pictures: a click places the picture in the middle of the view (plan 03 §stencils). */
-export default function StencilPicker({ open, onOpenChange, onPick, onPickTable }: {
-  open: boolean; onOpenChange: (open: boolean) => void; onPick: (spec: StencilSpec) => void; onPickTable: (variant: "grid" | "class") => void;
+export default function StencilPicker({ open, onOpenChange, onPick, onPickTable, onPickCode }: {
+  open: boolean; onOpenChange: (open: boolean) => void; onPick: (spec: StencilSpec) => void; onPickTable: (variant: "grid" | "class") => void; onPickCode: () => void;
 }) {
   const frames = STENCILS.filter((item) => item.family === "frame");
   const icons = STENCILS.filter((item) => item.family === "icon");
@@ -43,10 +43,10 @@ export default function StencilPicker({ open, onOpenChange, onPick, onPickTable 
       </div>
       <h3 className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wider text-slate-500">อุปกรณ์และหน้าต่าง</h3>
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">{frames.map((spec) => <Item key={spec.kind} spec={spec} onPick={onPick} />)}</div>
-      <h3 className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wider text-slate-500">ตารางและ Diagram</h3>
+      <h3 className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wider text-slate-500">ตาราง โค้ด และ Diagram</h3>
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-        {([["grid", "ตาราง", Table, "#334155"], ["class", "กล่องคลาส / ตารางฐานข้อมูล", PanelTop, "#2563EB"]] as const).map(([variant, name, Icon, color]) =>
-          <button key={variant} type="button" onClick={() => onPickTable(variant)}
+        {([["grid", "ตาราง", Table, "#334155"], ["class", "กล่องคลาส / ตารางฐานข้อมูล", PanelTop, "#2563EB"], ["code", "บล็อกโค้ด", SquareCode, "#7C3AED"]] as const).map(([variant, name, Icon, color]) =>
+          <button key={variant} type="button" onClick={() => (variant === "code" ? onPickCode() : onPickTable(variant))}
             className="flex flex-col items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2 py-3 text-center !text-xs text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-blue-500">
             <span aria-hidden className="grid h-9 w-9 place-items-center rounded-lg" style={{ color, background: `${color}1A` }}><Icon size={20} /></span>
             <span className="leading-tight">{name}</span>

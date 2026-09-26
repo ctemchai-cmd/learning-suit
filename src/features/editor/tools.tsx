@@ -1,4 +1,4 @@
-import { ArrowUpRight, Circle, Crosshair, Eraser, Hand, Highlighter, ImagePlus, MousePointer2, PenLine, Shapes, Slash, Square, Table, Type } from "lucide-react";
+import { ArrowUpRight, Circle, Crosshair, Eraser, Hand, Highlighter, ImagePlus, MousePointer2, PenLine, Shapes, Slash, Square, SquareCode, Table, Type } from "lucide-react";
 import type { EditorTool } from "./store";
 
 export type ToolItem = { id: EditorTool; label: string; key: string; icon: React.ReactNode };
@@ -18,9 +18,10 @@ export const TOOL_ITEMS: ToolItem[] = [
   { id: "image", label: "รูปภาพ", key: "", icon: <ImagePlus size={18} /> },
   { id: "stencil", label: "ภาพประกอบ (มือถือ, Browser, ไอคอน)", key: "I", icon: <Shapes size={18} /> },
   { id: "table", label: "ตาราง", key: "", icon: <Table size={18} /> },
+  { id: "code", label: "บล็อกโค้ด", key: "", icon: <SquareCode size={18} /> },
 ];
 
-/** Image, stencil and table entries act once (file picker / picture picker / new table) instead of becoming a canvas mode. */
-export const isActionTool = (id: EditorTool) => id === "image" || id === "stencil" || id === "table";
+/** Image, stencil, table and code entries act once (file picker / picture picker / new table / new code block) instead of becoming a canvas mode. */
+export const isActionTool = (id: EditorTool) => id === "image" || id === "stencil" || id === "table" || id === "code";
 
 export const DEFAULT_FAVORITES: EditorTool[] = ["select", "pen", "rectangle", "ellipse", "arrow", "text"];

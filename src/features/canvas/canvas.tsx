@@ -23,6 +23,7 @@ import { GitCanvasOverlay } from "./git-overlay";
 import { LaserPointer, type LaserHandle } from "./laser-pointer";
 import { TextEditorOverlay, type TextSession } from "./text-editor";
 import { TableCellEditor, TableColumnHandles } from "./table-editor";
+import { CodeEditorOverlay } from "./code-editor";
 import { tableCellAt } from "@/domain/document/table";
 import { expandToGroups } from "@/domain/document/groups";
 import { snapMove, type Guide } from "@/domain/document/snap";
@@ -372,8 +373,10 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   // Recovered pending text draft after reload (PST-03 / TXT-03).
   const recoveredEdit = useEditorStore((state) => state.recoveredEdit);
   useEffect(() => {
-    if (!recoveredEdit || recoveredEdit.kind !== "text" || recoveredEdit.slideId !== slide.id || textSessionRef.current) return;
+    if (!recoveredEdit || (recoveredEdit.kind !== "text" && recoveredEdit.kind !== "code") || recoveredEdit.slideId !== slide.id || textSessionRef.current) return;
     const edit = useEditorStore.getState().consumeRecoveredEdit();
+    // A code draft reopens its code block with the typed text.
+    if (edit?.kind === "code") { useEditorStore.getState().setCodeEdit({ slideId: edit.slideId, nodeId: edit.nodeId, draft: edit.draft.code }); return; }
     if (edit?.kind !== "text") return;
     // Opening the recovered editor is the purpose of this effect.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -382,6 +385,8 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   }, [recoveredEdit, slide.id]);
 
   const tableEdit = useEditorStore((state) => state.tableEdit);
+  const codeEdit = useEditorStore((state) => state.codeEdit);
+  const setCodeEdit = useEditorStore((state) => state.setCodeEdit);
   const setTableEdit = useEditorStore((state) => state.setTableEdit);
   /** Opens typing in the cell under `world` (double-click, or a click on another cell while typing). */
   const startEditingCell = (node: TableNode, world: Point, selectAll = false) => {
@@ -688,6 +693,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     if (hit?.groupId && !hit.locked) setSelectedIds([hit.id]);
     if (hit?.type === "text") startEditingText(hit);
     else if (hit?.type === "table") startEditingCell(hit, screenToWorld(pointerOf(event), camera));
+    else if (hit?.type === "code" && writable && !hit.locked && setSelectedIds([hit.id])) setCodeEdit({ slideId: slide.id, nodeId: hit.id });
   };
 
   const onWheel = useCallback((event: WheelEvent) => {
@@ -771,7 +777,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   // ------------------------------------------------------------------ render
   const stepPreview = activeStep ? stepNode(activeStep.tool, activeStep.start, activeStep.current, camera.zoom, "preview", toolDefaults) : null;
   const clonePreview = movePreview?.clone ? displayNodes.filter((node) => movePreview.ids.includes(node.id)).map((node) => ({ ...node, x: node.x + movePreview.dx, y: node.y + movePreview.dy } as CanvasNode)) : [];
-  const showHandles = selectable && writable && !movePreview && !textSession && !tableEdit && selectedNodes.length > 0;
+  const showHandles = selectable && writable && !movePreview && !textSession && !tableEdit && !codeEdit && selectedNodes.length > 0;
   // File editor and commit buttons of the one selected Git widget (hidden while it is being moved/resized).
   const selectedGit = tool === "select" && selectedNodes.length === 1 && selectedNodes[0].type === "git-simulator" && !selectedNodes[0].locked
     && !movePreview && !transformPreview && !nudgePreview && !textSession ? selectedNodes[0] : null;
@@ -850,6 +856,11 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
         return stored?.type === "table" && selectedNodes[0].type === "table"
           ? <TableColumnHandles node={stored} shown={selectedNodes[0]} slideId={slide.id} camera={camera} /> : null;
       })()}
+    {codeEdit?.slideId === slide.id && (() => {
+      // The stored block (not the live preview) is the base of the draft.
+      const block = slide.nodes.find((node) => node.id === codeEdit.nodeId);
+      return block?.type === "code" && !block.locked ? <CodeEditorOverlay key={block.id} node={block} edit={codeEdit} camera={camera} /> : null;
+    })()}
     {tableEdit?.slideId === slide.id && (() => {
       // The stored table (not the live preview) is the base of the cell draft.
       const table = slide.nodes.find((node) => node.id === tableEdit.nodeId);

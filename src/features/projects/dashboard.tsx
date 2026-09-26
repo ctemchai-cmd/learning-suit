@@ -4,10 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as Dialog from "@radix-ui/react-dialog";
-import { BookOpen, Copy, FileUp, FolderOpen, KeyRound, LogOut, MonitorDown, Pencil, Plus, Trash2, X } from "lucide-react";
+import { BookOpen, Copy, FileUp, FolderOpen, KeyRound, LogOut, MonitorDown, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { LIMITS } from "@/domain/document/limits";
 import { useRuntime } from "@/services/runtime";
 import { installApp, useCanInstall } from "@/features/pwa/pwa";
+import { matchesQuery } from "./search";
 import type { ProjectCard, ProjectService } from "@/services/projects/local-project-service";
 
 function Thumbnail({ service, project }: { service: ProjectService; project: ProjectCard }) {
@@ -37,6 +38,19 @@ export default function Dashboard() {
   const runtime = useRuntime();
   const router = useRouter();
   const canInstall = useCanInstall();
+  const [query, setQuery] = useState("");
+  const searchInput = useRef<HTMLInputElement>(null);
+  // "/" jumps to the search box (unless already typing somewhere).
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey || target?.closest("input, textarea, [contenteditable], [role=dialog]")) return;
+      event.preventDefault();
+      searchInput.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const [projects, setProjects] = useState<ProjectCard[] | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -116,13 +130,29 @@ export default function Dashboard() {
     <input ref={fileInput} type="file" accept=".learning-suit,application/zip" hidden aria-label="ไฟล์โปรเจกต์ที่จะนำเข้า"
       onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void importFile(file); }} />
     <div className="mx-auto max-w-6xl px-6 py-10">
-      <div className="mb-8"><h1 className="text-3xl font-bold tracking-tight">โปรเจกต์</h1><p className="muted mt-2">จัดสไลด์และวาดอธิบายได้ในที่เดียว</p></div>
+      <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+        <div><h1 className="text-3xl font-bold tracking-tight">โปรเจกต์</h1><p className="muted mt-2">จัดสไลด์และวาดอธิบายได้ในที่เดียว</p></div>
+        {service && Boolean(projects?.length) && <div className="w-full sm:w-80">
+          <label className="relative block">
+            <span className="sr-only">ค้นหาบทเรียน</span>
+            <Search aria-hidden size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input ref={searchInput} type="search" className="field !pl-9 !pr-9" placeholder="ค้นหาบทเรียน… (กด /)" value={query} aria-label="ค้นหาบทเรียน"
+              onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setQuery(""); }} />
+            {query && <button type="button" className="absolute right-2 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="ล้างคำค้น" onClick={() => { setQuery(""); searchInput.current?.focus(); }}><X size={14} /></button>}
+          </label>
+          {query.trim() && <p className="muted mt-1.5 text-xs" role="status">พบ {projects!.filter((project) => matchesQuery(project.title, query)).length} จาก {projects!.length} บทเรียน</p>}
+        </div>}
+      </div>
       {(runtime.status === "disabled" || runtime.status === "error") && <div className="card max-w-2xl p-6" role="alert"><h2 className="font-semibold">ยังเปิดใช้งานไม่ได้</h2><p className="muted mt-2">{runtime.message}</p></div>}
       {error && <div role="alert" className="mb-5 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700"><span className="flex-1">{error}</span><button aria-label="ปิดข้อความ" onClick={() => setError(null)}><X size={16} /></button></div>}
       {warning && <div role="status" className="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900">{warning}</div>}
       {(runtime.status === "loading" || (service && projects === null)) && <p className="muted">กำลังโหลดโปรเจกต์…</p>}
       {service && projects?.length === 0 && <div className="card flex flex-col items-center px-6 py-20 text-center"><div className="rounded-2xl bg-slate-100 p-5 text-slate-600"><FolderOpen size={36} /></div><h2 className="mt-5 text-xl font-semibold">เริ่มบทเรียนแรก</h2><p className="muted mt-2 max-w-md">สร้างโปรเจกต์ แล้วเพิ่มสไลด์เพื่อวาดแนวคิดระหว่างสอนสด</p><button className="app-button app-button-primary mt-6" disabled={busy} onClick={() => void create()}><Plus size={18} /> สร้างโปรเจกต์</button></div>}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{service && projects?.map((project) => <article className="card group p-5" key={project.id} aria-label={project.title}>
+      {service && Boolean(projects?.length) && query.trim() && !projects!.some((project) => matchesQuery(project.title, query)) && <div className="card px-6 py-12 text-center">
+        <p className="font-semibold">ไม่พบบทเรียนที่ชื่อมี “{query.trim()}”</p>
+        <button type="button" className="app-button mt-4" onClick={() => setQuery("")}>ล้างคำค้น</button>
+      </div>}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{service && projects?.filter((project) => matchesQuery(project.title, query)).map((project) => <article className="card group p-5" key={project.id} aria-label={project.title}>
         <Thumbnail service={service} project={project} />
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0"><h2 className="truncate text-lg font-semibold">{project.title}</h2>

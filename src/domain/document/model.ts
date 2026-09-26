@@ -56,6 +56,8 @@ export type TextNode = NodeBase & {
   lineHeight: number;
   color: string;
   align: "left" | "center" | "right";
+  /** Whole text box in bold (missing in older documents = normal). */
+  bold?: boolean;
 };
 export type ImageNode = NodeBase & {
   type: "image";
@@ -78,6 +80,17 @@ export type StencilNode = NodeBase & {
   height: number;
   color: string;
   label: string;
+};
+export const CODE_LANGUAGES = ["python", "javascript", "sql", "html", "plain"] as const;
+export type CodeLanguage = (typeof CODE_LANGUAGES)[number];
+/** Code block (plan 03 §code): monospace, coloured by language; its size follows the code and the font size. */
+export type CodeNode = NodeBase & {
+  type: "code";
+  code: string;
+  language: CodeLanguage;
+  theme: "dark" | "light";
+  fontSize: number;
+  lineNumbers: boolean;
 };
 /** One table row; `divider` draws a section line above it (class boxes: attributes | methods). */
 export type TableRow = { cells: string[]; divider: boolean };
@@ -163,7 +176,7 @@ export function widgetNodeSize(node: WidgetNode): { width: number; height: numbe
 
 export type CanvasNode =
   | RectNode | EllipseNode | LineNode | ArrowNode
-  | FreehandNode | TextNode | ImageNode | StencilNode | TableNode | GitSimulatorNode | DataSimulatorNode | DeploySimulatorNode | AiSimulatorNode;
+  | FreehandNode | TextNode | ImageNode | StencilNode | TableNode | CodeNode | GitSimulatorNode | DataSimulatorNode | DeploySimulatorNode | AiSimulatorNode;
 
 export type SlideDocument = {
   id: string;

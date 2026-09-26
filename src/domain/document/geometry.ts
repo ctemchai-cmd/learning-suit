@@ -1,7 +1,12 @@
 import { isWidgetNode, widgetNodeSize, type Bounds, type CanvasNode, type Point, type TextNode } from "./model";
 import { tableLayout } from "./table";
+import { codeLayout } from "./code";
 
-export interface FontMetrics { measureText(node: TextNode): { width: number; height: number } }
+export interface FontMetrics {
+  measureText(node: TextNode): { width: number; height: number };
+  /** Width of one line of code in the monospace font (code blocks). */
+  measureMono(text: string, fontSize: number): number;
+}
 export const fallbackFontMetrics: FontMetrics = {
   measureText(node) {
     const lines = node.text.split("\n");
@@ -9,6 +14,7 @@ export const fallbackFontMetrics: FontMetrics = {
     const wrapped = lines.reduce((count, line) => count + Math.max(1, Math.ceil([...line].length / charactersPerLine)), 0);
     return { width: node.width, height: wrapped * node.fontSize * node.lineHeight };
   },
+  measureMono: (text, fontSize) => [...text].length * fontSize * 0.6,
 };
 
 function rotateAndTranslate(point: Point, node: CanvasNode): Point {
@@ -34,6 +40,9 @@ export function getNodeBounds(node: CanvasNode, metrics: FontMetrics = fallbackF
     // (a conservative AABB that never crops the stroke). Stencils draw their outline inside the box.
     const half = node.type === "image" || node.type === "stencil" ? 0 : node.strokeWidth / 2;
     points = [{ x: -half, y: -half }, { x: node.width + half, y: -half }, { x: node.width + half, y: node.height + half }, { x: -half, y: node.height + half }];
+  } else if (node.type === "code") {
+    const { width, height } = codeLayout(node, metrics);
+    points = [{ x: 0, y: 0 }, { x: width, y: 0 }, { x: width, y: height }, { x: 0, y: height }];
   } else if (node.type === "table") {
     const { width, height } = tableLayout(node, metrics);
     // The border is drawn on the edge: half of its width lies outside.

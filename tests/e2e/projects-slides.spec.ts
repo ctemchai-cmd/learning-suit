@@ -1,5 +1,5 @@
 import { test, expect } from "playwright/test";
-import { createProject, drawRect, objectRows, readDraft, stageBox } from "./helpers";
+import { createProject, createProjectInApp, drawRect, objectRows, readDraft, stageBox } from "./helpers";
 
 test("UX-01: create, rename, duplicate and reopen projects without losing drafts", async ({ page }) => {
   await createProject(page, "บทเรียนต้นฉบับ");
@@ -102,6 +102,32 @@ test("UX-06: the slide list shows a thumbnail of each slide and redraws it after
   await expect(items).toHaveCount(2);
   await expect(items.nth(1).locator("img")).toHaveCount(0);
   await expect(items.first().locator("img")).toHaveAttribute("src", /^blob:/);
+});
+
+test("UX-07: the project list can be searched by title (any word order, / to focus, Esc or ✕ clears)", async ({ page }) => {
+  await createProject(page, "Git พื้นฐาน");
+  await createProjectInApp(page, "ฐานข้อมูล Supabase");
+  await createProjectInApp(page, "Deploy ขึ้น Vercel");
+  await page.getByRole("link", { name: "กลับไปโปรเจกต์" }).click();
+  const cards = page.getByRole("article");
+  await expect(cards).toHaveCount(3);
+  await page.keyboard.press("/");
+  const search = page.getByRole("searchbox", { name: "ค้นหาบทเรียน" });
+  await expect(search).toBeFocused();
+  await search.fill("git");
+  await expect(cards).toHaveCount(1);
+  await expect(cards.first()).toHaveAccessibleName("Git พื้นฐาน");
+  await expect(page.getByRole("status").filter({ hasText: "พบ 1 จาก 3 บทเรียน" })).toBeVisible();
+  await search.fill("vercel ขึ้น");
+  await expect(cards).toHaveCount(1);
+  await search.fill("python");
+  await expect(cards).toHaveCount(0);
+  await expect(page.getByText("ไม่พบบทเรียนที่ชื่อมี “python”")).toBeVisible();
+  await page.getByRole("button", { name: "ล้างคำค้น" }).first().click();
+  await expect(cards).toHaveCount(3);
+  await search.fill("ข้อมูล");
+  await search.press("Escape");
+  await expect(cards).toHaveCount(3);
 });
 
 test("dashboard delete asks for confirmation and removes the local draft", async ({ page }) => {

@@ -1,7 +1,8 @@
 import { getContentBounds, type FontMetrics } from "./geometry";
 import { LIMITS } from "./limits";
-import { isWidgetNode, widgetNodeSize, type CanvasNode, type Point, type TableNode, type WidgetNode } from "./model";
+import { isWidgetNode, widgetNodeSize, type CanvasNode, type CodeNode, type Point, type TableNode, type WidgetNode } from "./model";
 import { setTableWidth, tableLayout } from "./table";
+import { codeLayout } from "./code";
 
 /**
  * Pure transform geometry for the selection overlay (plan 03 §5, plan 02 §2 invariants).
@@ -94,6 +95,10 @@ function localBox(node: CanvasNode, metrics: FontMetrics): LocalBox {
       const { width, height } = tableLayout(node, metrics);
       return { minX: 0, minY: 0, maxX: width, maxY: height };
     }
+    case "code": {
+      const { width, height } = codeLayout(node, metrics);
+      return { minX: 0, minY: 0, maxX: width, maxY: height };
+    }
     case "git-simulator":
     case "data-simulator":
     case "deploy-simulator":
@@ -149,6 +154,7 @@ function singleHandleIds(node: CanvasNode, box: LocalBox): TransformHandleId[] {
     case "table":
       return ["e", "w", "rotate"];
     case "image":
+    case "code":
       return [...CORNER_HANDLES, "rotate"];
     case "git-simulator":
     case "data-simulator":
@@ -341,6 +347,8 @@ export function transformSingle(
     case "deploy-simulator":
     case "ai-simulator":
       return isCornerHandle(handle) ? scaleWidgetFromCorner(start, handle, pointer, metrics) : { ...start };
+    case "code":
+      return isCornerHandle(handle) ? scaleCodeFromCorner(start, handle, pointer, metrics) : { ...start };
     case "table": {
       // Width only (rows follow the text); every column keeps its share, "w" keeps the right edge anchored.
       if (handle !== "e" && handle !== "w") return { ...start };
@@ -406,6 +414,16 @@ export function transformSingle(
   }
 }
 
+/** Code blocks resize by font size (their box follows the code); the opposite corner stays put. */
+function scaleCodeFromCorner(start: CodeNode, handle: CornerHandleId, pointer: Point, metrics: FontMetrics): CodeNode {
+  const box = localBox(start, metrics);
+  const factor = dominantFactor(box, handle, toLocal(start, pointer));
+  const fontSize = scaleWithin(start.fontSize, Number.isFinite(factor) ? factor : 1, LIMITS.codeFontMin, LIMITS.codeFontMax);
+  const size = codeLayout({ ...start, fontSize }, metrics);
+  const next = anchorBox(box, handle, size.width, size.height);
+  return { ...withOrigin(start, toWorld(start, { x: next.minX, y: next.minY })), fontSize };
+}
+
 function scaleWidgetFromCorner(start: WidgetNode, handle: CornerHandleId, pointer: Point, metrics: FontMetrics): WidgetNode {
   const box = localBox(start, metrics);
   const factor = dominantFactor(box, handle, toLocal(start, pointer));
@@ -469,6 +487,10 @@ function selectionFactorRange(nodes: CanvasNode[], anchor: Point, frameSize: num
         min = Math.max(min, MIN_SIZE / node.width, MIN_SIZE / node.height);
         max = Math.min(max, MAX_COORDINATE / node.width, MAX_COORDINATE / node.height);
         break;
+      case "code":
+        min = Math.max(min, LIMITS.codeFontMin / node.fontSize);
+        max = Math.min(max, LIMITS.codeFontMax / node.fontSize);
+        break;
       case "table":
         min = Math.max(min, LIMITS.tableColumnMin / Math.min(...node.columns), LIMITS.tableFontMin / node.fontSize);
         max = Math.min(max, LIMITS.tableFontMax / node.fontSize, MAX_COORDINATE / node.columns.reduce((sum, width) => sum + width, 0));
@@ -512,6 +534,8 @@ function scaleNodeAbout(node: CanvasNode, anchor: Point, factor: number): Canvas
         width: scaleWithin(node.width, factor, MIN_SIZE, MAX_COORDINATE),
         height: scaleWithin(node.height, factor, MIN_SIZE, MAX_COORDINATE),
       };
+    case "code":
+      return { ...node, x, y, fontSize: scaleWithin(node.fontSize, factor, LIMITS.codeFontMin, LIMITS.codeFontMax) };
     case "table":
       return {
         ...node, x, y,
