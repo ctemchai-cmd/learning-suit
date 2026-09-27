@@ -143,7 +143,7 @@ export default function LeftPanel({ slides, activeSlideId, tool, setTool, favori
           onDragOver={(event) => { if (dragging) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
           onDrop={(event) => { event.preventDefault(); dropOn(item.id); setDragging(null); }} onDragEnd={() => setDragging(null)}
           title="คลิกเพื่อเปิด · ลากเพื่อจัดลำดับ" className={`flex w-full items-center gap-2.5 rounded-lg p-1 text-left !text-sm ${item.id === activeSlideId ? "bg-slate-900 font-semibold text-white" : "hover:bg-slate-100"} ${dragging === item.id ? "opacity-50" : ""}`}>
-            <SlideThumbnail url={thumbnails[item.id] ?? null} background={item.background} active={item.id === activeSlideId} />
+            <SlideThumbnail url={thumbnails[item.id] ?? null} pending={!(item.id in thumbnails) && item.nodes.length > 0} background={item.background} active={item.id === activeSlideId} />
             <span className="min-w-0 flex-1 leading-snug"><span className="block text-[11px] font-normal opacity-60">{String(index + 1).padStart(2, "0")}</span><span className="line-clamp-2 break-words">{item.name}</span></span>
           </button></li>)}</ul>
         <div className="grid grid-cols-4 gap-1 border-t border-slate-200 p-2"><button className="app-button icon-button" title="เปลี่ยนชื่อสไลด์" aria-label="เปลี่ยนชื่อสไลด์" disabled={!writable} onClick={onRenameSlide}><PenLine size={15} /></button><button className="app-button icon-button" title="ทำสำเนาสไลด์" aria-label="ทำสำเนาสไลด์" disabled={!writable} onClick={onCopySlide}><Copy size={15} /></button><button className="app-button icon-button" title="เลื่อนสไลด์ขึ้น" aria-label="เลื่อนสไลด์ขึ้น" disabled={!writable || activeIndex <= 0} onClick={() => onMoveSlide(-1)}><ChevronUp size={17} /></button><button className="app-button icon-button" title="เลื่อนสไลด์ลง" aria-label="เลื่อนสไลด์ลง" disabled={!writable || activeIndex >= slides.length - 1} onClick={() => onMoveSlide(1)}><ChevronDown size={17} /></button><button className="app-button col-span-4 !border-red-200 !text-red-700" disabled={!writable || slides.length <= 1} title={slides.length <= 1 ? "ลบไม่ได้: บทเรียนต้องมีอย่างน้อยหนึ่งสไลด์" : "ลบสไลด์นี้ (เลิกทำได้)"} aria-describedby={slides.length <= 1 ? "delete-slide-reason" : undefined} onClick={onDeleteSlide}><Trash2 size={15} /> ลบสไลด์</button>{slides.length <= 1 && <p id="delete-slide-reason" className="col-span-4 px-1 text-xs muted">ต้องมีอย่างน้อยหนึ่งสไลด์ จึงลบสไลด์สุดท้ายไม่ได้</p>}</div>
@@ -153,9 +153,10 @@ export default function LeftPanel({ slides, activeSlideId, tool, setTool, favori
   </div>;
 }
 
-/** Picture of a slide in the list (drawn by the export renderer); the slide's background while it is being drawn or empty. */
-function SlideThumbnail({ url, background, active }: { url: string | null; background: string; active: boolean }) {
-  return <span aria-hidden className={`block aspect-[16/10] w-[76px] shrink-0 overflow-hidden rounded border ${active ? "border-slate-600" : "border-slate-200"}`} style={{ background }}>
+/** Picture of a slide in the list (drawn by the export renderer); a shimmer until it is first drawn, the background if empty. */
+function SlideThumbnail({ url, pending, background, active }: { url: string | null; pending: boolean; background: string; active: boolean }) {
+  return <span aria-hidden className={`relative block aspect-[16/10] w-[76px] shrink-0 overflow-hidden rounded border ${active ? "border-slate-600" : "border-slate-200"}`} style={{ background }}>
+    {pending && !url && <span className="skeleton absolute inset-0" />}
     {/* eslint-disable-next-line @next/next/no-img-element -- a local blob URL, not an optimisable asset */}
     {url && <img src={url} alt="" draggable={false} className="pointer-events-none h-full w-full object-contain" />}
   </span>;

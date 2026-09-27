@@ -33,7 +33,9 @@ type Gesture =
   | { kind: "pending-select"; pointerId: number; screen: Point; world: Point; ids: string[]; clone: boolean; toggleIds: string[] | null; zoom: number }
   | { kind: "moving"; pointerId: number; screen: Point; world: Point; ids: string[]; clone: boolean; dx: number; dy: number; zoom: number;
       /** Snapping targets, taken once when the drag starts: the moved selection and the other objects in view. */
-      moving: Bounds | null; others: Bounds[] }
+      moving: Bounds | null; others: Bounds[];
+      /** Guides of the latest move (read when the frame is drawn, like dx/dy). */
+      guides: Guide[] }
   | { kind: "marquee"; pointerId: number; start: Point; current: Point; additive: boolean; previousIds: string[]; screen: Point }
   | { kind: "drawing"; pointerId: number; tool: "pen" | "highlighter"; samples: Point[]; zoom: number; lastScreen: Point }
   | { kind: "erasing"; pointerId: number; path: Point[]; hits: Set<string> }
@@ -518,14 +520,15 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
         const others = slide.nodes.filter((node) => !ids.includes(node.id)).map(cachedBounds).filter((bounds) => intersects(bounds, viewportWorld)).slice(0, 400);
         gesture.current = {
           kind: "moving", pointerId: current.pointerId, screen: current.screen, world: current.world, ids, clone: current.clone, dx: 0, dy: 0, zoom: current.zoom,
-          moving: getContentBounds(moved, konvaFontMetrics), others,
+          moving: getContentBounds(moved, konvaFontMetrics), others, guides: [],
         };
         return onPointerMove(event);
       }
       case "moving": {
         const move = snappedMove(current, world, event);
-        current.dx = move.dx; current.dy = move.dy;
-        schedule(() => { setMovePreview({ ids: current.ids, dx: current.dx, dy: current.dy, clone: current.clone }); setGuides(move.guides); });
+        current.dx = move.dx; current.dy = move.dy; current.guides = move.guides;
+        // One draw per frame: it must show the LATEST move and its guides (several moves can land in one frame).
+        schedule(() => { setMovePreview({ ids: current.ids, dx: current.dx, dy: current.dy, clone: current.clone }); setGuides(current.guides); });
         return;
       }
       case "marquee": {

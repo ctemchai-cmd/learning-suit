@@ -39,6 +39,7 @@ import ExportDialog, { type ArchiveExporter } from "./export-dialog";
 import { copyToClipboard, preparePaste } from "./clipboard";
 import ShortcutHelp from "./shortcut-help";
 import ContextMenu, { type MenuEntry } from "./context-menu";
+import { EditorSkeleton } from "@/features/loading/skeletons";
 import StencilPicker from "./stencil-picker";
 import type { StencilSpec } from "@/domain/document/stencils";
 import { codeLayout, DEFAULT_CODE } from "@/domain/document/code";
@@ -621,6 +622,8 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
       <Link href="/projects" className="app-button mt-5">กลับไปหน้าโปรเจกต์</Link>
     </div></main>;
   }
+  // Same shape as the route loading state until the lesson is read from this device / the cloud.
+  if (!history) return <EditorSkeleton />;
 
   const rightVisible = !teachingMode && rightPanel !== null && (narrowLayout ? overlayPanel : rightOpenPreference);
   const panelTab = rightPanel ?? "properties";

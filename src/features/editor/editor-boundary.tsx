@@ -13,9 +13,10 @@ import type { ArchiveExporter } from "./export-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import { LoginFields } from "@/features/auth/login-form";
 import { useEditorStore } from "./store";
+import { EditorSkeleton } from "@/features/loading/skeletons";
 
 // Canvas, IndexedDB and export are browser-only: load the editor without SSR.
-const Editor = dynamic(() => import("./editor"), { ssr: false, loading: () => <div className="p-8">กำลังเปิดกระดาน…</div> });
+const Editor = dynamic(() => import("./editor"), { ssr: false, loading: () => <EditorSkeleton /> });
 
 export default function EditorBoundary({ projectId }: { projectId: string }) {
   const runtime = useRuntime();
@@ -64,7 +65,7 @@ export default function EditorBoundary({ projectId }: { projectId: string }) {
       <h1 className="text-xl font-semibold">ยังเปิดกระดานไม่ได้</h1><p className="muted mt-2" role="alert">{runtime.message}</p>
       <Link href="/projects" className="app-button mt-5">กลับไปหน้าโปรเจกต์</Link></div></main>;
   }
-  if (!ready || !service) return <div className="p-8">กำลังเปิดกระดาน…</div>;
+  if (!ready || !service) return <EditorSkeleton />;
   return <>
     <Editor ownerId={service.ownerId} projectId={projectId} opener={service.opener} resolveRemoteAsset={resolveRemoteAsset} exportArchive={exportArchive} cloudUi={cloudUi} />
     <Dialog.Root open={loginOpen} onOpenChange={setLoginOpen}>

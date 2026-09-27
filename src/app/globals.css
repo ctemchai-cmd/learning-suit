@@ -17,3 +17,21 @@ input, textarea, button { font: inherit; }
 .dialog-overlay { position: fixed; inset: 0; background: #16233480; z-index: 100; }
 .dialog-content { position: fixed; z-index: 101; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(430px, calc(100vw - 2rem)); padding: 1.5rem; border-radius: 1rem; background: white; box-shadow: 0 25px 80px #0b1d2a44; }
 .card { border: 1px solid #e1e7ed; border-radius: 1rem; background: white; box-shadow: 0 3px 18px #17314b0a; }
+
+/* Loading skeletons: shimmer blocks; the whole skeleton fades in after 150 ms so fast loads never flash. */
+.skeleton { background: linear-gradient(90deg, #e8edf3 25%, #f4f7fa 37%, #e8edf3 63%); background-size: 400% 100%; animation: skeleton-shimmer 1.4s ease-in-out infinite; }
+.skeleton-dark { background: linear-gradient(90deg, #334155 25%, #3f4d63 37%, #334155 63%); background-size: 400% 100%; animation: skeleton-shimmer 1.4s ease-in-out infinite; }
+.loading-reveal { animation: loading-reveal .2s ease .15s both; }
+.board-grid {
+  background-color: #fff;
+  background-image:
+    linear-gradient(to right, rgba(100, 116, 139, .26) 1px, transparent 1px), linear-gradient(to bottom, rgba(100, 116, 139, .26) 1px, transparent 1px),
+    linear-gradient(to right, rgba(100, 116, 139, .1) 1px, transparent 1px), linear-gradient(to bottom, rgba(100, 116, 139, .1) 1px, transparent 1px);
+  background-size: 50px 50px, 50px 50px, 10px 10px, 10px 10px;
+}
+@keyframes skeleton-shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+@keyframes loading-reveal { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .skeleton, .skeleton-dark { animation: none; }
+  .loading-reveal { animation-duration: 0s; }
+}

@@ -9,26 +9,31 @@ import { LIMITS } from "@/domain/document/limits";
 import { useRuntime } from "@/services/runtime";
 import { installApp, useCanInstall } from "@/features/pwa/pwa";
 import { matchesQuery } from "./search";
+import { Bone, ProjectGridSkeleton } from "@/features/loading/skeletons";
 import type { ProjectCard, ProjectService } from "@/services/projects/local-project-service";
 
 function Thumbnail({ service, project }: { service: ProjectService; project: ProjectCard }) {
-  const [url, setUrl] = useState<string | null>(null);
+  // "loading" = shimmer, null = nothing to show (empty lesson / no cached picture), else the picture.
+  const [url, setUrl] = useState<string | null | "loading">(project.firstSlideId ? "loading" : null);
+  const [shown, setShown] = useState(false);
   useEffect(() => {
     if (!project.firstSlideId) return;
     let active = true;
     let objectUrl: string | null = null;
     void service.thumbnail(project.id, project.firstSlideId).then((blob) => {
-      if (!active || !blob) return;
+      if (!active) return;
+      if (!blob) { setUrl(null); return; }
       objectUrl = URL.createObjectURL(blob);
       setUrl(objectUrl);
-    });
+    }, () => { if (active) setUrl(null); });
     return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [service, project.id, project.firstSlideId, project.updatedAt]);
-  return <div className="mb-4 flex aspect-video items-center justify-center overflow-hidden rounded-xl border border-slate-100 bg-slate-50">
-    {url
+  return <div className="relative mb-4 flex aspect-video items-center justify-center overflow-hidden rounded-xl border border-slate-100 bg-slate-50">
+    {url === "loading" || (url && !shown) ? <Bone className="absolute inset-0 !rounded-none" /> : null}
+    {url && url !== "loading"
       // eslint-disable-next-line @next/next/no-img-element -- local object URL of a cached thumbnail
-      ? <img src={url} alt="" className="h-full w-full object-contain" />
-      : <BookOpen size={28} className="text-slate-400" aria-hidden />}
+      ? <img src={url} alt="" onLoad={() => setShown(true)} className={`relative h-full w-full object-contain transition-opacity duration-300 ${shown ? "opacity-100" : "opacity-0"}`} />
+      : url === null && <BookOpen size={28} className="text-slate-400" aria-hidden />}
   </div>;
 }
 
@@ -118,6 +123,7 @@ export default function Dashboard() {
   return <main className="min-h-screen">
     <header className="border-b border-slate-200 bg-white"><div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-5">
       <div className="flex items-center gap-3"><div className="rounded-xl bg-slate-900 p-2 text-white"><BookOpen size={22} /></div><div><div className="text-lg font-bold tracking-tight">Learning Suit</div><div className="text-xs muted">พื้นที่เตรียมบทเรียนของคุณ</div></div></div>
+      {!service && runtime.status === "loading" && <div className="loading-reveal flex gap-2" aria-hidden><Bone className="h-10 w-24 !rounded-[.65rem]" /><Bone className="h-10 w-36 !rounded-[.65rem]" /></div>}
       {service && <div className="flex flex-wrap items-center gap-2">
         {email && <span className="text-sm muted">{email}</span>}
         {canInstall && <button className="app-button" onClick={() => void installApp()} title="ติดตั้ง Learning Suit เป็นแอปในเครื่องนี้ (เปิดเป็นหน้าต่างของตัวเอง)"><MonitorDown size={16} /> ติดตั้งแอป</button>}
@@ -146,7 +152,7 @@ export default function Dashboard() {
       {(runtime.status === "disabled" || runtime.status === "error") && <div className="card max-w-2xl p-6" role="alert"><h2 className="font-semibold">ยังเปิดใช้งานไม่ได้</h2><p className="muted mt-2">{runtime.message}</p></div>}
       {error && <div role="alert" className="mb-5 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700"><span className="flex-1">{error}</span><button aria-label="ปิดข้อความ" onClick={() => setError(null)}><X size={16} /></button></div>}
       {warning && <div role="status" className="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900">{warning}</div>}
-      {(runtime.status === "loading" || (service && projects === null)) && <p className="muted">กำลังโหลดโปรเจกต์…</p>}
+      {(runtime.status === "loading" || (service && projects === null)) && <ProjectGridSkeleton />}
       {service && projects?.length === 0 && <div className="card flex flex-col items-center px-6 py-20 text-center"><div className="rounded-2xl bg-slate-100 p-5 text-slate-600"><FolderOpen size={36} /></div><h2 className="mt-5 text-xl font-semibold">เริ่มบทเรียนแรก</h2><p className="muted mt-2 max-w-md">สร้างโปรเจกต์ แล้วเพิ่มสไลด์เพื่อวาดแนวคิดระหว่างสอนสด</p><button className="app-button app-button-primary mt-6" disabled={busy} onClick={() => void create()}><Plus size={18} /> สร้างโปรเจกต์</button></div>}
       {service && Boolean(projects?.length) && query.trim() && !projects!.some((project) => matchesQuery(project.title, query)) && <div className="card px-6 py-12 text-center">
         <p className="font-semibold">ไม่พบบทเรียนที่ชื่อมี “{query.trim()}”</p>
