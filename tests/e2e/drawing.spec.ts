@@ -131,7 +131,8 @@ test("CAN-13: laser pointer (K) shows a dot with a fading trail and never draws,
   await page.mouse.move(box.cx + 100, box.cy + 60, { steps: 12 });
   const laser = page.getByTestId("laser-pointer");
   await expect(laser.locator("circle")).toHaveCount(2); // dot + halo
-  expect(await laser.locator("path").count()).toBeGreaterThan(0); // trail: smooth curves, not dotted segments
+  // Trail: smooth curves, not dotted segments (drawn on the next frame, so wait for it).
+  await expect.poll(() => laser.locator("path").count()).toBeGreaterThan(0);
   await page.mouse.up();
   // The trail fades by itself; the dot stays while the pointer is on the board.
   await expect(laser.locator("path")).toHaveCount(0, { timeout: 3000 });
@@ -533,4 +534,33 @@ test("CAN-23: bold text — ⌘B on a selected text box and the Properties butto
   await expect(button).toHaveAttribute("aria-pressed", "true");
   await button.click();
   await expect.poll(async () => (await text()).bold).toBe(false);
+});
+
+test("CAN-24: a picked colour is kept when the picker is closed by clicking elsewhere (board or panel), one Undo step each", async ({ page }) => {
+  await createProject(page, "สี");
+  const box = await stageBox(page);
+  await drawRect(page, box.cx - 60, box.cy - 40, box.cx + 60, box.cy + 40);
+  const stroke = async () => ((await readDraft(page))!.content.document.slides[0].nodes as unknown as { stroke: string }[])[0].stroke;
+  const before = await stroke();
+  // Picking in the native picker only fires `input`; closing it by clicking the board may never fire `change`.
+  const pick = (colour: string) => page.getByRole("textbox", { name: "สีเส้น" }).or(page.locator('input[aria-label="สีเส้น"]')).evaluate((input: HTMLInputElement, value) => {
+    input.focus();
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }, colour);
+
+  await pick("#dc2626");
+  await page.mouse.click(box.x + 60, box.cy + 150); // empty board: closes the picker and clears the selection
+  await expect.poll(stroke).toBe("#DC2626");
+
+  await page.mouse.click(box.cx - 60, box.cy); // select the rectangle again (its left edge)
+  await pick("#16a34a");
+  await page.getByRole("tab", { name: "Objects" }).click(); // leaving the field inside the panel
+  await expect.poll(stroke).toBe("#16A34A");
+
+  await page.getByRole("button", { name: "เลิกทำ" }).click();
+  await expect.poll(stroke).toBe("#DC2626");
+  await page.getByRole("button", { name: "เลิกทำ" }).click();
+  await expect.poll(stroke).toBe(before);
 });

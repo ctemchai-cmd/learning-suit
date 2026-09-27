@@ -81,15 +81,35 @@ function useCommitOnChange<T extends HTMLInputElement>(onCommit: (value: string)
   return ref;
 }
 
-function ColorField({ label, value, mixed, disabled, onPreview, onCommit, onCancel }: { label: string; value: string; mixed?: boolean; disabled: boolean; onPreview: (value: string) => void; onCommit: (value: string) => void; onCancel?: () => void }) {
+/**
+ * Colour picker: the board previews while picking; the colour is KEPT when the picker closes — by its own
+ * change event, by leaving the field (clicking elsewhere), or before the board changes the selection (flusher).
+ * One pick = one Undo step. (Picking back the original colour changes nothing.)
+ */
+function ColorField({ label, value, mixed, disabled, onPreview, onCommit }: { label: string; value: string; mixed?: boolean; disabled: boolean; onPreview: (value: string) => void; onCommit: (value: string) => void; onCancel?: () => void }) {
   // Local draft while the picker is open so previews never reset the control to the stored value.
   const [draft, setDraft] = useState<string | null>(null);
-  const ref = useCommitOnChange<HTMLInputElement>((next) => { setDraft(null); onCommit(next.toUpperCase()); });
+  const pending = useRef<string | null>(null);
+  const commitRef = useRef(onCommit);
+  useEffect(() => { commitRef.current = onCommit; });
+  const keep = () => {
+    const next = pending.current;
+    if (next === null) return;
+    pending.current = null;
+    setDraft(null);
+    commitRef.current(next);
+  };
+  const keepRef = useRef(keep);
+  useEffect(() => { keepRef.current = keep; });
+  const ref = useCommitOnChange<HTMLInputElement>((next) => { pending.current = next.toUpperCase(); keepRef.current(); });
+  // A click on the board closes the picker AND changes the selection: keep the colour first.
+  const registerFlusher = useEditorStore((state) => state.registerFlusher);
+  useEffect(() => registerFlusher(() => { keepRef.current(); return true; }), [registerFlusher]);
   return <label className="flex items-center justify-between gap-2">
     <span>{label}{mixed && <span className="ml-1 text-xs muted">(หลายค่า)</span>}</span>
     <input ref={ref} type="color" aria-label={label} value={(draft ?? value).toLowerCase()} disabled={disabled}
-      onChange={(event) => { const next = event.target.value.toUpperCase(); setDraft(next); onPreview(next); }}
-      onBlur={() => { if (draft !== null) { setDraft(null); onCancel?.(); } }} />
+      onChange={(event) => { const next = event.target.value.toUpperCase(); pending.current = next; setDraft(next); onPreview(next); }}
+      onBlur={keep} />
   </label>;
 }
 

@@ -121,11 +121,11 @@ function GridLayer({ camera, size }: { camera: Camera; size: { width: number; he
       const native = context._context;
       native.lineWidth = 1;
       native.setLineDash([2, 3]);
-      native.strokeStyle = "rgba(100,116,139,0.13)";
+      native.strokeStyle = "rgba(100,116,139,0.09)";
       lines(false);
       native.stroke();
       native.setLineDash([]);
-      native.strokeStyle = "rgba(100,116,139,0.26)";
+      native.strokeStyle = "rgba(100,116,139,0.18)";
       lines(true);
       native.stroke();
     }} />
