@@ -564,3 +564,46 @@ test("CAN-24: a picked colour is kept when the picker is closed by clicking else
   await page.getByRole("button", { name: "เลิกทำ" }).click();
   await expect.poll(stroke).toBe(before);
 });
+
+test("CAN-25: an interrupted move or resize (window loses focus, the board changes size) keeps the last position instead of jumping back", async ({ page }) => {
+  await createProject(page, "ไม่เด้ง");
+  const box = await stageBox(page);
+  await drawRect(page, box.cx - 60, box.cy - 40, box.cx + 60, box.cy + 40);
+  const rect = async () => ((await readDraft(page))!.content.document.slides[0].nodes as unknown as { x: number; y: number; width: number }[])[0];
+  const start = await rect();
+  await page.keyboard.press("Escape");
+
+  // Move, then a screen-sharing app takes focus before the button is released.
+  await page.mouse.move(box.cx - 20, box.cy - 40);
+  await page.mouse.down();
+  await page.mouse.move(box.cx + 20, box.cy - 40, { steps: 5 });
+  await page.mouse.move(box.cx + 60, box.cy - 40, { steps: 5 });
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await page.mouse.up();
+  await expect.poll(async () => (await rect()).x - start.x).toBeGreaterThan(70);
+
+  // Move, then the board changes size (a message bar, a panel) mid-drag.
+  const moved = await rect();
+  await page.mouse.move(box.cx + 60, box.cy - 40);
+  await page.mouse.down();
+  await page.mouse.move(box.cx + 60, box.cy + 20, { steps: 5 });
+  await page.mouse.move(box.cx + 60, box.cy + 60, { steps: 5 });
+  const viewport = page.viewportSize()!;
+  await page.setViewportSize({ width: viewport.width, height: viewport.height - 60 });
+  await page.mouse.up();
+  await expect.poll(async () => (await rect()).y - moved.y).toBeGreaterThan(70);
+  await page.setViewportSize(viewport);
+
+  // Resize from a corner handle, interrupted the same way: the new size stays.
+  await page.getByRole("tab", { name: "Objects" }).click();
+  await page.getByRole("button", { name: /^เลือกวัตถุ / }).first().click();
+  const handle = page.getByRole("button", { name: "ปรับขนาด มุมขวาล่าง" });
+  const corner = (await handle.boundingBox())!;
+  const before = await rect();
+  await page.mouse.move(corner.x + corner.width / 2, corner.y + corner.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(corner.x + 60, corner.y + 40, { steps: 6 });
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await page.mouse.up();
+  await expect.poll(async () => (await rect()).width - before.width).toBeGreaterThan(40);
+});

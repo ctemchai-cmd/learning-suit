@@ -136,6 +136,17 @@ export function statusText(local: LocalStatus, cloud: CloudStatusView | null, ed
   }
 }
 
+/** True once `active` has stayed true for `delayMs` (e.g. a Cloud error the automatic retry did not fix). */
+function useLingering(active: boolean, delayMs: number): boolean {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (!active) return;
+    const timer = setTimeout(() => setReady(true), delayMs);
+    return () => { clearTimeout(timer); setReady(false); };
+  }, [active, delayMs]);
+  return active && ready;
+}
+
 function useViewportWidth() {
   const [width, setWidth] = useState(() => typeof window === "undefined" ? 1440 : window.innerWidth);
   useEffect(() => {
@@ -264,6 +275,9 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
   const activeIndex = slide ? slides.findIndex((item) => item.id === slide.id) : -1;
   const selectedWidget = selected.length === 1 && isWidgetNode(selected[0]) ? selected[0] : null;
   const editingText = pendingEdit?.kind === "text" || pendingEdit?.kind === "code";
+  // A retryable Cloud error usually clears on the automatic retry: show the banner only if it lasts (the header says it at once).
+  const cloudErrorLasting = useLingering(cloudStatus?.kind === "error" && cloudStatus.retryable, 3000);
+  const cloudErrorShown = cloudStatus?.kind === "error" && (!cloudStatus.retryable || cloudErrorLasting);
   const status = statusText(localStatus, cloudStatus, editingText, writable);
 
   const viewportCenterWorld = (): Point => {
@@ -753,32 +767,6 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
           : <button className="app-button icon-button" aria-label={rightVisible ? "ซ่อนแผงด้านขวา" : "แสดงแผงด้านขวา"} title={rightVisible ? "ซ่อนแผงด้านขวา" : "แสดงแผงด้านขวา"} aria-expanded={rightVisible}
             onClick={() => setPanelOpen(!rightVisible)}>{rightVisible ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}</button>}
       </header>
-      {localStatus === "error" && <div role="alert" className="flex items-center gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
-        <span className="flex-1">{localError ?? "เก็บในเครื่องไม่สำเร็จ"} — งานยังอยู่ในหน่วยความจำของแท็บนี้ อย่าปิดแท็บจนกว่าจะ Export สำรอง</span>
-        <button className="app-button !py-1" onClick={() => openExport("archive")}>Export สำรอง</button>
-      </div>}
-      {cloudStatus?.kind === "error" && <div role="alert" className="flex items-center gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
-        <span className="flex-1">บันทึกบน Cloud ไม่สำเร็จ: {cloudStatus.message} (งานยังเก็บในเครื่อง)</span>
-        <button className="app-button !py-1" onClick={retryCloud}>ลองใหม่</button>
-      </div>}
-      {cloudStatus?.kind === "conflict" && <div role="alert" className="flex flex-wrap items-center gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
-        <span className="flex-1">มีงานจากอีกเครื่องบันทึกทับ revision นี้แล้ว จึงหยุดบันทึกบน Cloud เพื่อไม่ให้งานทับกัน</span>
-        <button className="app-button !py-1" onClick={() => void cloudUi?.keepLocalCopy()}>เก็บงานนี้เป็นสำเนา</button>
-        <button className="app-button !py-1" onClick={() => { if (window.confirm("ใช้ฉบับ Cloud จะทิ้งงานในเครื่องที่ยังไม่ได้บันทึก รวมข้อความที่กำลังพิมพ์ แนะนำให้ Export สำรองก่อน ดำเนินการต่อหรือไม่?")) void cloudUi?.useCloudVersion(); }}>ใช้ฉบับ Cloud</button>
-      </div>}
-      {cloudStatus?.kind === "auth" && <div role="alert" className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
-        <span className="flex-1">เข้าสู่ระบบอีกครั้งเพื่อบันทึกต่อ — งานยังเก็บในเครื่องและไม่ถูกปิด</span>
-        <button className="app-button !py-1" onClick={() => cloudUi?.openLogin()}>เข้าสู่ระบบ</button>
-      </div>}
-      {cloudStatus?.kind === "unavailable" && <div role="alert" className="flex items-center gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
-        <span className="flex-1">ไม่พบโปรเจกต์นี้บน Cloud หรือไม่มีสิทธิ์แล้ว เก็บงานในเครื่องเป็นสำเนาใหม่ได้</span>
-        <button className="app-button !py-1" onClick={() => void cloudUi?.keepLocalCopy()}>เก็บเป็นสำเนาใหม่</button>
-      </div>}
-      {!writable && history && <div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
-        <span className="flex-1">{readOnlyReason === "unsupported" ? "Browser นี้ไม่รองรับ Web Locks จึงเปิดได้แบบอ่านอย่างเดียว กรุณาใช้ Chrome, Edge หรือ Safari รุ่นใหม่" : "โปรเจกต์นี้เปิดแก้ไขอยู่ในอีกแท็บ ปิด editor ในแท็บนั้นก่อน แล้วกดเปิดแก้ไข"}</span>
-        {readOnlyReason !== "unsupported" && <button className="app-button !py-1" onClick={() => void requestWriter()}>เปิดแก้ไข</button>}
-      </div>}
-      {notice && <div role="alert" className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900"><span className="flex-1">{notice}</span><button className="app-button icon-button !h-7 !w-7" aria-label="ปิดข้อความ" onClick={() => setNotice(null)}><X size={14} /></button></div>}
       <div className="relative flex min-h-0 flex-1">
         {!teachingMode && <LeftPanel slides={slides} activeSlideId={slide?.id} tool={tool} setTool={setTool} favorites={favorites} toggleFavorite={toggleFavorite} writable={writable}
           autoCollapsed={narrowLayout}
@@ -788,7 +776,38 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
           onMoveSlide={moveSlide}
           onReorderSlides={(orderedIds) => slide && transact({ label: "จัดลำดับสไลด์", affectedSlideId: slide.id, commands: [{ type: "slide.reorder", orderedIds }] })}
           onInsertGit={() => insertWidget("git")} onInsertData={() => insertWidget("data")} onInsertDeploy={() => insertWidget("deploy")} onInsertAi={() => insertWidget("ai")} onAction={runToolAction} />}
-        <div className="min-w-0 flex-1">{slide
+        <div className="relative min-w-0 flex-1">
+          {/* Messages float over the top-right of the board (clear of the favorites toolbar): they never change its size —
+              a resize mid-drag used to end the drag. */}
+          <div className="pointer-events-none absolute right-0 top-0 z-30 flex w-full max-w-xl flex-col items-stretch gap-2 p-3">
+            {localStatus === "error" && <div role="alert" className="pointer-events-auto flex w-full items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800 shadow-lg">
+              <span className="flex-1">{localError ?? "เก็บในเครื่องไม่สำเร็จ"} — งานยังอยู่ในหน่วยความจำของแท็บนี้ อย่าปิดแท็บจนกว่าจะ Export สำรอง</span>
+              <button className="app-button !py-1" onClick={() => openExport("archive")}>Export สำรอง</button>
+            </div>}
+            {cloudStatus?.kind === "error" && cloudErrorShown && <div role="alert" className="pointer-events-auto flex w-full items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800 shadow-lg">
+              <span className="flex-1">บันทึกบน Cloud ไม่สำเร็จ: {cloudStatus.message} (งานยังเก็บในเครื่อง)</span>
+              <button className="app-button !py-1" onClick={retryCloud}>ลองใหม่</button>
+            </div>}
+            {cloudStatus?.kind === "conflict" && <div role="alert" className="pointer-events-auto flex w-full flex-wrap items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800 shadow-lg">
+              <span className="flex-1">มีงานจากอีกเครื่องบันทึกทับ revision นี้แล้ว จึงหยุดบันทึกบน Cloud เพื่อไม่ให้งานทับกัน</span>
+              <button className="app-button !py-1" onClick={() => void cloudUi?.keepLocalCopy()}>เก็บงานนี้เป็นสำเนา</button>
+              <button className="app-button !py-1" onClick={() => { if (window.confirm("ใช้ฉบับ Cloud จะทิ้งงานในเครื่องที่ยังไม่ได้บันทึก รวมข้อความที่กำลังพิมพ์ แนะนำให้ Export สำรองก่อน ดำเนินการต่อหรือไม่?")) void cloudUi?.useCloudVersion(); }}>ใช้ฉบับ Cloud</button>
+            </div>}
+            {cloudStatus?.kind === "auth" && <div role="alert" className="pointer-events-auto flex w-full items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 shadow-lg">
+              <span className="flex-1">เข้าสู่ระบบอีกครั้งเพื่อบันทึกต่อ — งานยังเก็บในเครื่องและไม่ถูกปิด</span>
+              <button className="app-button !py-1" onClick={() => cloudUi?.openLogin()}>เข้าสู่ระบบ</button>
+            </div>}
+            {cloudStatus?.kind === "unavailable" && <div role="alert" className="pointer-events-auto flex w-full items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800 shadow-lg">
+              <span className="flex-1">ไม่พบโปรเจกต์นี้บน Cloud หรือไม่มีสิทธิ์แล้ว เก็บงานในเครื่องเป็นสำเนาใหม่ได้</span>
+              <button className="app-button !py-1" onClick={() => void cloudUi?.keepLocalCopy()}>เก็บเป็นสำเนาใหม่</button>
+            </div>}
+            {!writable && history && <div className="pointer-events-auto flex w-full items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 shadow-lg">
+              <span className="flex-1">{readOnlyReason === "unsupported" ? "Browser นี้ไม่รองรับ Web Locks จึงเปิดได้แบบอ่านอย่างเดียว กรุณาใช้ Chrome, Edge หรือ Safari รุ่นใหม่" : "โปรเจกต์นี้เปิดแก้ไขอยู่ในอีกแท็บ ปิด editor ในแท็บนั้นก่อน แล้วกดเปิดแก้ไข"}</span>
+              {readOnlyReason !== "unsupported" && <button className="app-button !py-1" onClick={() => void requestWriter()}>เปิดแก้ไข</button>}
+            </div>}
+            {notice && <div role="alert" className="pointer-events-auto flex w-full items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 shadow-lg"><span className="flex-1">{notice}</span><button className="app-button icon-button !h-7 !w-7" aria-label="ปิดข้อความ" onClick={() => setNotice(null)}><X size={14} /></button></div>}
+          </div>
+          {slide
           ? <Canvas key={slide.id} slide={slide} favorites={favorites} onFavoritesReorder={setFavorites} toolbarPosition={toolbarPosition} onToolbarPositionChange={setToolbarPosition}
             onImageFiles={(files, world) => void insertImages(files, world)} onToolAction={runToolAction} onWidgetSelected={showWidgetPanel} onContextMenu={setMenuAt} />
           : <div className="flex h-full items-center justify-center muted">กำลังโหลดกระดาน…</div>}</div>

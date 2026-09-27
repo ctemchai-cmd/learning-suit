@@ -230,15 +230,30 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       trace(saved ? "stroke saved ✓" : `stroke NOT saved ✗ (writable=${useEditorStore.getState().writable})`);
     };
   });
+  /** Drops a move (or an ⌥-drag copy) at `dx`, `dy`; one Undo step. */
+  const finishMoveRef = useRef<(move: Extract<Gesture, { kind: "moving" }>, dx: number, dy: number) => void>(() => {});
+  useLayoutEffect(() => {
+    finishMoveRef.current = (move, dx, dy) => {
+      if (Math.hypot(dx, dy) < 1e-6) return;
+      const nodes = slide.nodes.filter((node) => move.ids.includes(node.id));
+      if (move.clone) {
+        const copies = cloneNodes(nodes, dx, dy);
+        if (transact({ label: "ทำสำเนาวัตถุ", affectedSlideId: slide.id, commands: [{ type: "nodes.insert", slideId: slide.id, nodes: copies }] })) setSelectedIds(copies.map((node) => node.id));
+      } else {
+        transact({ label: "ย้ายวัตถุ", affectedSlideId: slide.id, commands: [{ type: "nodes.replace", slideId: slide.id, nodes: translateNodes(nodes, dx, dy) }] });
+      }
+    };
+  });
   /**
    * Something outside the teacher's control ended the gesture (window blur — e.g. macOS Force Click / a
-   * screen-sharing app taking focus —, pointercancel, lost capture). A pen stroke keeps what was drawn;
-   * everything else is cancelled. Only Escape throws a stroke away on purpose.
+   * screen-sharing app taking focus —, pointercancel, lost capture, the board changing size). What was done so
+   * far is KEPT: a pen stroke, and a move where it was last shown (never a jump back). Only Escape cancels.
    */
   const interruptGesture = useCallback(() => {
     const current = gesture.current;
     cancelGesture();
     if (current?.kind === "drawing") finishStrokeRef.current(current);
+    if (current?.kind === "moving") finishMoveRef.current(current, current.dx, current.dy);
   }, [cancelGesture]);
 
   // Unmount (slide switch, undo to another slide) must not leave a half gesture or a stuck blocker.
@@ -259,9 +274,9 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       if (next.width === previous.width && next.height === previous.height) return;
       sizeRef.current = next;
       trace(`resize ${next.width}x${next.height}${gesture.current ? ` during ${gesture.current.kind}` : ""}`);
-      // Cancel any uncommitted gesture before the coordinate frame changes (plan03 §1) — except a pen
-      // stroke: its samples are world points, so it simply keeps going (a banner appearing must not eat it).
-      if (gesture.current && gesture.current.kind !== "drawing") cancelGesture();
+      // End any other gesture before the coordinate frame changes (plan03 §1), keeping a move where it is —
+      // except a pen stroke: its samples are world points, so it simply keeps going.
+      if (gesture.current && gesture.current.kind !== "drawing") interruptGesture();
       const state = useEditorStore.getState();
       const current = state.cameras[slide.id];
       if (current && previous.width && previous.height) {
@@ -273,7 +288,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     });
     observer.observe(container);
     return () => observer.disconnect();
-  }, [slide.id, cancelGesture, trace]);
+  }, [slide.id, interruptGesture, trace]);
 
   // ------------------------------------------------------------------ derived render data
   const overrides = useMemo(() => {
@@ -601,14 +616,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
         setMovePreview(null);
         setGuides([]);
         const { dx, dy } = snappedMove(current, world, event);
-        if (Math.hypot(dx, dy) < 1e-6) return;
-        const nodes = slide.nodes.filter((node) => current.ids.includes(node.id));
-        if (current.clone) {
-          const copies = cloneNodes(nodes, dx, dy);
-          if (transact({ label: "ทำสำเนาวัตถุ", affectedSlideId: slide.id, commands: [{ type: "nodes.insert", slideId: slide.id, nodes: copies }] })) setSelectedIds(copies.map((node) => node.id));
-        } else {
-          transact({ label: "ย้ายวัตถุ", affectedSlideId: slide.id, commands: [{ type: "nodes.replace", slideId: slide.id, nodes: translateNodes(nodes, dx, dy) }] });
-        }
+        finishMoveRef.current(current, dx, dy);
         return;
       }
       case "marquee": {

@@ -44,6 +44,8 @@ export function TransformOverlay({ nodes, camera, metrics, containerRef, onPrevi
   const active = useRef<Active | null>(null);
   const frame = useRef<number | null>(null);
   const cancel = useRef<() => void>(() => undefined);
+  /** Interrupted from outside (window blur, lost capture, pointercancel): keep the size/angle last shown. */
+  const interrupt = useRef<() => void>(() => undefined);
 
   const toWorld = (event: { clientX: number; clientY: number }) => {
     const rect = containerRef.current?.getBoundingClientRect();
@@ -61,13 +63,21 @@ export function TransformOverlay({ nodes, camera, metrics, containerRef, onPrevi
       onPreview(null);
       onGesture(false);
     };
+    interrupt.current = () => {
+      const current = active.current;
+      if (!current) return;
+      const result = current.latest;
+      cancel.current();
+      if (JSON.stringify(result) !== JSON.stringify(current.start)) onCommit(result);
+    };
   });
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape" && active.current) { event.preventDefault(); event.stopImmediatePropagation(); cancel.current(); }
     };
-    const onBlur = () => cancel.current();
+    // A screen-sharing app or a system dialog taking focus must not throw the resize away (only Escape does).
+    const onBlur = () => interrupt.current();
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("blur", onBlur);
     return () => { window.removeEventListener("keydown", onKey, true); window.removeEventListener("blur", onBlur); };
@@ -128,8 +138,8 @@ export function TransformOverlay({ nodes, camera, metrics, containerRef, onPrevi
           if (JSON.stringify(result) !== JSON.stringify(current.start)) onCommit(result);
           onGesture(false);
         }}
-        onPointerCancel={() => cancel.current()}
-        onLostPointerCapture={(event) => { if (active.current?.pointerId === event.pointerId) cancel.current(); }}
+        onPointerCancel={() => interrupt.current()}
+        onLostPointerCapture={(event) => { if (active.current?.pointerId === event.pointerId) interrupt.current(); }}
       />;
     })}
   </>;
