@@ -1,5 +1,6 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   AppWindow, Bot, Cloud, CodeXml, Database, FileCode2, FileText, Folder, GitBranch, Globe, KeyRound, Laptop, Lock, Monitor,
@@ -19,7 +20,7 @@ function Item({ spec, onPick }: { spec: StencilSpec; onPick: (spec: StencilSpec)
   const Icon = STENCIL_DOM_ICON[spec.kind];
   return <button type="button" onClick={() => onPick(spec)}
     className="flex flex-col items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2 py-3 text-center !text-xs text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-blue-500">
-    <span aria-hidden className="grid h-9 w-9 place-items-center rounded-lg" style={{ color: spec.color, background: `${spec.color}1A` }}><Icon size={20} /></span>
+    <span aria-hidden className="picker-icon grid h-9 w-9 place-items-center rounded-lg" style={{ "--icon": spec.color } as CSSProperties}><Icon size={20} /></span>
     <span className="leading-tight">{spec.name}</span>
   </button>;
 }
@@ -48,7 +49,7 @@ export default function StencilPicker({ open, onOpenChange, onPick, onPickTable,
         {([["grid", "ตาราง", Table, "#334155"], ["class", "กล่องคลาส / ตารางฐานข้อมูล", PanelTop, "#2563EB"], ["code", "บล็อกโค้ด", SquareCode, "#7C3AED"]] as const).map(([variant, name, Icon, color]) =>
           <button key={variant} type="button" onClick={() => (variant === "code" ? onPickCode() : onPickTable(variant))}
             className="flex flex-col items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2 py-3 text-center !text-xs text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-blue-500">
-            <span aria-hidden className="grid h-9 w-9 place-items-center rounded-lg" style={{ color, background: `${color}1A` }}><Icon size={20} /></span>
+            <span aria-hidden className="picker-icon grid h-9 w-9 place-items-center rounded-lg" style={{ "--icon": color } as CSSProperties}><Icon size={20} /></span>
             <span className="leading-tight">{name}</span>
           </button>)}
       </div>

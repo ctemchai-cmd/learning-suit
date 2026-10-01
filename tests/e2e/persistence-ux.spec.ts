@@ -102,3 +102,26 @@ test("PST-01: refresh right after a transaction restores the same local work", a
   await expect(page.getByRole("heading", { name: "รีเฟรชทันที" })).toBeVisible();
   await expect(await objectRows(page)).toHaveText(["rectangle"]);
 });
+
+test("UX-08: theme — follows the device, the button cycles system → light → dark (kept after reload), the board stays light", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto("/projects");
+  const html = page.locator("html");
+  await expect(html).toHaveAttribute("data-theme", "dark");
+  const toggle = page.getByRole("button", { name: /^ธีม:/ });
+  await expect(toggle).toHaveAccessibleName("ธีม: ตามเครื่อง (กดเพื่อเปลี่ยน)");
+  await toggle.click();
+  await expect(html).toHaveAttribute("data-theme", "light");
+  await toggle.click();
+  await expect(html).toHaveAttribute("data-theme", "dark");
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.reload();
+  await expect(html).toHaveAttribute("data-theme", "dark");
+  await expect(page.getByRole("button", { name: /^ธีม:/ })).toHaveAccessibleName("ธีม: มืด (กดเพื่อเปลี่ยน)");
+  // The chrome is dark, the board keeps its light island.
+  await createProject(page, "ธีม");
+  expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe("rgb(11, 18, 32)");
+  await expect(page.getByTestId("canvas-viewport")).toHaveClass(/theme-light/);
+  await page.getByRole("button", { name: /^ธีม:/ }).click();
+  await expect(html).toHaveAttribute("data-theme", "light");
+});

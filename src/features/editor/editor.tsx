@@ -40,6 +40,7 @@ import { copyToClipboard, preparePaste } from "./clipboard";
 import ShortcutHelp from "./shortcut-help";
 import ContextMenu, { type MenuEntry } from "./context-menu";
 import { EditorSkeleton } from "@/features/loading/skeletons";
+import ThemeToggle from "@/features/theme/theme-toggle";
 import StencilPicker from "./stencil-picker";
 import type { StencilSpec } from "@/domain/document/stencils";
 import { codeLayout, DEFAULT_CODE } from "@/domain/document/code";
@@ -760,6 +761,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
         <button className="app-button" disabled={!content} onClick={() => openExport()} title="ส่งออก PNG / PDF / ไฟล์โปรเจกต์"><Download size={17} /><span className="hidden lg:inline">Export</span></button>
         <button className={`app-button ${teachingMode ? "!border-slate-900 !bg-slate-900 !text-white" : ""}`} aria-pressed={teachingMode} title="โหมดสอน: ซ่อนแผงข้างเพื่อพื้นที่วาด" onClick={() => { setOverlayPanel(false); setTeachingMode(!teachingMode); }}><GraduationCap size={17} /><span className="hidden xl:inline">{teachingMode ? "ออกจากโหมดสอน" : "โหมดสอน"}</span></button>
         <button className="app-button icon-button" aria-label="เต็มจอ" title="เต็มจอ (กด Esc เพื่อออก)" onClick={() => { if (document.fullscreenElement) void document.exitFullscreen(); else void document.documentElement.requestFullscreen().catch(() => undefined); }}><Expand size={17} /></button>
+        <ThemeToggle />
         <button className="app-button icon-button" aria-label="คีย์ลัด" title="คีย์ลัด (?)" onClick={() => setHelpOpen(true)}><Keyboard size={17} /></button>
         {teachingMode
           ? <><button className="app-button" onClick={() => { setRightPanel("properties"); setOverlayPanel(!overlayPanel || panelTab !== "properties"); }}>Properties</button>

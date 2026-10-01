@@ -796,7 +796,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   const freehandStyle = freehandPreview ? (freehandPreview.tool === "pen" ? toolDefaults.pen : toolDefaults.highlighter) : null;
   const cursor = spaceDown || tool === "hand" ? "grab" : tool === "laser" ? "none" : tool === "select" ? "default" : tool === "text" ? "text" : tool === "eraser" ? "cell" : "crosshair";
 
-  return <div ref={containerRef} data-testid="canvas-viewport" className="relative h-full w-full touch-none select-none overflow-hidden outline-none"
+  return <div ref={containerRef} data-testid="canvas-viewport" className="theme-light relative h-full w-full touch-none select-none overflow-hidden outline-none"
     style={{ background: slide.background, cursor }}
     onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onContextMenu={onBoardContextMenu}
     onLostPointerCapture={(event) => { if (gesture.current?.pointerId === event.pointerId) { trace("lostpointercapture"); interruptGesture(); } }}

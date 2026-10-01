@@ -7,6 +7,7 @@ import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/400-italic.css";
 import "./globals.css";
 import PwaRegistrar from "@/features/pwa/pwa-registrar";
+import { THEME_SCRIPT } from "@/features/theme/theme-script";
 
 export const metadata: Metadata = {
   title: "Learning Suit",
@@ -18,5 +19,9 @@ export const metadata: Metadata = {
 export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#FFFFFF" };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="th"><body>{children}<PwaRegistrar /></body></html>;
+  // The theme is set on <html> by a tiny script before paint (the server cannot know the device's choice).
+  return <html lang="th" suppressHydrationWarning>
+    <head><script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} /></head>
+    <body>{children}<PwaRegistrar /></body>
+  </html>;
 }

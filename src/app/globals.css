@@ -1,25 +1,48 @@
 @import "tailwindcss";
 
-:root { color-scheme: light; }
+/*
+ * Theme (plan 01 §theme): the app chrome follows `data-theme` on <html> (set before paint from the saved choice
+ * or the system). The board and what floats on it (`.theme-light`) always stay light, so lessons look the same.
+ */
+:root, .theme-light {
+  color-scheme: light;
+  --page: #f8fafc; --surface: #ffffff; --text: #182431; --muted: #657386;
+  --btn-bg: #ffffff; --btn-border: #d7dde5; --btn-text: #263344; --btn-hover-bg: #f0f4f8; --btn-hover-border: #b8c6d4;
+  --primary-bg: #172c40; --primary-hover: #2b485f;
+  --field-bg: #ffffff; --field-border: #cad5df; --card-border: #e1e7ed; --overlay: #16233480;
+  --bone-a: #e8edf3; --bone-b: #f4f7fa;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0b1220; --surface: #172033; --text: #e2e8f0; --muted: #94a3b8;
+  --btn-bg: #1d283c; --btn-border: #334155; --btn-text: #e2e8f0; --btn-hover-bg: #263247; --btn-hover-border: #475569;
+  --primary-bg: #2563eb; --primary-hover: #1d4ed8;
+  --field-bg: #111a2b; --field-border: #334155; --card-border: #26324a; --overlay: #000000a6;
+  --bone-a: #1e293b; --bone-b: #283548;
+}
+.theme-light { color: #182431; }
 * { box-sizing: border-box; }
-body { margin: 0; color: #182431; background: #f8fafc; font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+body { margin: 0; color: var(--text); background: var(--page); font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .46; }
 input, textarea, button { font: inherit; }
-.app-button { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; border: 1px solid #d7dde5; border-radius: .65rem; background: white; color: #263344; padding: .6rem .85rem; font-weight: 600; line-height: 1.2; transition: background .15s, border-color .15s; }
-.app-button:hover:not(:disabled) { background: #f0f4f8; border-color: #b8c6d4; }
-.app-button-primary { background: #172c40; border-color: #172c40; color: white; }
-.app-button-primary:hover:not(:disabled) { background: #2b485f; border-color: #2b485f; }
+.app-button { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; border: 1px solid var(--btn-border); border-radius: .65rem; background: var(--btn-bg); color: var(--btn-text); padding: .6rem .85rem; font-weight: 600; line-height: 1.2; transition: background .15s, border-color .15s; }
+.app-button:hover:not(:disabled) { background: var(--btn-hover-bg); border-color: var(--btn-hover-border); }
+.app-button-primary { background: var(--primary-bg); border-color: var(--primary-bg); color: white; }
+.app-button-primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
 .icon-button { width: 2.3rem; height: 2.3rem; padding: 0; }
-.field { width: 100%; border: 1px solid #cad5df; border-radius: .6rem; background: white; padding: .65rem .8rem; outline: none; }
+.field { width: 100%; border: 1px solid var(--field-border); border-radius: .6rem; background: var(--field-bg); color: inherit; padding: .65rem .8rem; outline: none; }
 .field:focus { border-color: #446d92; box-shadow: 0 0 0 3px #bfd3e74d; }
-.muted { color: #657386; }
-.dialog-overlay { position: fixed; inset: 0; background: #16233480; z-index: 100; }
-.dialog-content { position: fixed; z-index: 101; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(430px, calc(100vw - 2rem)); padding: 1.5rem; border-radius: 1rem; background: white; box-shadow: 0 25px 80px #0b1d2a44; }
-.card { border: 1px solid #e1e7ed; border-radius: 1rem; background: white; box-shadow: 0 3px 18px #17314b0a; }
+.muted { color: var(--muted); }
+.dialog-overlay { position: fixed; inset: 0; background: var(--overlay); z-index: 100; }
+.dialog-content { position: fixed; z-index: 101; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(430px, calc(100vw - 2rem)); padding: 1.5rem; border-radius: 1rem; background: var(--surface); box-shadow: 0 25px 80px #0b1d2a44; }
+/* Picker icons tinted with their own colour; lightened in the dark theme so dark colours stay visible. */
+.picker-icon { color: var(--icon); background: color-mix(in srgb, var(--icon) 10%, transparent); }
+:root[data-theme="dark"] .picker-icon { color: color-mix(in srgb, var(--icon) 45%, #ffffff); background: color-mix(in srgb, var(--icon) 30%, transparent); }
+.card { border: 1px solid var(--card-border); border-radius: 1rem; background: var(--surface); box-shadow: 0 3px 18px #17314b0a; }
 
 /* Loading skeletons: shimmer blocks; the whole skeleton fades in after 150 ms so fast loads never flash. */
-.skeleton { background: linear-gradient(90deg, #e8edf3 25%, #f4f7fa 37%, #e8edf3 63%); background-size: 400% 100%; animation: skeleton-shimmer 1.4s ease-in-out infinite; }
+.skeleton { background: linear-gradient(90deg, var(--bone-a) 25%, var(--bone-b) 37%, var(--bone-a) 63%); background-size: 400% 100%; animation: skeleton-shimmer 1.4s ease-in-out infinite; }
 .skeleton-dark { background: linear-gradient(90deg, #334155 25%, #3f4d63 37%, #334155 63%); background-size: 400% 100%; animation: skeleton-shimmer 1.4s ease-in-out infinite; }
 .loading-reveal { animation: loading-reveal .2s ease .15s both; }
 .board-grid {
@@ -35,3 +58,76 @@ input, textarea, button { font: inherit; }
   .skeleton, .skeleton-dark { animation: none; }
   .loading-reveal { animation-duration: 0s; }
 }
+
+/* Dark theme: colour utilities used by the app chrome, remapped (generated from the classes in src; extend when adding colours).
+   Everything inside `.theme-light` (the board and its overlays) keeps the light colours. */
+:root[data-theme="dark"] .\!bg-slate-900:not(.theme-light *) { background-color: #334155 !important; }
+:root[data-theme="dark"] .\!border-red-200:not(.theme-light *) { border-color: #7f1d1d !important; }
+:root[data-theme="dark"] .\!border-slate-800:not(.theme-light *) { border-color: #64748b !important; }
+:root[data-theme="dark"] .\!border-slate-900:not(.theme-light *) { border-color: #64748b !important; }
+:root[data-theme="dark"] .\!text-red-700:not(.theme-light *) { color: #fca5a5 !important; }
+:root[data-theme="dark"] .bg-amber-100:not(.theme-light *) { background-color: #45330d; }
+:root[data-theme="dark"] .bg-amber-50:not(.theme-light *) { background-color: #33260b; }
+:root[data-theme="dark"] .bg-amber-50\/80:not(.theme-light *) { background-color: rgb(51 38 11 / .8); }
+:root[data-theme="dark"] .bg-blue-50:not(.theme-light *) { background-color: #172554; }
+:root[data-theme="dark"] .bg-blue-50\/70:not(.theme-light *) { background-color: rgb(23 37 84 / .7); }
+:root[data-theme="dark"] .bg-green-50:not(.theme-light *) { background-color: #0f2a1b; }
+:root[data-theme="dark"] .bg-red-100:not(.theme-light *) { background-color: #4a1a22; }
+:root[data-theme="dark"] .bg-red-50:not(.theme-light *) { background-color: #3b141b; }
+:root[data-theme="dark"] .bg-sky-100:not(.theme-light *) { background-color: #0c3a52; }
+:root[data-theme="dark"] .bg-sky-50:not(.theme-light *) { background-color: #0b2a3a; }
+:root[data-theme="dark"] .bg-slate-100:not(.theme-light *) { background-color: #0d1524; }
+:root[data-theme="dark"] .bg-slate-200:not(.theme-light *) { background-color: #26324a; }
+:root[data-theme="dark"] .bg-slate-50:not(.theme-light *) { background-color: #131b2b; }
+:root[data-theme="dark"] .bg-slate-800:not(.theme-light *) { background-color: #334155; }
+:root[data-theme="dark"] .bg-slate-900:not(.theme-light *) { background-color: #334155; }
+:root[data-theme="dark"] .bg-slate-900\/80:not(.theme-light *) { background-color: rgb(51 65 85 / .8); }
+:root[data-theme="dark"] .bg-white:not(.theme-light *) { background-color: #172033; }
+:root[data-theme="dark"] .bg-white\/80:not(.theme-light *) { background-color: rgb(23 32 51 / .8); }
+:root[data-theme="dark"] .bg-white\/90:not(.theme-light *) { background-color: rgb(23 32 51 / .9); }
+:root[data-theme="dark"] .bg-white\/95:not(.theme-light *) { background-color: rgb(23 32 51 / .95); }
+:root[data-theme="dark"] .border-amber-200:not(.theme-light *) { border-color: #78350f; }
+:root[data-theme="dark"] .border-amber-300:not(.theme-light *) { border-color: #92400e; }
+:root[data-theme="dark"] .border-blue-300:not(.theme-light *) { border-color: #1e40af; }
+:root[data-theme="dark"] .border-green-200:not(.theme-light *) { border-color: #14532d; }
+:root[data-theme="dark"] .border-red-200:not(.theme-light *) { border-color: #7f1d1d; }
+:root[data-theme="dark"] .border-sky-200:not(.theme-light *) { border-color: #075985; }
+:root[data-theme="dark"] .border-slate-100:not(.theme-light *) { border-color: #1f2a3d; }
+:root[data-theme="dark"] .border-slate-200:not(.theme-light *) { border-color: #26324a; }
+:root[data-theme="dark"] .border-slate-300:not(.theme-light *) { border-color: #334155; }
+:root[data-theme="dark"] .border-slate-600:not(.theme-light *) { border-color: #64748b; }
+:root[data-theme="dark"] .enabled\:hover\:bg-slate-100:enabled:hover:not(.theme-light *) { background-color: #243049; }
+:root[data-theme="dark"] .focus\:bg-red-50:focus:not(.theme-light *) { background-color: #3b141b; }
+:root[data-theme="dark"] .focus\:bg-slate-100:focus:not(.theme-light *) { background-color: #243049; }
+:root[data-theme="dark"] .focus\:bg-white:focus:not(.theme-light *) { background-color: #1d283c; }
+:root[data-theme="dark"] .hover\:bg-red-100:hover:not(.theme-light *) { background-color: #4a1a22; }
+:root[data-theme="dark"] .hover\:bg-red-50:hover:not(.theme-light *) { background-color: #3b141b; }
+:root[data-theme="dark"] .hover\:bg-slate-100:hover:not(.theme-light *) { background-color: #243049; }
+:root[data-theme="dark"] .hover\:bg-slate-50:hover:not(.theme-light *) { background-color: #1d283c; }
+:root[data-theme="dark"] .hover\:bg-white:hover:not(.theme-light *) { background-color: #1d283c; }
+:root[data-theme="dark"] .hover\:border-red-200:hover:not(.theme-light *) { border-color: #7f1d1d; }
+:root[data-theme="dark"] .hover\:border-slate-300:hover:not(.theme-light *) { border-color: #334155; }
+:root[data-theme="dark"] .hover\:border-slate-400:hover:not(.theme-light *) { border-color: #475569; }
+:root[data-theme="dark"] .hover\:text-red-700:hover:not(.theme-light *) { color: #fca5a5; }
+:root[data-theme="dark"] .hover\:text-slate-700:hover:not(.theme-light *) { color: #cbd5e1; }
+:root[data-theme="dark"] .hover\:text-slate-800:hover:not(.theme-light *) { color: #e2e8f0; }
+:root[data-theme="dark"] .text-amber-600:not(.theme-light *) { color: #fbbf24; }
+:root[data-theme="dark"] .text-amber-700:not(.theme-light *) { color: #fcd34d; }
+:root[data-theme="dark"] .text-amber-900:not(.theme-light *) { color: #fde68a; }
+:root[data-theme="dark"] .text-amber-900\/80:not(.theme-light *) { color: rgb(253 230 138 / .8); }
+:root[data-theme="dark"] .text-amber-950:not(.theme-light *) { color: #fef3c7; }
+:root[data-theme="dark"] .text-blue-700:not(.theme-light *) { color: #93c5fd; }
+:root[data-theme="dark"] .text-green-600:not(.theme-light *) { color: #4ade80; }
+:root[data-theme="dark"] .text-green-700:not(.theme-light *) { color: #86efac; }
+:root[data-theme="dark"] .text-green-900:not(.theme-light *) { color: #bbf7d0; }
+:root[data-theme="dark"] .text-red-600:not(.theme-light *) { color: #f87171; }
+:root[data-theme="dark"] .text-red-700:not(.theme-light *) { color: #fca5a5; }
+:root[data-theme="dark"] .text-red-800:not(.theme-light *) { color: #fca5a5; }
+:root[data-theme="dark"] .text-red-900:not(.theme-light *) { color: #fecaca; }
+:root[data-theme="dark"] .text-sky-900:not(.theme-light *) { color: #7dd3fc; }
+:root[data-theme="dark"] .text-slate-400:not(.theme-light *) { color: #7b8aa3; }
+:root[data-theme="dark"] .text-slate-500:not(.theme-light *) { color: #94a3b8; }
+:root[data-theme="dark"] .text-slate-600:not(.theme-light *) { color: #b3bfcf; }
+:root[data-theme="dark"] .text-slate-700:not(.theme-light *) { color: #cbd5e1; }
+:root[data-theme="dark"] .text-slate-800:not(.theme-light *) { color: #e2e8f0; }
+:root[data-theme="dark"] .text-slate-900:not(.theme-light *) { color: #f1f5f9; }

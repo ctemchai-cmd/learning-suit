@@ -9,6 +9,7 @@ import { LIMITS } from "@/domain/document/limits";
 import { useRuntime } from "@/services/runtime";
 import { installApp, useCanInstall } from "@/features/pwa/pwa";
 import { matchesQuery } from "./search";
+import ThemeToggle from "@/features/theme/theme-toggle";
 import { Bone, ProjectGridSkeleton } from "@/features/loading/skeletons";
 import type { ProjectCard, ProjectService } from "@/services/projects/local-project-service";
 
@@ -126,6 +127,7 @@ export default function Dashboard() {
       {!service && runtime.status === "loading" && <div className="loading-reveal flex gap-2" aria-hidden><Bone className="h-10 w-24 !rounded-[.65rem]" /><Bone className="h-10 w-36 !rounded-[.65rem]" /></div>}
       {service && <div className="flex flex-wrap items-center gap-2">
         {email && <span className="text-sm muted">{email}</span>}
+        <ThemeToggle />
         {canInstall && <button className="app-button" onClick={() => void installApp()} title="ติดตั้ง Learning Suit เป็นแอปในเครื่องนี้ (เปิดเป็นหน้าต่างของตัวเอง)"><MonitorDown size={16} /> ติดตั้งแอป</button>}
         {signOut && <Link className="app-button" href="/change-password" title="เปลี่ยนรหัสผ่านของบัญชีนี้"><KeyRound size={16} /> เปลี่ยนรหัสผ่าน</Link>}
         {signOut && <button className="app-button" onClick={() => void signOut().then(() => router.replace("/login?notice=signed-out"))} title="ออกจากระบบเฉพาะเบราว์เซอร์นี้ (งานที่ยังไม่ sync เก็บไว้ในเครื่องสำหรับบัญชีนี้)"><LogOut size={16} /> ออกจากระบบ</button>}
