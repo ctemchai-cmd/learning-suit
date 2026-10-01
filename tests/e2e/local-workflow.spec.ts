@@ -15,7 +15,7 @@ test("draws by two clicks, edits properties and Thai text, then restores the dra
   await expect(page.getByText("เลือก 1 วัตถุ")).toHaveCount(0);
   await page.mouse.click(box.x + box.width / 2 + 80, box.y + box.height / 2 + 60);
   await expect(page.getByText("เลือก 1 วัตถุ")).toBeVisible();
-  await page.getByLabel("สีเส้น").fill("#ff0000");
+  await page.getByRole("complementary", { name: "แผงคุณสมบัติ" }).getByLabel("สีเส้น").fill("#ff0000");
   await expect(page.getByText("เลือก 1 วัตถุ")).toBeVisible();
   await expect(page.getByTestId("save-status")).toHaveText("เก็บในเครื่องแล้ว");
 

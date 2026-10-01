@@ -6,7 +6,7 @@ import type Konva from "konva";
 import type { Bounds, CanvasNode, Point, SlideDocument, TableNode, TextNode } from "@/domain/document/model";
 import { cloneNodes, isFlowWidget, isWidgetNode } from "@/domain/document/model";
 import { getContentBounds, getNodeBounds } from "@/domain/document/geometry";
-import { fitBounds, screenToWorld, zoomAt } from "@/domain/document/camera";
+import { fitBounds, screenToWorld, worldToScreen, zoomAt } from "@/domain/document/camera";
 import type { Camera, PendingEdit } from "@/domain/document/session";
 import { DEFAULTS } from "@/domain/document/limits";
 import { freehandHitsForEraser } from "@/domain/document/hit-test";
@@ -24,6 +24,7 @@ import { LaserPointer, type LaserHandle } from "./laser-pointer";
 import { TextEditorOverlay, type TextSession } from "./text-editor";
 import { TableCellEditor, TableColumnHandles } from "./table-editor";
 import { CodeEditorOverlay } from "./code-editor";
+import { QuickProperties } from "./quick-properties";
 import { tableCellAt } from "@/domain/document/table";
 import { expandToGroups } from "@/domain/document/groups";
 import { snapMove, type Guide } from "@/domain/document/snap";
@@ -871,6 +872,15 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       // The stored block (not the live preview) is the base of the draft.
       const block = slide.nodes.find((node) => node.id === codeEdit.nodeId);
       return block?.type === "code" && !block.locked ? <CodeEditorOverlay key={block.id} node={block} edit={codeEdit} camera={camera} /> : null;
+    })()}
+    {showHandles && tool === "select" && !transformPreview && !nudgePreview && !marquee && (() => {
+      // Quick properties for the selection, placed in screen space next to it.
+      const box = getContentBounds(selectedNodes, konvaFontMetrics);
+      const stored = slide.nodes.filter((node) => selectedIds.includes(node.id) && !node.locked);
+      if (!box || !stored.length) return null;
+      const topLeft = worldToScreen({ x: box.x, y: box.y }, camera);
+      return <QuickProperties nodes={stored} slideId={slide.id} viewport={size}
+        selection={{ x: topLeft.x, y: topLeft.y, width: box.width * camera.zoom, height: box.height * camera.zoom }} />;
     })()}
     {tableEdit?.slideId === slide.id && (() => {
       // The stored table (not the live preview) is the base of the cell draft.
