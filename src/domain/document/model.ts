@@ -2,7 +2,7 @@ import type { DataState, DataView } from "../data/model";
 import type { DeployState, DeployView } from "../deploy/model";
 import type { AiState, AiView } from "../ai/model";
 import type { GitSimulationState } from "../git/model";
-import { withFreshGroups } from "./groups";
+import { copyNodes } from "./copy";
 
 export type Point = { x: number; y: number };
 export type Bounds = { x: number; y: number; width: number; height: number };
@@ -33,11 +33,16 @@ export type EllipseNode = NodeBase & StrokeStyle & {
   height: number;
   fill: string;
 };
-export type LineNode = NodeBase & StrokeStyle & {
+/** Side of an object a connector end is attached to (plan 03 §connectors); "auto" = the side facing the other end. */
+export type ConnectorAnchor = "n" | "e" | "s" | "w" | "auto";
+export type ConnectorBinding = { nodeId: string; anchor: ConnectorAnchor };
+/** `startBinding`/`endBinding`: the end follows that object (points are kept up to date with it). */
+type ConnectorEnds = { startBinding?: ConnectorBinding; endBinding?: ConnectorBinding };
+export type LineNode = NodeBase & StrokeStyle & ConnectorEnds & {
   type: "line";
   points: [Point, Point];
 };
-export type ArrowNode = NodeBase & StrokeStyle & {
+export type ArrowNode = NodeBase & StrokeStyle & ConnectorEnds & {
   type: "arrow";
   points: [Point, Point];
   headLength: number;
@@ -243,11 +248,11 @@ export function duplicateSlide(slide: SlideDocument): SlideDocument {
     ...structuredClone(slide),
     id: crypto.randomUUID(),
     name: withSuffix(slide.name, " สำเนา"),
-    nodes: withFreshGroups(slide.nodes.map((node) => ({ ...structuredClone(node), id: crypto.randomUUID() }))),
+    nodes: copyNodes(slide.nodes),
   };
 }
 
 /** Deep copies nodes with fresh IDs and an offset; Git state is copied independently. */
 export function cloneNodes(nodes: CanvasNode[], dx: number, dy: number): CanvasNode[] {
-  return withFreshGroups(nodes.map((node) => ({ ...structuredClone(node), id: crypto.randomUUID(), x: node.x + dx, y: node.y + dy })));
+  return copyNodes(nodes, (copy) => ({ ...copy, x: copy.x + dx, y: copy.y + dy }));
 }

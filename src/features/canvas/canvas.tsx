@@ -25,6 +25,11 @@ import { TextEditorOverlay, type TextSession } from "./text-editor";
 import { TableCellEditor, TableColumnHandles } from "./table-editor";
 import { CodeEditorOverlay } from "./code-editor";
 import { QuickProperties } from "./quick-properties";
+import { ConnectorHandles } from "./connector-handles";
+import { CONNECTABLE, connectableAt } from "@/domain/document/connectors";
+import { RemoteCursors } from "@/features/live/live-ui";
+import { sendCursor } from "@/features/live/live-session";
+import { useLiveStore } from "@/features/live/live-store";
 import { tableCellAt } from "@/domain/document/table";
 import { expandToGroups } from "@/domain/document/groups";
 import { snapMove, type Guide } from "@/domain/document/snap";
@@ -404,6 +409,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
 
   const tableEdit = useEditorStore((state) => state.tableEdit);
   const codeEdit = useEditorStore((state) => state.codeEdit);
+  const liveRole = useLiveStore((state) => state.role);
   const setCodeEdit = useEditorStore((state) => state.setCodeEdit);
   const setTableEdit = useEditorStore((state) => state.setTableEdit);
   /** Opens typing in the cell under `world` (double-click, or a click on another cell while typing). */
@@ -429,6 +435,34 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     if (event.shiftKey) { if (Math.abs(dx) >= Math.abs(dy)) { dy = 0; lockY = true; } else { dx = 0; lockX = true; } }
     if (event.metaKey || event.ctrlKey || !current.moving) return { dx, dy, guides: [] as Guide[] };
     return snapMove(current.moving, current.others, dx, dy, { threshold: 6 / camera.zoom, grid: gridSpacing(camera.zoom).minor, lockX, lockY });
+  };
+
+  /**
+   * A line/arrow end dragged by its handle: dropped on an object it attaches to that object's nearest side,
+   * dropped elsewhere it is free (the other end keeps its attachment).
+   */
+  const rebindDraggedEnds = (next: CanvasNode): CanvasNode => {
+    if (next.type !== "line" && next.type !== "arrow") return next;
+    const before = slide.nodes.find((node) => node.id === next.id);
+    if (!before || (before.type !== "line" && before.type !== "arrow")) return next;
+    const world = (node: typeof next, index: 0 | 1) => {
+      const radians = node.rotation * Math.PI / 180, point = node.points[index];
+      return { x: node.x + point.x * Math.cos(radians) - point.y * Math.sin(radians), y: node.y + point.x * Math.sin(radians) + point.y * Math.cos(radians) };
+    };
+    const result = { ...next };
+    ([[0, "startBinding"], [1, "endBinding"]] as const).forEach(([index, key]) => {
+      const was = world(before, index), now = world(next, index);
+      if (Math.hypot(was.x - now.x, was.y - now.y) < 0.5 && (before.x === next.x && before.y === next.y)) return;
+      // Moved as part of moving the whole connector: only an end dragged on its own changes attachment.
+      const other = index === 0 ? 1 : 0;
+      const otherWas = world(before, other), otherNow = world(next, other);
+      if (Math.hypot(otherWas.x - otherNow.x, otherWas.y - otherNow.y) > 0.5) return;
+      const otherBinding = index === 0 ? next.endBinding : next.startBinding;
+      const target = connectableAt(slide.nodes, now, konvaFontMetrics, otherBinding?.nodeId);
+      if (target) result[key] = { nodeId: target.id, anchor: "auto" };
+      else delete result[key];
+    });
+    return result;
   };
 
   // ------------------------------------------------------------------ pointer handling
@@ -508,10 +542,17 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     beginGesture({ kind: "click", pointerId: event.pointerId, screen, start: pending?.start ?? world, hadPending: Boolean(pending) }, event);
   };
 
+  const lastCursorSent = useRef(0);
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const current = gesture.current;
     const screen = pointerOf(event);
     if (tool === "laser" && !spaceDown) laserRef.current?.move(screen);
+    // Drawing room: share my pointer a few times a second.
+    if (liveRole && event.timeStamp - lastCursorSent.current > 120) {
+      lastCursorSent.current = event.timeStamp;
+      const world = screenToWorld(screen, camera);
+      sendCursor(slide.id, world.x, world.y);
+    }
     if (!current) {
       if (stepDraft && stepDraft.slideId === slide.id && stepDraft.tool === tool && stepDraft.toolVersion === toolVersion) {
         const world = screenToWorld(screen, camera);
@@ -852,7 +893,11 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     </Stage>}
     {showHandles && <TransformOverlay nodes={handleNodes} camera={camera} metrics={konvaFontMetrics} containerRef={containerRef}
       onPreview={setTransformPreview} onGesture={setGestureActive}
-      onCommit={(nodes) => transact({ label: "ปรับขนาด/หมุนวัตถุ", affectedSlideId: slide.id, commands: [{ type: "nodes.replace", slideId: slide.id, nodes }] })} />}
+      onCommit={(nodes) => transact({ label: "ปรับขนาด/หมุนวัตถุ", affectedSlideId: slide.id, commands: [{ type: "nodes.replace", slideId: slide.id, nodes: nodes.map(rebindDraggedEnds) }] })} />}
+    {showHandles && tool === "select" && !transformPreview && selectedNodes.length === 1 && CONNECTABLE.has(selectedNodes[0].type) && (() => {
+      const stored = slide.nodes.find((node) => node.id === selectedNodes[0].id);
+      return stored ? <ConnectorHandles node={stored} nodes={slide.nodes} slideId={slide.id} camera={camera} containerRef={containerRef} /> : null;
+    })()}
     {tool === "laser" && <LaserPointer handleRef={laserRef} />}
     {debugPointer && <div aria-hidden className="pointer-events-none absolute right-2 top-2 z-30 max-w-[360px] rounded-md bg-black/80 p-2 font-mono text-[10px] leading-snug text-green-300">
       <div className="mb-1 text-white">debug=pointer</div>
@@ -868,6 +913,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
         return stored?.type === "table" && selectedNodes[0].type === "table"
           ? <TableColumnHandles node={stored} shown={selectedNodes[0]} slideId={slide.id} camera={camera} /> : null;
       })()}
+    {liveRole && <RemoteCursors slideId={slide.id} camera={camera} />}
     {codeEdit?.slideId === slide.id && (() => {
       // The stored block (not the live preview) is the base of the draft.
       const block = slide.nodes.find((node) => node.id === codeEdit.nodeId);

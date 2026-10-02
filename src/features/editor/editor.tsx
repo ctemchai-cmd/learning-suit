@@ -28,7 +28,7 @@ import { createInitialGitState } from "@/domain/git/initial";
 import { ingestImage } from "@/services/assets/ingest";
 import { getLocalAsset, putLocalAsset, putThumbnail } from "@/services/persistence/local-db";
 import { renderSlidePng } from "@/services/export/render";
-import { onHistoryNavigate, useEditorStore, type CloudStatusView, type EditorTool, type LocalStatus, type ProjectOpener } from "./store";
+import { liveRole, onHistoryNavigate, useEditorStore, type CloudStatusView, type EditorTool, type LocalStatus, type ProjectOpener } from "./store";
 import { DEFAULT_FAVORITES, TOOL_ITEMS, isActionTool } from "./tools";
 import { favoriteForKey } from "./favorites";
 import LeftPanel from "./left-panel";
@@ -41,10 +41,12 @@ import ShortcutHelp from "./shortcut-help";
 import ContextMenu, { type MenuEntry } from "./context-menu";
 import { EditorSkeleton } from "@/features/loading/skeletons";
 import ThemeToggle from "@/features/theme/theme-toggle";
+import { LiveButton, LiveGuestBadge } from "@/features/live/live-ui";
 import StencilPicker from "./stencil-picker";
 import type { StencilSpec } from "@/domain/document/stencils";
 import { codeLayout, DEFAULT_CODE } from "@/domain/document/code";
-import { expandToGroups, groupNodes, isGrouped, ungroupNodes, withFreshGroups } from "@/domain/document/groups";
+import { expandToGroups, groupNodes, isGrouped, ungroupNodes } from "@/domain/document/groups";
+import { copyNodes } from "@/domain/document/copy";
 import { createClassBox, createGridTable, insertColumn, insertRow, removeColumn, removeRow, tableCellAt, tableLayout, toggleDivider } from "@/domain/document/table";
 
 export type CloudUi = {
@@ -158,13 +160,15 @@ function useViewportWidth() {
   return width;
 }
 
-export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset, exportArchive, cloudUi }: {
+export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset, exportArchive, cloudUi, guest }: {
   ownerId: string;
   projectId: string;
   opener?: ProjectOpener;
   resolveRemoteAsset?: (asset: AssetReference) => Promise<Blob | null>;
   exportArchive: ArchiveExporter;
   cloudUi?: CloudUi;
+  /** A student in a drawing room: the lesson comes from the room (already joined), images from the teacher. */
+  guest?: { requestAsset: (assetId: string) => Promise<Blob | null>; onLeave: () => void };
 }) {
   const history = useEditorStore((state) => state.history);
   const activeSlideId = useEditorStore((state) => state.activeSlideId);
@@ -175,6 +179,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
   const cloudStatus = useEditorStore((state) => state.cloudStatus);
   const notice = useEditorStore((state) => state.notice);
   const writable = useEditorStore((state) => state.writable);
+  const live = useEditorStore((state) => state.live);
   const readOnlyReason = useEditorStore((state) => state.readOnlyReason);
   const pendingEdit = useEditorStore((state) => state.pendingEdit);
   const recoveredEdit = useEditorStore((state) => state.recoveredEdit);
@@ -208,6 +213,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
 
   // Images: local blobs first, then authenticated cloud download (cached locally).
   const images = useMemo(() => new ImageCache(async (assetId) => {
+    if (guest) return guest.requestAsset(assetId);
     const local = await getLocalAsset(ownerId, projectId, assetId).catch(() => null);
     if (local) return local;
     const asset = useEditorStore.getState().history?.content.document.assets[assetId];
@@ -215,14 +221,15 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
     const remote = await resolveRemoteAsset(asset);
     if (remote) await putLocalAsset(ownerId, projectId, asset, remote).catch(() => undefined);
     return remote;
-  }), [ownerId, projectId, resolveRemoteAsset]);
+  }), [ownerId, projectId, resolveRemoteAsset, guest]);
   useEffect(() => { images.retain(); return () => images.release(); }, [images]);
 
   useEffect(() => {
+    if (guest) return; // the room already put the lesson into the store
     void load(ownerId, projectId, opener);
     // Deferred close owned by the store: StrictMode's replay or the next page's load cancels it.
     return () => useEditorStore.getState().scheduleClose(projectId);
-  }, [ownerId, projectId, opener, load]);
+  }, [ownerId, projectId, opener, load, guest]);
   useEffect(() => onHistoryNavigate(() => { useGitSessionStore.getState().clearAll(); useFlowSession.getState().clearAll(); }), []);
 
   // Recovered draft on another slide: open that slide so the canvas/Git panel can restore the editor.
@@ -279,7 +286,8 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
   // A retryable Cloud error usually clears on the automatic retry: show the banner only if it lasts (the header says it at once).
   const cloudErrorLasting = useLingering(cloudStatus?.kind === "error" && cloudStatus.retryable, 3000);
   const cloudErrorShown = cloudStatus?.kind === "error" && (!cloudStatus.retryable || cloudErrorLasting);
-  const status = statusText(localStatus, cloudStatus, editingText, writable);
+  const status = guest ? { text: writable ? "ห้องวาดร่วม · แก้พร้อมกันได้" : "รอครูเชื่อมต่อ…", tone: writable ? "ok" as const : "warn" as const }
+    : statusText(localStatus, cloudStatus, editingText, writable);
 
   const viewportCenterWorld = (): Point => {
     const state = useEditorStore.getState();
@@ -365,7 +373,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
     const current = state.history?.content.document.slides.find((item) => item.id === state.activeSlideId);
     const source = current?.nodes.filter((node) => state.selectedIds.includes(node.id) && !node.locked) ?? [];
     if (!source.length) return;
-    const copies = withFreshGroups(source.map((node) => ({ ...structuredClone(node), id: crypto.randomUUID(), x: node.x + DEFAULTS.pasteOffset, y: node.y + DEFAULTS.pasteOffset }) as CanvasNode));
+    const copies = copyNodes(source, (copy) => ({ ...copy, x: copy.x + DEFAULTS.pasteOffset, y: copy.y + DEFAULTS.pasteOffset }));
     insertNodes(copies, [], "ทำสำเนาวัตถุ");
   }, [insertNodes]);
   /**
@@ -469,7 +477,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
   /** Tool entries that open a picker instead of becoming a canvas mode (image file, ready-made pictures). */
   const runToolAction = useCallback((tool: EditorTool) => {
     if (!useEditorStore.getState().writable) return;
-    if (tool === "image") fileInput.current?.click();
+    if (tool === "image") { if (liveRole() === "guest") useEditorStore.getState().setNotice("ผู้เรียนแทรกรูปภาพไม่ได้"); else fileInput.current?.click(); }
     else if (tool === "stencil") setStencilOpen(true);
     else if (tool === "table") insertTableRef.current("grid");
     else if (tool === "code") insertCodeRef.current();
@@ -740,11 +748,13 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
   return <ImageCacheContext.Provider value={images}>
     <div className="flex h-dvh min-h-[480px] flex-col overflow-hidden bg-slate-100">
       <header className="flex h-[52px] shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-3">
-        <Link href="/projects" className="app-button icon-button" aria-label="กลับไปโปรเจกต์" title="กลับไปโปรเจกต์" onClick={() => { useEditorStore.getState().flushPendingEdits(); }}><ArrowLeft size={18} /></Link>
+        {guest
+          ? <button type="button" className="app-button icon-button" aria-label="ออกจากห้อง" title="ออกจากห้องวาดร่วม" onClick={() => { useEditorStore.getState().flushPendingEdits(); guest.onLeave(); }}><ArrowLeft size={18} /></button>
+          : <Link href="/projects" className="app-button icon-button" aria-label="กลับไปโปรเจกต์" title="กลับไปโปรเจกต์" onClick={() => { useEditorStore.getState().flushPendingEdits(); }}><ArrowLeft size={18} /></Link>}
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1">
             <h1 className="truncate font-semibold">{content?.title ?? "กำลังเปิดบทเรียน…"}</h1>
-            <button className="shrink-0 rounded p-1 text-slate-500 hover:bg-slate-100 disabled:opacity-40" aria-label="เปลี่ยนชื่อบทเรียน" title="เปลี่ยนชื่อบทเรียน" disabled={!writable || !content}
+            <button className="shrink-0 rounded p-1 text-slate-500 hover:bg-slate-100 disabled:opacity-40" aria-label="เปลี่ยนชื่อบทเรียน" title="เปลี่ยนชื่อบทเรียน" disabled={!writable || !content || Boolean(guest)}
               onClick={() => content && setDialog({ kind: "rename-project", value: content.title })}><Pencil size={13} /></button>
           </div>
           <p className={`truncate text-xs ${status.tone === "error" ? "text-red-600" : status.tone === "warn" ? "text-amber-700" : "muted"}`} role="status" aria-live="polite" data-testid="save-status">{status.text}</p>
@@ -755,10 +765,12 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
           <span className="min-w-16 text-center text-sm">{activeIndex + 1}/{slides.length}</span>
           <button className="app-button icon-button" aria-label="สไลด์ถัดไป" title="สไลด์ถัดไป (PageDown)" disabled={activeIndex >= slides.length - 1} onClick={() => switchSlide(slides[activeIndex + 1].id)}><ChevronRight size={18} /></button>
         </div>}
-        <button className="app-button icon-button" aria-label="เลิกทำ" title="เลิกทำ (⌘Z)" disabled={!writable || !history?.past.length} onClick={undo}><Undo2 size={18} /></button>
-        <button className="app-button icon-button" aria-label="ทำซ้ำ" title="ทำซ้ำ (⌘⇧Z)" disabled={!writable || !history?.future.length} onClick={redo}><Redo2 size={18} /></button>
-        <button className="app-button" disabled={!writable} title="บันทึกบทเรียน (⌘S)" onClick={() => void save()}><Save size={17} /><span className="hidden lg:inline">บันทึกบทเรียน</span></button>
-        <button className="app-button" disabled={!content} onClick={() => openExport()} title="ส่งออก PNG / PDF / ไฟล์โปรเจกต์"><Download size={17} /><span className="hidden lg:inline">Export</span></button>
+        <button className="app-button icon-button" aria-label="เลิกทำ" title={live ? "เลิกทำเฉพาะของฉัน (⌘Z)" : "เลิกทำ (⌘Z)"} disabled={!writable || !(live ? live.canUndo : history?.past.length)} onClick={undo}><Undo2 size={18} /></button>
+        <button className="app-button icon-button" aria-label="ทำซ้ำ" title={live ? "ทำซ้ำเฉพาะของฉัน (⌘⇧Z)" : "ทำซ้ำ (⌘⇧Z)"} disabled={!writable || !(live ? live.canRedo : history?.future.length)} onClick={redo}><Redo2 size={18} /></button>
+        {!guest && <button className="app-button" disabled={!writable} title="บันทึกบทเรียน (⌘S)" onClick={() => void save()}><Save size={17} /><span className="hidden lg:inline">บันทึกบทเรียน</span></button>}
+        {!guest && <LiveButton projectId={projectId} ownerId={ownerId} writable={writable} />}
+        {guest && <LiveGuestBadge />}
+        {!guest && <button className="app-button" disabled={!content} onClick={() => openExport()} title="ส่งออก PNG / PDF / ไฟล์โปรเจกต์"><Download size={17} /><span className="hidden lg:inline">Export</span></button>}
         <button className={`app-button ${teachingMode ? "!border-slate-900 !bg-slate-900 !text-white" : ""}`} aria-pressed={teachingMode} title="โหมดสอน: ซ่อนแผงข้างเพื่อพื้นที่วาด" onClick={() => { setOverlayPanel(false); setTeachingMode(!teachingMode); }}><GraduationCap size={17} /><span className="hidden xl:inline">{teachingMode ? "ออกจากโหมดสอน" : "โหมดสอน"}</span></button>
         <button className="app-button icon-button" aria-label="เต็มจอ" title="เต็มจอ (กด Esc เพื่อออก)" onClick={() => { if (document.fullscreenElement) void document.exitFullscreen(); else void document.documentElement.requestFullscreen().catch(() => undefined); }}><Expand size={17} /></button>
         <ThemeToggle />
@@ -771,7 +783,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
       </header>
       <div className="relative flex min-h-0 flex-1">
         {!teachingMode && <LeftPanel slides={slides} activeSlideId={slide?.id} tool={tool} setTool={setTool} favorites={favorites} toggleFavorite={toggleFavorite} writable={writable}
-          autoCollapsed={narrowLayout}
+          autoCollapsed={narrowLayout} canManageSlides={writable && !guest}
           onSwitchSlide={(slideId) => { switchSlide(slideId); }} onAddSlide={addSlide} onCopySlide={copySlide}
           onRenameSlide={() => slide && setDialog({ kind: "rename-slide", value: slide.name })}
           onDeleteSlide={() => slides.length > 1 && setDialog({ kind: "delete-slide", value: "" })}
@@ -819,7 +831,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
       </div>
       <footer className="flex h-8 shrink-0 items-center justify-between border-t border-slate-200 bg-white px-4 text-xs muted">
         <span className="truncate">{slide ? `${slide.name} · สไลด์ ${activeIndex + 1}/${slides.length}` : ""}</span>
-        <span>{cloudStatus ? "บันทึกบทเรียน = เก็บในเครื่อง + Cloud · Commit/Push ในตัวจำลองเป็นคนละระบบ" : "โหมดพัฒนาในเครื่อง: เก็บเฉพาะ IndexedDB ของ browser นี้"}</span>
+        <span>{guest ? "ห้องวาดร่วม: งานทั้งหมดบันทึกที่เครื่องครู" : cloudStatus ? "บันทึกบทเรียน = เก็บในเครื่อง + Cloud · Commit/Push ในตัวจำลองเป็นคนละระบบ" : "โหมดพัฒนาในเครื่อง: เก็บเฉพาะ IndexedDB ของ browser นี้"}</span>
       </footer>
       <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={(event) => { const files = [...(event.target.files ?? [])]; event.target.value = ""; if (files.length) void insertImages(files, null); }} />
       {content && exportRequest && <ExportDialog key={exportRequest.nonce} open onOpenChange={(open) => { if (!open) setExportRequest(null); }} initialKind={exportRequest.kind}

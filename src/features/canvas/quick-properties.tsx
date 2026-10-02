@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { Bold, Code2, GripVertical, Lock, Minus, Plus, Trash2 } from "lucide-react";
 import type { Bounds, CanvasNode } from "@/domain/document/model";
-import { useEditorStore } from "@/features/editor/store";
+import { liveRole, useEditorStore } from "@/features/editor/store";
 import { applyField, supports, type Field } from "@/features/editor/property-fields";
 
 // Quick properties (plan 03 §quick properties): a small bar like the favorites toolbar that appears with a
@@ -74,8 +74,8 @@ export function QuickProperties({ nodes, slideId, selection, viewport }: {
     const favorites = element.parentElement?.querySelector<HTMLElement>('[role="toolbar"][aria-label="เครื่องมือโปรด"]');
     const favoriteBox: Bounds | null = favorites ? { x: favorites.offsetLeft, y: favorites.offsetTop, width: favorites.offsetWidth, height: favorites.offsetHeight } : null;
     const candidates: Point[] = [
-      { x, y: selection.y - height - 40 }, // clear of the rotation handle
-      { x, y: selection.y + selection.height + 16 },
+      { x, y: selection.y - height - 70 }, // clear of the rotation handle and the top connection point
+      { x, y: selection.y + selection.height + 40 },
       { x: clampX(viewport.width / 2 - width / 2), y: 8 },
     ];
     const fits = (point: Point) => {
@@ -159,7 +159,7 @@ export function QuickProperties({ nodes, slideId, selection, viewport }: {
   </div>;
 
   return <div ref={ref} role="toolbar" aria-label="ปรับค่าด่วน"
-    className="absolute z-20 flex items-center gap-0.5 rounded-xl border border-slate-300 bg-white/95 p-1 shadow-lg backdrop-blur"
+    className="absolute z-40 flex items-center gap-0.5 rounded-xl border border-slate-300 bg-white/95 p-1 shadow-lg backdrop-blur"
     style={{ left: position?.x ?? -9999, top: position?.y ?? -9999, visibility: position ? "visible" : "hidden" }}
     onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
     <button type="button" className="flex h-8 w-5 cursor-grab items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 active:cursor-grabbing"
@@ -192,7 +192,7 @@ export function QuickProperties({ nodes, slideId, selection, viewport }: {
     {all("theme") && <BarButton label={value("theme") === "dark" ? "ธีมโค้ด: มืด (กดเป็นสว่าง)" : "ธีมโค้ด: สว่าง (กดเป็นมืด)"} active={value("theme") === "dark"}
       onClick={() => commit("theme", value("theme") === "dark" ? "light" : "dark")}><Code2 size={15} /></BarButton>}
     <span aria-hidden className="mx-0.5 h-5 w-px bg-slate-200" />
-    <BarButton label="ล็อก (⌘L) · ปลดล็อกที่แท็บ Objects" onClick={lock}><Lock size={15} /></BarButton>
+    {liveRole() !== "guest" && <BarButton label="ล็อก (⌘L) · ปลดล็อกที่แท็บ Objects" onClick={lock}><Lock size={15} /></BarButton>}
     <BarButton label="ลบ (Delete)" danger onClick={remove}><Trash2 size={15} /></BarButton>
   </div>;
 }

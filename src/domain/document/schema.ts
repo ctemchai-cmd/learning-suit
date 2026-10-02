@@ -29,8 +29,9 @@ const stroke = {
 };
 const rectangle = z.strictObject({ ...base, ...stroke, type: z.literal("rectangle"), width: size, height: size, fill });
 const ellipse = z.strictObject({ ...base, ...stroke, type: z.literal("ellipse"), width: size, height: size, fill });
-const line = z.strictObject({ ...base, ...stroke, type: z.literal("line"), points: z.tuple([point, point]) });
-const arrow = z.strictObject({ ...base, ...stroke, type: z.literal("arrow"), points: z.tuple([point, point]), headLength: size, headWidth: size });
+const binding = z.strictObject({ nodeId: uuid, anchor: z.enum(["n", "e", "s", "w", "auto"]) }).optional();
+const line = z.strictObject({ ...base, ...stroke, type: z.literal("line"), points: z.tuple([point, point]), startBinding: binding, endBinding: binding });
+const arrow = z.strictObject({ ...base, ...stroke, type: z.literal("arrow"), points: z.tuple([point, point]), headLength: size, headWidth: size, startBinding: binding, endBinding: binding });
 const pen = z.strictObject({ ...base, ...stroke, type: z.literal("pen"), points: z.array(point).min(1) });
 const highlighter = z.strictObject({ ...base, ...stroke, type: z.literal("highlighter"), points: z.array(point).min(1) });
 const text = z.strictObject({

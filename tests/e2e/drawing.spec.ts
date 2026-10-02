@@ -662,3 +662,48 @@ test("CAN-26: quick properties — selecting shows a bar next to the selection (
   await bar.getByRole("button", { name: "ลบ (Delete)" }).click();
   await expect.poll(async () => (await nodes()).length).toBe(1);
 });
+
+test("CAN-27: connectors — drag a selected object's connection point onto another object; the arrow follows when either moves; deleting one detaches that end; Undo restores", async ({ page }) => {
+  await createProject(page, "เชื่อม");
+  const box = await stageBox(page);
+  await drawRect(page, box.cx - 300, box.cy - 50, box.cx - 180, box.cy + 30);
+  await drawRect(page, box.cx + 100, box.cy + 60, box.cx + 220, box.cy + 140);
+  type Node = { id: string; type: string; x: number; y: number; points?: { x: number; y: number }[]; startBinding?: { nodeId: string }; endBinding?: { nodeId: string } };
+  const nodes = async () => (await readDraft(page))!.content.document.slides[0].nodes as unknown as Node[];
+  const arrowEnd = async () => { const arrow = (await nodes()).find((node) => node.type === "arrow")!; return { x: arrow.x + arrow.points![1].x, y: arrow.y + arrow.points![1].y }; };
+
+  await page.keyboard.press("Escape");
+  await page.mouse.click(box.cx - 300, box.cy - 10);
+  const handle = page.getByRole("button", { name: "ลากลูกศรเชื่อมจากด้านขวา" });
+  const start = (await handle.boundingBox())!;
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.cx, box.cy, { steps: 5 });
+  await page.mouse.move(box.cx + 160, box.cy + 100, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await nodes()).length).toBe(3);
+  const [first, second] = await nodes();
+  const arrow = (await nodes()).find((node) => node.type === "arrow")!;
+  expect(arrow.startBinding?.nodeId).toBe(first.id);
+  expect(arrow.endBinding?.nodeId).toBe(second.id);
+
+  // Move the second rectangle up (⌘ = no snapping): the arrow's end follows.
+  const before = await arrowEnd();
+  await page.keyboard.press("Escape");
+  await page.mouse.move(box.cx + 220, box.cy + 100);
+  await page.mouse.down();
+  await page.keyboard.down("ControlOrMeta");
+  await page.mouse.move(box.cx + 220, box.cy - 100, { steps: 6 });
+  await page.mouse.up();
+  await page.keyboard.up("ControlOrMeta");
+  await expect.poll(async () => (await arrowEnd()).y).toBeLessThan(before.y - 150);
+
+  // Delete the second rectangle: the arrow stays, its end detached.
+  await page.keyboard.press("Escape");
+  await page.mouse.click(box.cx + 220, box.cy - 100);
+  await page.keyboard.press("Delete");
+  await expect.poll(async () => (await nodes()).length).toBe(2);
+  expect((await nodes()).find((node) => node.type === "arrow")!.endBinding).toBeUndefined();
+  await page.getByRole("button", { name: "เลิกทำ" }).click();
+  await expect.poll(async () => (await nodes()).find((node) => node.type === "arrow")!.endBinding?.nodeId).toBe(second.id);
+});

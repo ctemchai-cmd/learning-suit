@@ -7,6 +7,8 @@ import type { CanvasNode, ProjectContent, TextNode } from "@/domain/document/mod
 import type { Camera, LocalDraft, PendingEdit } from "@/domain/document/session";
 import { DEFAULTS } from "@/domain/document/limits";
 import { parseProjectContent } from "@/domain/document/schema";
+import { withConnectorUpdates } from "@/domain/document/connectors";
+import { konvaFontMetrics } from "@/features/canvas/font-metrics";
 import {
   acquireWriterLock, getLocalDraft, getLocalSession, LocalWriteError, putLocalSession, subscribeBroadcast,
   writeDraftContent, writePendingEdit, type WriterLock,
@@ -52,6 +54,23 @@ export type OpenedProject = {
 export type ProjectOpener = (ownerId: string, projectId: string, access: { writer: boolean }) => Promise<OpenedProject>;
 
 type PropertyPreview = { slideId: string; nodes: CanvasNode[] } | null;
+
+/**
+ * A shared drawing room attached to the editor (plan 08). The host's changes still go through history and are
+ * saved as usual, then broadcast; a guest's changes go to the room instead (no storage). Undo/Redo are per person.
+ */
+export type LiveHooks = {
+  role: "host" | "guest";
+  /** Guest: show my change and send it; false when it is not allowed or does not apply. */
+  guestTransact?: (transaction: DocumentTransaction) => boolean;
+  /** Host: my change was applied (before → after). */
+  hostCommitted?: (transaction: DocumentTransaction, before: ProjectContent, after: ProjectContent) => void;
+  undo: () => void;
+  redo: () => void;
+};
+let liveHooks: LiveHooks | null = null;
+export function setLiveHooks(hooks: LiveHooks | null) { liveHooks = hooks; }
+export const liveRole = () => liveHooks?.role ?? null;
 export type TableEdit = { slideId: string; nodeId: string; row: number; col: number; selectAll?: boolean };
 /** Code block being typed in; `draft` = recovered text after a crash, `selectAll` = replace the sample code. */
 export type CodeEdit = { slideId: string; nodeId: string; selectAll?: boolean; draft?: string };
@@ -84,6 +103,8 @@ type EditorState = {
   /** Table cell being typed into (canvas DOM editor); `selectAll` = replace the text when typing starts. */
   tableEdit: TableEdit | null;
   codeEdit: CodeEdit | null;
+  /** Shared room: my role and whether I have something to undo/redo (per person). */
+  live: { role: "host" | "guest"; canUndo: boolean; canRedo: boolean } | null;
   propertyPreview: PropertyPreview;
   historyEpoch: number;
   /** Size of the visible canvas in CSS px (device state, used to place inserted objects). */
@@ -123,6 +144,15 @@ type EditorState = {
   setCodeEdit: (edit: CodeEdit | null) => void;
   waitForLocalWrites: () => Promise<void>;
   setViewport: (viewport: { width: number; height: number }) => void;
+  setLive: (live: EditorState["live"]) => void;
+  /** Guest: open the room's lesson (no storage, no locks). */
+  joinLive: (roomId: string, content: ProjectContent, slideId: string | null) => void;
+  /** Guest: the room's document changed (others' edits, my confirmed/refused ones). */
+  replaceLiveContent: (content: ProjectContent) => void;
+  /** Host: apply a validated change from a guest (saved like mine, not on my Undo stack). */
+  /** The applied transaction includes connector moves; it is what the room broadcasts. */
+  applyRemote: (transaction: DocumentTransaction) => { ok: true; transaction: DocumentTransaction; before: ProjectContent; after: ProjectContent } | { ok: false; message: string };
+  leaveLive: () => void;
 };
 
 let writeQueue: Promise<void> = Promise.resolve();
@@ -175,6 +205,7 @@ const defaultOpener: ProjectOpener = async (ownerId, projectId) => {
 
 export const useEditorStore = create<EditorState>((set, get) => {
   const enqueueWrite = (content: ProjectContent) => {
+    if (liveHooks?.role === "guest") return;
     const { ownerId, projectId, writable } = get();
     if (!ownerId || !projectId || !writable) return;
     const jobSequence = ++sequence;
@@ -227,6 +258,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
   };
 
   const persistSession = () => {
+    if (liveHooks?.role === "guest") return;
     if (sessionTimer) clearTimeout(sessionTimer);
     sessionTimer = setTimeout(() => {
       const { ownerId, projectId, activeSlideId, cameras } = get();
@@ -272,7 +304,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     localStatus: "loading", localError: null, loadError: null, notice: null,
     writable: false, readOnlyReason: null, cloudStatus: null, pendingEdit: null, recoveredEdit: null,
     gestureActive: false, pendingSave: false, teachingMode: false, rightPanel: "properties",
-    propertyPreview: null, historyEpoch: 0, viewport: { width: 1024, height: 700 }, tableEdit: null, codeEdit: null,
+    propertyPreview: null, historyEpoch: 0, viewport: { width: 1024, height: 700 }, tableEdit: null, codeEdit: null, live: null,
 
     async load(ownerId, projectId, opener = defaultOpener, force = false) {
       // A remount (StrictMode replay or navigation back) cancels the deferred close of the previous mount.
@@ -371,24 +403,30 @@ export const useEditorStore = create<EditorState>((set, get) => {
         set({ notice: "ยังมีอีกแท็บเปิดแก้ไขโปรเจกต์นี้อยู่ ปิด editor ในแท็บนั้นก่อนแล้วกดเปิดแก้ไขอีกครั้ง" });
       }
     },
-    transact(transaction) {
+    transact(original) {
       const { history, writable } = get();
       if (!history || !writable) return false;
+      // Connectors attached to what this change moves follow in the same transaction (one Undo step).
+      const transaction = withConnectorUpdates(history.content, original, konvaFontMetrics);
+      if (liveHooks?.role === "guest") return liveHooks.guestTransact?.(transaction) ?? false;
       const started = performance.now();
       const change = commitTransaction(history, transaction);
       performance.measure("learning-suit:transaction", { start: started });
       if (change.result.status === "invalid") { set({ notice: `ทำรายการไม่สำเร็จ: ${change.result.message}` }); return false; }
       if (!change.result.changed) return true;
       updateHistory(change.history, transaction.affectedSlideId, false);
+      liveHooks?.hostCommitted?.(transaction, history.content, change.history.content);
       return true;
     },
     undo() {
+      if (liveHooks) { if (get().writable && get().flushPendingEdits()) liveHooks.undo(); return; }
       const { history, writable } = get();
       if (!history || !writable || !history.past.length || !get().flushPendingEdits()) return;
       const result = undoHistory(history);
       updateHistory(result.history, result.affectedSlideId, true);
     },
     redo() {
+      if (liveHooks) { if (get().writable && get().flushPendingEdits()) liveHooks.redo(); return; }
       const { history, writable } = get();
       if (!history || !writable || !history.future.length || !get().flushPendingEdits()) return;
       const result = redoHistory(history);
@@ -482,6 +520,40 @@ export const useEditorStore = create<EditorState>((set, get) => {
     setTableEdit(tableEdit) { set({ tableEdit }); },
     setCodeEdit(codeEdit) { set({ codeEdit }); },
     setViewport(viewport) { set({ viewport }); },
+    setLive(live) { set({ live }); },
+    joinLive(roomId, content, slideId) {
+      releaseEverything();
+      const slides = content.document.slides;
+      set({
+        ownerId: "live-guest", projectId: roomId, history: createHistory(content), activeSlideId: slideId && slides.some((slide) => slide.id === slideId) ? slideId : slides[0].id,
+        selectedIds: [], localStatus: "stored", localError: null, loadError: null, notice: null, writable: true, readOnlyReason: null, cloudStatus: null,
+        pendingEdit: null, recoveredEdit: null, pendingSave: false, gestureActive: false, propertyPreview: null, tableEdit: null, codeEdit: null,
+        historyEpoch: get().historyEpoch + 1,
+      });
+    },
+    replaceLiveContent(content) {
+      const { history, activeSlideId } = get();
+      if (!history || history.content === content) return;
+      const next = { content, past: [], future: [] };
+      const slides = content.document.slides;
+      const slideId = activeSlideId && slides.some((slide) => slide.id === activeSlideId) ? activeSlideId : slides[0].id;
+      set({ history: next, activeSlideId: slideId, selectedIds: slideId === activeSlideId ? sanitizeSelection(next, slideId, get().selectedIds) : [] });
+    },
+    applyRemote(original) {
+      const { history, writable } = get();
+      if (!history || !writable) return { ok: false, message: "ครูเปิดแบบอ่านอย่างเดียว" };
+      const transaction = withConnectorUpdates(history.content, original, konvaFontMetrics);
+      const change = commitTransaction(history, transaction);
+      if (change.result.status === "invalid") return { ok: false, message: change.result.message };
+      if (change.result.changed) updateHistory(change.history, transaction.affectedSlideId, false);
+      return { ok: true, transaction, before: history.content, after: change.history.content };
+    },
+    leaveLive() {
+      const guest = liveHooks?.role === "guest";
+      liveHooks = null;
+      set({ live: null });
+      if (guest) set({ history: null, ownerId: null, projectId: null, writable: false });
+    },
     async waitForLocalWrites() {
       let queue: Promise<void>;
       do { queue = writeQueue; await queue; } while (queue !== writeQueue);

@@ -77,6 +77,13 @@ corepack pnpm test:e2e           # chromium + webkit (ไม่ตั้ง Supa
 
 Production build ที่ตั้ง Supabase env (ค่า placeholder) + `next start`: `/`, `/projects`, `/projects/<id>` ไม่มี session → 307 ไป `/login` (เก็บ `next`), cookie ปลอม → `/login` ไม่ error, project id ผิดรูปแบบ → 404, หน้า protected ตอบ `Cache-Control: private, no-store`, `/login` ไม่มีสมัครสมาชิก
 
+## 3b. ห้องวาดร่วม (Supabase Realtime)
+
+ห้องวาดร่วม (plan 08) ใช้ Realtime broadcast + presence แบบ public channel ด้วย publishable key ไม่ต้อง migration
+- Supabase Dashboard → Project Settings → Realtime: ถ้าเปิด “Private channels only” ไว้ ให้ปิด (ห้องใช้ public channel ชื่อ `live:<roomId>` ที่เดาไม่ได้)
+- ตรวจโควตา Realtime ของแพ็กเกจ (การเชื่อมต่อพร้อมกัน / ข้อความต่อเดือน) ให้พอกับจำนวนผู้เรียน
+- Smoke: ครูเปิดบทเรียน → วาดร่วม → เปิดห้อง → เปิดลิงก์ในอีก browser (หน้าต่างไม่ระบุตัวตน) ใส่ชื่อ → วาดสองฝั่ง → ปิดห้อง
+
 ## 4. Preview smoke (DEP-03)
 
 1. เปิด preview → ถูกพาไป `/login` (ไม่มีปุ่มสมัครสมาชิก) → login owner
