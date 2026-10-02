@@ -14,6 +14,7 @@ import { useAssetImage } from "./image-cache";
 import { StencilBody } from "./stencil-view";
 import { TableBody } from "./table-view";
 import { CodeBody } from "./code-view";
+import { connectorPath } from "@/domain/document/connector-route";
 
 // Shared node renderer (ADR 0002): the editor and the offscreen export draw the same views
 // from Drawing info. Selection chrome is never drawn here.
@@ -49,10 +50,10 @@ export function NodeBody({ node, hitWidth = 8, git, flow }: { node: CanvasNode; 
       return <Ellipse x={node.width / 2} y={node.height / 2} radiusX={node.width / 2} radiusY={node.height / 2} stroke={node.stroke} strokeWidth={node.strokeWidth}
         dash={dashFor(node.strokeStyle, node.strokeWidth)} fill={node.fill === "transparent" ? undefined : node.fill} hitStrokeWidth={Math.max(node.strokeWidth, hitWidth)} />;
     case "line":
-      return <Line points={flat(node.points)} stroke={node.stroke} strokeWidth={node.strokeWidth} dash={dashFor(node.strokeStyle, node.strokeWidth)}
+      return <Line points={flat(connectorPath(node).points)} bezier={node.route === "curved"} stroke={node.stroke} strokeWidth={node.strokeWidth} dash={dashFor(node.strokeStyle, node.strokeWidth)}
         lineCap="round" lineJoin="round" hitStrokeWidth={Math.max(node.strokeWidth, hitWidth)} />;
     case "arrow":
-      return <Arrow points={flat(node.points)} stroke={node.stroke} fill={node.stroke} strokeWidth={node.strokeWidth} dash={dashFor(node.strokeStyle, node.strokeWidth)}
+      return <Arrow points={flat(connectorPath(node).points)} bezier={node.route === "curved"} stroke={node.stroke} fill={node.stroke} strokeWidth={node.strokeWidth} dash={dashFor(node.strokeStyle, node.strokeWidth)}
         pointerLength={node.headLength} pointerWidth={node.headWidth} lineCap="round" lineJoin="round" hitStrokeWidth={Math.max(node.strokeWidth, hitWidth)} />;
     case "pen":
     case "highlighter":

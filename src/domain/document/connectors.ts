@@ -1,6 +1,6 @@
 import { applyDocumentCommand, type DocumentTransaction } from "./commands";
 import type { FontMetrics } from "./geometry";
-import type { ArrowNode, CanvasNode, ConnectorAnchor, ConnectorBinding, LineNode, Point, ProjectContent, SlideDocument } from "./model";
+import type { ArrowNode, CanvasNode, ConnectorBinding, ConnectorSide, LineNode, Point, ProjectContent, SlideDocument } from "./model";
 import { getNodeFrame } from "./transform";
 
 // Connectors (plan 03 §connectors): a line/arrow end can be attached to an object at one of its four sides.
@@ -8,7 +8,7 @@ import { getNodeFrame } from "./transform";
 // transaction, so Undo, saving and the drawing room treat it as one change.
 
 export const CONNECTABLE = new Set<CanvasNode["type"]>(["rectangle", "ellipse", "text", "image", "stencil", "table", "code"]);
-export const ANCHORS: Exclude<ConnectorAnchor, "auto">[] = ["n", "e", "s", "w"];
+export const ANCHORS: ConnectorSide[] = ["n", "e", "s", "w"];
 /** Gap between an object's side and an attached arrow tip. */
 const GAP = 6;
 
@@ -17,8 +17,59 @@ const rotate = (point: Point, degrees: number): Point => {
   return { x: point.x * c - point.y * s, y: point.x * s + point.y * c };
 };
 
+const SIDE_AT: Record<ConnectorSide, Point> = { n: { x: 0.5, y: 0 }, e: { x: 1, y: 0.5 }, s: { x: 0.5, y: 1 }, w: { x: 0, y: 0.5 } };
+
+/**
+ * Connection points of an object (`at`, 0–1 across its frame): corners and quarter points of each side for boxes,
+ * every 30° round an ellipse. Dragging from one / dropping on one attaches there.
+ */
+export function connectionPoints(node: CanvasNode): Point[] {
+  if (node.type === "ellipse") return Array.from({ length: 12 }, (_, index) => {
+    const angle = index * Math.PI / 6;
+    return { x: 0.5 + 0.5 * Math.cos(angle), y: 0.5 + 0.5 * Math.sin(angle) };
+  });
+  const steps = [0, 0.25, 0.5, 0.75];
+  return [...steps.map((t) => ({ x: t, y: 0 })), ...steps.map((t) => ({ x: 1, y: t })), ...steps.map((t) => ({ x: 1 - t, y: 1 })), ...steps.map((t) => ({ x: 0, y: 1 - t }))];
+}
+
+/** Outward direction (world, unit length) at a connection point. */
+function outward(node: CanvasNode, at: Point, frame: { width: number; height: number; rotation: number }): Point {
+  let normal: Point;
+  if (node.type === "ellipse") {
+    const a = frame.width / 2 || 1, b = frame.height / 2 || 1;
+    normal = { x: (at.x - 0.5) * frame.width / (a * a), y: (at.y - 0.5) * frame.height / (b * b) };
+  } else normal = { x: at.x <= 0 ? -1 : at.x >= 1 ? 1 : 0, y: at.y <= 0 ? -1 : at.y >= 1 ? 1 : 0 };
+  const length = Math.hypot(normal.x, normal.y) || 1;
+  return rotate({ x: normal.x / length, y: normal.y / length }, frame.rotation);
+}
+
+/** World position of a connection point (`gap` further out). */
+export function connectionPoint(node: CanvasNode, at: Point, metrics: FontMetrics, gap = 0): Point {
+  const frame = getNodeFrame(node, metrics);
+  const offset = rotate({ x: (at.x - 0.5) * frame.width, y: (at.y - 0.5) * frame.height }, frame.rotation);
+  const out = outward(node, at, frame);
+  return { x: frame.center.x + offset.x + out.x * gap, y: frame.center.y + offset.y + out.y * gap };
+}
+
+/** The side (in world axes) a connection point faces: elbow/curved lines leave that way. */
+export function sideOf(node: CanvasNode, at: Point, metrics: FontMetrics): ConnectorSide {
+  const out = outward(node, at, getNodeFrame(node, metrics));
+  return Math.abs(out.x) >= Math.abs(out.y) ? (out.x >= 0 ? "e" : "w") : (out.y >= 0 ? "s" : "n");
+}
+
+/** The connection point of `node` within `radius` of a world point (closest first), or null. */
+export function nearestConnectionPoint(node: CanvasNode, world: Point, metrics: FontMetrics, radius: number): Point | null {
+  let best: Point | null = null, distance = radius;
+  for (const at of connectionPoints(node)) {
+    const point = connectionPoint(node, at, metrics);
+    const d = Math.hypot(point.x - world.x, point.y - world.y);
+    if (d <= distance) { distance = d; best = at; }
+  }
+  return best;
+}
+
 /** World position of a side's midpoint (`gap` outside the side). */
-export function anchorPoint(node: CanvasNode, anchor: Exclude<ConnectorAnchor, "auto">, metrics: FontMetrics, gap = 0): Point {
+export function anchorPoint(node: CanvasNode, anchor: ConnectorSide, metrics: FontMetrics, gap = 0): Point {
   const frame = getNodeFrame(node, metrics);
   const local = anchor === "n" ? { x: 0, y: -frame.height / 2 - gap } : anchor === "s" ? { x: 0, y: frame.height / 2 + gap }
     : anchor === "e" ? { x: frame.width / 2 + gap, y: 0 } : { x: -frame.width / 2 - gap, y: 0 };
@@ -27,8 +78,8 @@ export function anchorPoint(node: CanvasNode, anchor: Exclude<ConnectorAnchor, "
 }
 
 /** The side of `node` closest to a world point. */
-export function nearestAnchor(node: CanvasNode, world: Point, metrics: FontMetrics): Exclude<ConnectorAnchor, "auto"> {
-  let best: Exclude<ConnectorAnchor, "auto"> = "n", distance = Infinity;
+export function nearestAnchor(node: CanvasNode, world: Point, metrics: FontMetrics): ConnectorSide {
+  let best: ConnectorSide = "n", distance = Infinity;
   for (const anchor of ANCHORS) {
     const point = anchorPoint(node, anchor, metrics);
     const d = Math.hypot(point.x - world.x, point.y - world.y);
@@ -65,9 +116,13 @@ function placeConnector(connector: Connector, byId: Map<string, CanvasNode>, met
   // "auto": the side facing the other end (its object's centre when attached, else the free end).
   const centre = (node: CanvasNode) => getNodeFrame(node, metrics).center;
   const startRef = startTarget ? centre(startTarget) : start, endRef = endTarget ? centre(endTarget) : end;
-  const side = (target: CanvasNode, anchor: ConnectorAnchor, towards: Point) => (anchor === "auto" ? nearestAnchor(target, towards, metrics) : anchor);
-  if (startTarget && startBinding) start = anchorPoint(startTarget, side(startTarget, startBinding.anchor, endRef), metrics, GAP);
-  if (endTarget && endBinding) end = anchorPoint(endTarget, side(endTarget, endBinding.anchor, startRef), metrics, GAP);
+  const place = (target: CanvasNode, binding: ConnectorBinding, towards: Point): [Point, ConnectorBinding] => {
+    if (binding.anchor === "fixed" && binding.at) return [connectionPoint(target, binding.at, metrics, GAP), { ...binding, side: sideOf(target, binding.at, metrics) }];
+    const side = binding.anchor === "auto" || binding.anchor === "fixed" ? nearestAnchor(target, towards, metrics) : binding.anchor;
+    return [anchorPoint(target, side, metrics, GAP), { ...binding, side: sideOf(target, SIDE_AT[side], metrics) }];
+  };
+  if (startTarget && startBinding) [start, startBinding] = place(startTarget, startBinding, endRef);
+  if (endTarget && endBinding) [end, endBinding] = place(endTarget, endBinding, startRef);
   const next: Connector = { ...connector, x: start.x, y: start.y, rotation: 0, points: [{ x: 0, y: 0 }, { x: end.x - start.x, y: end.y - start.y }] };
   if (startBinding) next.startBinding = startBinding; else delete next.startBinding;
   if (endBinding) next.endBinding = endBinding; else delete next.endBinding;
@@ -77,11 +132,11 @@ function placeConnector(connector: Connector, byId: Map<string, CanvasNode>, met
 }
 
 /** Connectors of a slide that must move because the objects they are attached to changed. */
-export function connectorUpdates(slide: SlideDocument, metrics: FontMetrics): Connector[] {
+export function connectorUpdates(slide: Pick<SlideDocument, "nodes">, metrics: FontMetrics, skip?: ReadonlySet<string>): Connector[] {
   const byId = new Map(slide.nodes.map((node) => [node.id, node]));
   const updates: Connector[] = [];
   for (const node of slide.nodes) {
-    if (!isConnector(node) || node.locked) continue;
+    if (!isConnector(node) || node.locked || skip?.has(node.id)) continue;
     const placed = placeConnector(node, byId, metrics);
     if (placed) updates.push(placed);
   }
@@ -105,4 +160,14 @@ export function withConnectorUpdates(content: ProjectContent, transaction: Docum
     if (updates.length) extra.push({ type: "nodes.replace", slideId: slide.id, nodes: updates });
   }
   return extra.length ? { ...transaction, commands: [...transaction.commands, ...extra] } : transaction;
+}
+
+/**
+ * The board while something is being dragged: attached connectors already follow (the stored ones move only when
+ * the drag is committed). `skip` = connectors being dragged themselves.
+ */
+export function withLiveConnectors(nodes: CanvasNode[], metrics: FontMetrics, skip: ReadonlySet<string>): CanvasNode[] {
+  if (!nodes.some((node) => isConnector(node) && (node.startBinding || node.endBinding))) return nodes;
+  const updates = new Map(connectorUpdates({ nodes }, metrics, skip).map((node) => [node.id, node]));
+  return updates.size ? nodes.map((node) => updates.get(node.id) ?? node) : nodes;
 }

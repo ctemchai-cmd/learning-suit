@@ -250,7 +250,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
   // Local-only thumbnails after a transaction settles; never on pointer move (plan01, M3.3).
   const thumbnailSlides = useRef(new WeakSet<object>());
   useEffect(() => {
-    if (!history || !writable) return;
+    if (!history || !writable || guest) return; // a student keeps nothing on their machine
     let idle: number | null = null;
     const timer = setTimeout(() => {
       const slides = history.content.document.slides;
@@ -274,7 +274,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
       else run();
     }, 1500);
     return () => { clearTimeout(timer); if (idle !== null && typeof cancelIdleCallback === "function") cancelIdleCallback(idle); };
-  }, [history, activeSlideId, writable, images, ownerId, projectId]);
+  }, [history, activeSlideId, writable, guest, images, ownerId, projectId]);
 
   const content = history?.content;
   const slides = content?.document.slides ?? [];

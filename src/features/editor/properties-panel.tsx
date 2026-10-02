@@ -238,6 +238,8 @@ export default function PropertiesPanel({ slide, selected, writable, lockSelecte
       <label className="flex items-center gap-2"><input type="checkbox" aria-label="ใช้สีพื้น" checked={fillOn} disabled={!writable} onChange={(event) => commit("fill", event.target.checked ? DEFAULTS.visibleFill : "transparent")} />ใช้สีพื้น{fill.mixed && <span className="text-xs muted">(หลายค่า)</span>}</label>
       {fillOn && <ColorField label="สีพื้น" value={String(fill.value)} mixed={fill.mixed} disabled={!writable} onPreview={(value) => preview("fill", value)} onCommit={(value) => commit("fill", value)} onCancel={() => setPropertyPreview(null)} />}
     </div>}
+    {common("route") && <Segmented label="รูปแบบเส้นเชื่อม" value={valueOf("route").mixed ? null : (String(valueOf("route").value ?? "straight") as "straight" | "elbow" | "curved")} disabled={!writable}
+      options={[{ value: "straight", label: "ตรง" }, { value: "elbow", label: "หักฉาก" }, { value: "curved", label: "โค้ง" }]} onChange={(value) => commit("route", value)} />}
     {common("headLength") && <div className="grid grid-cols-2 gap-2">
       <NumberField label="ความยาวหัวลูกศร" value={Number(valueOf("headLength").value)} mixed={valueOf("headLength").mixed} min={1} max={256} step={1} disabled={!writable} onCommit={(value) => commit("headLength", value)} />
       <NumberField label="ความกว้างหัวลูกศร" value={Number(valueOf("headWidth").value)} mixed={valueOf("headWidth").mixed} min={1} max={256} step={1} disabled={!writable} onCommit={(value) => commit("headWidth", value)} />

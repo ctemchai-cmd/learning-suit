@@ -224,6 +224,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
   };
 
   const enqueuePendingEditWrite = () => {
+    if (liveHooks?.role === "guest") return; // a student's lesson lives only in the room
     const { ownerId, projectId, writable } = get();
     if (!ownerId || !projectId || !writable) return;
     const epoch = openedEpoch;

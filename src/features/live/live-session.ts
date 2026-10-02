@@ -2,7 +2,9 @@
 
 import type { DocumentTransaction } from "@/domain/document/commands";
 import type { ProjectContent } from "@/domain/document/model";
-import { GuestReplica, guestPermission, participantColor, type Participant } from "@/domain/live/protocol";
+import { screenToWorld } from "@/domain/document/camera";
+import { LIMITS } from "@/domain/document/limits";
+import { GuestReplica, guestPermission, participantColor, type LiveMessage, type Participant } from "@/domain/live/protocol";
 import { inverseTransaction } from "@/domain/live/selective-undo";
 import { getLocalAsset } from "@/services/persistence/local-db";
 import { liveStats, openLiveTransport, type LiveTransport } from "@/services/live/transport";
@@ -16,7 +18,29 @@ const UNDO_LIMIT = 100;
 const GUEST_OPS_PER_SECOND = 25;
 const ROOM_KEY = (projectId: string) => `learning-suit-live-room:${projectId}`;
 
-let active: { transport: LiveTransport; stop: () => void } | null = null;
+let active: { transport: LiveTransport; stop: () => void; follow?: () => void } | null = null;
+
+type View = Extract<LiveMessage, { kind: "view" }>;
+
+/** What part of the board I am looking at (world units), or null before the board is measured. */
+function currentView(): View | null {
+  const { activeSlideId, cameras, viewport } = useEditorStore.getState();
+  const camera = activeSlideId ? cameras[activeSlideId] : undefined;
+  if (!activeSlideId || !camera || viewport.width <= 0 || viewport.height <= 0) return null;
+  const centre = screenToWorld({ x: viewport.width / 2, y: viewport.height / 2 }, camera);
+  const round = (value: number) => Math.round(value * 10) / 10;
+  return { kind: "view", slideId: activeSlideId, x: round(centre.x), y: round(centre.y), width: round(viewport.width / camera.zoom), height: round(viewport.height / camera.zoom) };
+}
+
+/** Shows the same part of the board on my screen (scaled to fit my screen size). */
+function showView(view: View) {
+  const store = useEditorStore.getState();
+  if (store.activeSlideId !== view.slideId && !store.switchSlide(view.slideId)) return;
+  const { viewport } = useEditorStore.getState();
+  if (viewport.width <= 0 || viewport.height <= 0 || view.width <= 0 || view.height <= 0) return;
+  const zoom = Math.min(LIMITS.zoomMax, Math.max(LIMITS.zoomMin, Math.min(viewport.width / view.width, viewport.height / view.height)));
+  useEditorStore.getState().setCamera(view.slideId, { zoom, x: viewport.width / 2 - view.x * zoom, y: viewport.height / 2 - view.y * zoom });
+}
 
 const newId = () => crypto.randomUUID();
 export const newRoomId = () => [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -57,12 +81,47 @@ function setUndoState(canUndo: boolean, canRedo: boolean) {
 
 function presenceTracker(transport: LiveTransport, onChange?: (participants: Participant[]) => void) {
   return transport.onPresence((participants) => {
+    const before = new Set(useLiveStore.getState().participants.map((participant) => participant.id));
     useLiveStore.getState().set({ participants });
     const ids = new Set(participants.map((participant) => participant.id));
-    const cursors = useLiveStore.getState().cursors;
+    const { cursors, selections } = useLiveStore.getState();
     for (const id of Object.keys(cursors)) if (!ids.has(id)) useLiveStore.getState().setCursor(id, null);
+    for (const id of Object.keys(selections)) if (!ids.has(id)) useLiveStore.getState().setSelection(id, null);
+    // Someone new: they have not seen what I have selected yet.
+    if (participants.some((participant) => !before.has(participant.id))) shareSelection(transport, true);
     onChange?.(participants);
   });
+}
+
+/** What I have selected and what I am doing with it (moving, typing). */
+function mySelection() {
+  const { activeSlideId, selectedIds, gestureActive, pendingEdit, tableEdit, codeEdit } = useEditorStore.getState();
+  const editing = tableEdit?.nodeId ?? codeEdit?.nodeId ?? (pendingEdit && "nodeId" in pendingEdit ? pendingEdit.nodeId : null);
+  const ids = editing ? [editing] : selectedIds;
+  return { slideId: activeSlideId ?? "", ids, activity: editing ? "editing" as const : ids.length && gestureActive ? "moving" as const : null };
+}
+let sharedSelection = "";
+/** Tells the room my selection when it changed (or always, for newcomers). */
+function shareSelection(transport: LiveTransport, force = false) {
+  const me = useLiveStore.getState().me;
+  if (!me) return;
+  const selection = mySelection();
+  const key = JSON.stringify(selection);
+  if (!force && key === sharedSelection) return;
+  sharedSelection = key;
+  transport.send({ kind: "select", from: me.id, ...selection });
+}
+/** Keeps the room up to date with my selection (a change goes out within 100 ms). */
+function selectionSharer(transport: LiveTransport) {
+  sharedSelection = "";
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const unsubscribe = useEditorStore.subscribe((state, previous) => {
+    if (state.selectedIds === previous.selectedIds && state.activeSlideId === previous.activeSlideId && state.gestureActive === previous.gestureActive
+      && state.pendingEdit === previous.pendingEdit && state.tableEdit === previous.tableEdit && state.codeEdit === previous.codeEdit) return;
+    if (timer) return;
+    timer = setTimeout(() => { timer = null; shareSelection(transport); }, 100);
+  });
+  return () => { if (timer) clearTimeout(timer); unsubscribe(); };
 }
 
 /** Teacher: opens (or resumes) the room for the project open in the editor. */
@@ -93,17 +152,20 @@ export function startHosting(roomId: string, name: string, ownerId: string, proj
     redo: () => stacks.run("redo", () => useEditorStore.getState().history?.content ?? null, (tx) => useEditorStore.getState().transact(tx)),
   });
   useEditorStore.getState().setLive({ role: "host", canUndo: false, canRedo: false });
-  useLiveStore.getState().set({ role: "host", roomId, status: "connecting", me, participants: [me], cursors: {} });
+  useLiveStore.getState().set({ role: "host", roomId, status: "connecting", me, participants: [me], cursors: {}, selections: {} });
 
   const unsubscribers = [
     transport.onStatus((status) => useLiveStore.getState().set({ status: status === "open" ? "live" : "error" })),
     presenceTracker(transport),
+    selectionSharer(transport),
     transport.onMessage((message) => {
       const state = useEditorStore.getState();
       switch (message.kind) {
         case "hello": {
           const content = state.history?.content;
           if (content) transport.send({ kind: "snapshot", to: message.from, epoch, seq, content, slideId: state.activeSlideId, hostName: me.name });
+          const view = currentView();
+          if (view) transport.send(view);
           return;
         }
         case "op": {
@@ -125,6 +187,9 @@ export function startHosting(roomId: string, name: string, ownerId: string, proj
         case "cursor":
           useLiveStore.getState().setCursor(message.from, { slideId: message.slideId, x: message.x, y: message.y, at: Date.now() });
           return;
+        case "select":
+          useLiveStore.getState().setSelection(message.from, { slideId: message.slideId, ids: message.ids.slice(0, 500), activity: message.activity });
+          return;
         case "asset-request": {
           const asset = state.history?.content.document.assets[message.assetId];
           if (!asset) { transport.send({ kind: "asset", to: message.from, assetId: message.assetId, mime: "", data: null }); return; }
@@ -138,20 +203,34 @@ export function startHosting(roomId: string, name: string, ownerId: string, proj
           return;
       }
     }),
-    // Students follow the teacher's slide.
+    // Students follow the teacher's slide and view.
     useEditorStore.subscribe((state) => {
       if (state.activeSlideId && state.activeSlideId !== ownPublishedSlide.id) {
         ownPublishedSlide.id = state.activeSlideId;
         transport.send({ kind: "slide", slideId: state.activeSlideId });
       }
+      scheduleView();
     }),
   ];
+  // The view goes out at most ~5 times a second while the teacher scrolls or zooms (the last position always).
+  let sentView = "", viewTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleView() {
+    if (viewTimer) return;
+    viewTimer = setTimeout(() => {
+      viewTimer = null;
+      const view = currentView();
+      const key = JSON.stringify(view);
+      if (!view || key === sentView) return;
+      sentView = key;
+      transport.send(view);
+    }, 200);
+  }
   // Heartbeat: students know the teacher is here and notice missed changes (they ask for a fresh copy).
   const heartbeat = setInterval(() => transport.send({ kind: "host-alive", epoch, seq }), 4000);
   liveStats.session = () => ({ epoch: epoch.slice(0, 8), seq });
   active = {
     transport,
-    stop: () => { clearInterval(heartbeat); unsubscribers.forEach((unsubscribe) => unsubscribe()); transport.close(); },
+    stop: () => { clearInterval(heartbeat); if (viewTimer) clearTimeout(viewTimer); unsubscribers.forEach((unsubscribe) => unsubscribe()); transport.close(); },
   };
 }
 
@@ -175,9 +254,17 @@ export function joinRoom(roomId: string, name: string) {
   // At most one request for a fresh copy every 3 s (a large lesson takes a moment to arrive).
   let lastHello = 0;
   const hello = () => { const now = Date.now(); if (now - lastHello < 3000) return; lastHello = now; transport.send({ kind: "hello", from: me.id, name }); };
-  useLiveStore.getState().set({ role: "guest", roomId, status: "connecting", me, participants: [me], cursors: {} });
+  useLiveStore.getState().set({ role: "guest", roomId, status: "connecting", me, participants: [me], cursors: {}, selections: {} });
 
   const show = () => { if (replica) useEditorStore.getState().replaceLiveContent(replica.content); };
+  // Where the teacher is (slide and view), to follow it or to go back to it.
+  let hostSlide: string | null = null;
+  let hostView: View | null = null;
+  const follow = () => {
+    if (!replica) return;
+    if (hostView) showView(hostView);
+    else if (hostSlide) useEditorStore.getState().switchSlide(hostSlide);
+  };
   // The teacher counts as here when presence lists them OR a teacher message arrived recently (presence can lag).
   let hostInPresence = false;
   let lastHostSignal = 0;
@@ -220,6 +307,7 @@ export function joinRoom(roomId: string, name: string) {
       if (status === "open") { lastHello = 0; hello(); }
       else useLiveStore.getState().set({ status: "error" });
     }),
+    selectionSharer(transport),
     presenceTracker(transport, (participants) => {
       hostInPresence = participants.some((participant) => participant.role === "host");
       refreshHost();
@@ -246,6 +334,7 @@ export function joinRoom(roomId: string, name: string) {
             show();
           }
           epoch = message.epoch;
+          if (message.slideId) hostSlide = message.slideId;
           hostPresent = true;
           useEditorStore.setState({ writable: true });
           useLiveStore.getState().set({ status: "live" });
@@ -269,8 +358,18 @@ export function joinRoom(roomId: string, name: string) {
         case "cursor":
           useLiveStore.getState().setCursor(message.from, { slideId: message.slideId, x: message.x, y: message.y, at: Date.now() });
           return;
+        case "select":
+          useLiveStore.getState().setSelection(message.from, { slideId: message.slideId, ids: message.ids.slice(0, 500), activity: message.activity });
+          return;
         case "slide":
+          hostSlide = message.slideId;
+          if (hostView?.slideId !== message.slideId) hostView = null;
           if (useLiveStore.getState().follow) useEditorStore.getState().switchSlide(message.slideId);
+          return;
+        case "view":
+          hostSlide = message.slideId;
+          hostView = message;
+          if (useLiveStore.getState().follow) showView(message);
           return;
         case "asset": {
           if (message.to !== me.id) return;
@@ -288,6 +387,10 @@ export function joinRoom(roomId: string, name: string) {
           return;
       }
     }),
+    // My screen size changed (or was measured for the first time): fit the teacher's view again.
+    useEditorStore.subscribe((state, previous) => {
+      if (state.viewport !== previous.viewport && useLiveStore.getState().follow && hostView) showView(hostView);
+    }),
   ];
   // No teacher answer at all: the room is closed or the link is wrong.
   const timeout = setTimeout(() => { if (!replica) useLiveStore.getState().set({ status: "closed" }); }, 15_000);
@@ -295,6 +398,7 @@ export function joinRoom(roomId: string, name: string) {
   active = {
     transport,
     stop: () => { clearTimeout(timeout); clearInterval(hostTimer); unsubscribers.forEach((unsubscribe) => unsubscribe()); transport.close(); },
+    follow,
   };
   return {
     /** Images of the lesson come from the teacher's machine. */
@@ -317,11 +421,38 @@ export function sendCursor(slideId: string, x: number, y: number) {
   active.transport.send({ kind: "cursor", from: me.id, slideId, x, y });
 }
 
+/** Student ticks “follow the teacher” again: jump to the teacher's slide and view. */
+export function followTeacher(on: boolean) {
+  useLiveStore.getState().set({ follow: on });
+  if (on) active?.follow?.();
+}
+
+/** I moved the board myself: a student stops following the teacher (tick “ตามครู” to go back). */
+export function movedViewMyself() {
+  const live = useLiveStore.getState();
+  if (live.role !== "guest" || !live.follow) return;
+  live.set({ follow: false });
+  useEditorStore.getState().setNotice("เลื่อนจอเองแล้ว จึงเลิกตามครู — ติ๊ก “ตามครู” เพื่อกลับไปดูตรงที่ครูดู");
+}
+
+/** Centres my screen on someone's pointer (finding a student on the board). */
+export function lookAtCursor(participantId: string) {
+  const cursor = useLiveStore.getState().cursors[participantId];
+  if (!cursor) return false;
+  const store = useEditorStore.getState();
+  if (store.activeSlideId !== cursor.slideId && !store.switchSlide(cursor.slideId)) return false;
+  movedViewMyself();
+  const { viewport, cameras } = useEditorStore.getState();
+  const zoom = cameras[cursor.slideId]?.zoom ?? 1;
+  useEditorStore.getState().setCamera(cursor.slideId, { zoom, x: viewport.width / 2 - cursor.x * zoom, y: viewport.height / 2 - cursor.y * zoom });
+  return true;
+}
+
 export function stopLive() {
   active?.stop();
   active = null;
   useEditorStore.getState().leaveLive();
-  useLiveStore.getState().set({ role: null, roomId: null, status: "connecting", me: null, participants: [], cursors: {} });
+  useLiveStore.getState().set({ role: null, roomId: null, status: "connecting", me: null, participants: [], cursors: {}, selections: {} });
 }
 
 async function blobToBase64(blob: Blob): Promise<string> {

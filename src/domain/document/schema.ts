@@ -29,9 +29,13 @@ const stroke = {
 };
 const rectangle = z.strictObject({ ...base, ...stroke, type: z.literal("rectangle"), width: size, height: size, fill });
 const ellipse = z.strictObject({ ...base, ...stroke, type: z.literal("ellipse"), width: size, height: size, fill });
-const binding = z.strictObject({ nodeId: uuid, anchor: z.enum(["n", "e", "s", "w", "auto"]) }).optional();
-const line = z.strictObject({ ...base, ...stroke, type: z.literal("line"), points: z.tuple([point, point]), startBinding: binding, endBinding: binding });
-const arrow = z.strictObject({ ...base, ...stroke, type: z.literal("arrow"), points: z.tuple([point, point]), headLength: size, headWidth: size, startBinding: binding, endBinding: binding });
+const unit = z.number().finite().min(0).max(1);
+const side = z.enum(["n", "e", "s", "w"]);
+const binding = z.strictObject({ nodeId: uuid, anchor: z.enum(["n", "e", "s", "w", "auto", "fixed"]), at: z.strictObject({ x: unit, y: unit }).optional(), side: side.optional() })
+  .refine((value) => (value.anchor === "fixed") === Boolean(value.at), "A fixed connection point needs `at` (and only it)").optional();
+const connector = { startBinding: binding, endBinding: binding, route: z.enum(["straight", "elbow", "curved"]).optional(), bend: coordinate.optional() };
+const line = z.strictObject({ ...base, ...stroke, type: z.literal("line"), points: z.tuple([point, point]), ...connector });
+const arrow = z.strictObject({ ...base, ...stroke, type: z.literal("arrow"), points: z.tuple([point, point]), headLength: size, headWidth: size, ...connector });
 const pen = z.strictObject({ ...base, ...stroke, type: z.literal("pen"), points: z.array(point).min(1) });
 const highlighter = z.strictObject({ ...base, ...stroke, type: z.literal("highlighter"), points: z.array(point).min(1) });
 const text = z.strictObject({

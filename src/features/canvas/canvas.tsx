@@ -25,11 +25,13 @@ import { TextEditorOverlay, type TextSession } from "./text-editor";
 import { TableCellEditor, TableColumnHandles } from "./table-editor";
 import { CodeEditorOverlay } from "./code-editor";
 import { QuickProperties } from "./quick-properties";
-import { ConnectorHandles } from "./connector-handles";
-import { CONNECTABLE, connectableAt } from "@/domain/document/connectors";
-import { RemoteCursors } from "@/features/live/live-ui";
+import { ConnectorHandles, dropTarget, TargetPoints } from "./connector-handles";
+import { draggedEnd, ElbowHandle } from "./elbow-handle";
+import { CONNECTABLE, withLiveConnectors } from "@/domain/document/connectors";
+import { RemoteCursors, RemoteSelections } from "@/features/live/live-ui";
 import { sendCursor } from "@/features/live/live-session";
 import { useLiveStore } from "@/features/live/live-store";
+import { movedViewMyself } from "@/features/live/live-session";
 import { tableCellAt } from "@/domain/document/table";
 import { expandToGroups } from "@/domain/document/groups";
 import { snapMove, type Guide } from "@/domain/document/snap";
@@ -306,11 +308,17 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     return map;
   }, [propertyPreview, nudgePreview, transformPreview, slide.id]);
 
-  const displayNodes = useMemo(() => slide.nodes.map((node) => {
-    const override = overrides.get(node.id) ?? node;
-    if (movePreview && !movePreview.clone && movePreview.ids.includes(node.id)) return { ...override, x: override.x + movePreview.dx, y: override.y + movePreview.dy } as CanvasNode;
-    return override;
-  }), [slide.nodes, overrides, movePreview]);
+  const displayNodes = useMemo(() => {
+    const shown = slide.nodes.map((node) => {
+      const override = overrides.get(node.id) ?? node;
+      if (movePreview && !movePreview.clone && movePreview.ids.includes(node.id)) return { ...override, x: override.x + movePreview.dx, y: override.y + movePreview.dy } as CanvasNode;
+      return override;
+    });
+    if (!overrides.size && !movePreview) return shown;
+    // Arrows attached to what is being dragged follow it live (the ones dragged themselves stay as dragged).
+    const dragged = new Set([...overrides.keys(), ...(movePreview && !movePreview.clone ? movePreview.ids : [])]);
+    return withLiveConnectors(shown, konvaFontMetrics, dragged);
+  }, [slide.nodes, overrides, movePreview]);
 
   const viewportWorld = useMemo<Bounds>(() => {
     const margin = 100 / camera.zoom;
@@ -445,23 +453,13 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     if (next.type !== "line" && next.type !== "arrow") return next;
     const before = slide.nodes.find((node) => node.id === next.id);
     if (!before || (before.type !== "line" && before.type !== "arrow")) return next;
-    const world = (node: typeof next, index: 0 | 1) => {
-      const radians = node.rotation * Math.PI / 180, point = node.points[index];
-      return { x: node.x + point.x * Math.cos(radians) - point.y * Math.sin(radians), y: node.y + point.x * Math.sin(radians) + point.y * Math.cos(radians) };
-    };
+    const end = draggedEnd(before, next);
+    if (!end) return next;
     const result = { ...next };
-    ([[0, "startBinding"], [1, "endBinding"]] as const).forEach(([index, key]) => {
-      const was = world(before, index), now = world(next, index);
-      if (Math.hypot(was.x - now.x, was.y - now.y) < 0.5 && (before.x === next.x && before.y === next.y)) return;
-      // Moved as part of moving the whole connector: only an end dragged on its own changes attachment.
-      const other = index === 0 ? 1 : 0;
-      const otherWas = world(before, other), otherNow = world(next, other);
-      if (Math.hypot(otherWas.x - otherNow.x, otherWas.y - otherNow.y) > 0.5) return;
-      const otherBinding = index === 0 ? next.endBinding : next.startBinding;
-      const target = connectableAt(slide.nodes, now, konvaFontMetrics, otherBinding?.nodeId);
-      if (target) result[key] = { nodeId: target.id, anchor: "auto" };
-      else delete result[key];
-    });
+    // On a connection point: attached exactly there; elsewhere on the object: the side facing the other end.
+    const { target, at } = dropTarget(slide.nodes, end.world, camera.zoom, end.otherBinding);
+    if (target) result[end.key] = at ? { nodeId: target.id, anchor: "fixed", at } : { nodeId: target.id, anchor: "auto" };
+    else delete result[end.key];
     return result;
   };
 
@@ -543,15 +541,21 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   };
 
   const lastCursorSent = useRef(0);
+
+  const cursorTrail = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (cursorTrail.current) clearTimeout(cursorTrail.current); }, []);
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const current = gesture.current;
     const screen = pointerOf(event);
     if (tool === "laser" && !spaceDown) laserRef.current?.move(screen);
-    // Drawing room: share my pointer a few times a second.
-    if (liveRole && event.timeStamp - lastCursorSent.current > 120) {
-      lastCursorSent.current = event.timeStamp;
+    // Drawing room: share my pointer a few times a second (and where it stopped).
+    if (liveRole) {
       const world = screenToWorld(screen, camera);
-      sendCursor(slide.id, world.x, world.y);
+      if (cursorTrail.current) clearTimeout(cursorTrail.current);
+      cursorTrail.current = null;
+      const wait = 120 - (event.timeStamp - lastCursorSent.current);
+      if (wait <= 0) { lastCursorSent.current = event.timeStamp; sendCursor(slide.id, world.x, world.y); }
+      else cursorTrail.current = setTimeout(() => { cursorTrail.current = null; lastCursorSent.current = performance.now(); sendCursor(slide.id, world.x, world.y); }, wait);
     }
     if (!current) {
       if (stepDraft && stepDraft.slideId === slide.id && stepDraft.tool === tool && stepDraft.toolVersion === toolVersion) {
@@ -566,6 +570,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     switch (current.kind) {
       case "panning": {
         const next = { ...current.camera, x: current.camera.x + screen.x - current.screen.x, y: current.camera.y + screen.y - current.screen.y };
+        movedViewMyself();
         schedule(() => setCamera(slide.id, next));
         return;
       }
@@ -647,6 +652,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     endGesture(event);
     switch (current.kind) {
       case "panning": {
+        if (screen.x !== current.screen.x || screen.y !== current.screen.y) movedViewMyself();
         setCamera(slide.id, { ...current.camera, x: current.camera.x + screen.x - current.screen.x, y: current.camera.y + screen.y - current.screen.y });
         return;
       }
@@ -760,6 +766,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     const pointer = { x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) };
     const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? (rect?.height ?? 800) : 1;
     let dx = event.deltaX * unit, dy = event.deltaY * unit;
+    movedViewMyself();
     if (event.ctrlKey || event.metaKey) {
       state.setCamera(slide.id, zoomAt(current, pointer, current.zoom * Math.exp(-dy * 0.01)));
       return;
@@ -894,9 +901,24 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     {showHandles && <TransformOverlay nodes={handleNodes} camera={camera} metrics={konvaFontMetrics} containerRef={containerRef}
       onPreview={setTransformPreview} onGesture={setGestureActive}
       onCommit={(nodes) => transact({ label: "ปรับขนาด/หมุนวัตถุ", affectedSlideId: slide.id, commands: [{ type: "nodes.replace", slideId: slide.id, nodes: nodes.map(rebindDraggedEnds) }] })} />}
-    {showHandles && tool === "select" && !transformPreview && selectedNodes.length === 1 && CONNECTABLE.has(selectedNodes[0].type) && (() => {
+    {showHandles && tool === "select" && !transformPreview && !nudgePreview && selectedNodes.length === 1 && CONNECTABLE.has(selectedNodes[0].type) && (() => {
       const stored = slide.nodes.find((node) => node.id === selectedNodes[0].id);
-      return stored ? <ConnectorHandles node={stored} nodes={slide.nodes} slideId={slide.id} camera={camera} containerRef={containerRef} /> : null;
+      return stored ? <ConnectorHandles key={`connect-${stored.id}`} node={stored} nodes={slide.nodes} slideId={slide.id} camera={camera} containerRef={containerRef} /> : null;
+    })()}
+    {(() => {
+      // Dragging an arrow's end over an object: its connection points (the one it will snap to lit up).
+      if (!transformPreview || transformPreview.length !== 1) return null;
+      const shown = transformPreview[0];
+      const before = slide.nodes.find((node) => node.id === shown.id);
+      if ((shown.type !== "line" && shown.type !== "arrow") || !before || (before.type !== "line" && before.type !== "arrow")) return null;
+      const end = draggedEnd(before, shown);
+      if (!end) return null;
+      const { target, at } = dropTarget(slide.nodes, end.world, camera.zoom, end.otherBinding);
+      return target ? <TargetPoints node={target} at={at} camera={camera} /> : null;
+    })()}
+    {showHandles && !transformPreview && selectedNodes.length === 1 && (selectedNodes[0].type === "line" || selectedNodes[0].type === "arrow") && selectedNodes[0].route === "elbow" && (() => {
+      const stored = slide.nodes.find((node) => node.id === selectedNodes[0].id);
+      return stored && (stored.type === "line" || stored.type === "arrow") ? <ElbowHandle key={`elbow-${stored.id}`} node={stored} slideId={slide.id} camera={camera} containerRef={containerRef} /> : null;
     })()}
     {tool === "laser" && <LaserPointer handleRef={laserRef} />}
     {debugPointer && <div aria-hidden className="pointer-events-none absolute right-2 top-2 z-30 max-w-[360px] rounded-md bg-black/80 p-2 font-mono text-[10px] leading-snug text-green-300">
@@ -913,6 +935,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
         return stored?.type === "table" && selectedNodes[0].type === "table"
           ? <TableColumnHandles node={stored} shown={selectedNodes[0]} slideId={slide.id} camera={camera} /> : null;
       })()}
+    {liveRole && <RemoteSelections slideId={slide.id} nodes={displayNodes} camera={camera} />}
     {liveRole && <RemoteCursors slideId={slide.id} camera={camera} />}
     {codeEdit?.slideId === slide.id && (() => {
       // The stored block (not the live preview) is the base of the draft.
@@ -946,10 +969,10 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     <FavoriteToolbar favorites={favorites} position={toolbarPosition} viewport={size} onPositionChange={onToolbarPositionChange} onReorder={onFavoritesReorder} onAction={onToolAction} />
     <div className="pointer-events-none absolute bottom-4 left-4 rounded-lg border border-slate-200 bg-white/90 px-3 py-2 text-xs text-slate-600 shadow-sm">{Math.round(camera.zoom * 100)}% · scroll เลื่อน · ⌘/pinch ซูม · Space ลากเลื่อน</div>
     <div className="absolute bottom-4 right-4 flex gap-1 rounded-lg border border-slate-200 bg-white/95 p-1 shadow-sm" role="group" aria-label="การซูม">
-      <button className="app-button icon-button" aria-label="ซูมออก" title="ซูมออก" onClick={() => setCamera(slide.id, zoomAt(camera, { x: size.width / 2, y: size.height / 2 }, camera.zoom / 1.25))}>−</button>
-      <button className="app-button px-3" title="รีเซ็ตเป็น 100% โดยคงจุดกลางจอ" onClick={() => setCamera(slide.id, zoomAt(camera, { x: size.width / 2, y: size.height / 2 }, 1))}>100%</button>
-      <button className="app-button px-3" title="ย่อ/ขยายให้เห็นทุกวัตถุ รวมวัตถุที่ล็อก" onClick={() => setCamera(slide.id, fitBounds(content, size, DEFAULTS.padding))}>พอดีเนื้อหา</button>
-      <button className="app-button icon-button" aria-label="ซูมเข้า" title="ซูมเข้า" onClick={() => setCamera(slide.id, zoomAt(camera, { x: size.width / 2, y: size.height / 2 }, camera.zoom * 1.25))}>+</button>
+      <button className="app-button icon-button" aria-label="ซูมออก" title="ซูมออก" onClick={() => { movedViewMyself(); setCamera(slide.id, zoomAt(camera, { x: size.width / 2, y: size.height / 2 }, camera.zoom / 1.25)); }}>−</button>
+      <button className="app-button px-3" title="รีเซ็ตเป็น 100% โดยคงจุดกลางจอ" onClick={() => { movedViewMyself(); setCamera(slide.id, zoomAt(camera, { x: size.width / 2, y: size.height / 2 }, 1)); }}>100%</button>
+      <button className="app-button px-3" title="ย่อ/ขยายให้เห็นทุกวัตถุ รวมวัตถุที่ล็อก" onClick={() => { movedViewMyself(); setCamera(slide.id, fitBounds(content, size, DEFAULTS.padding)); }}>พอดีเนื้อหา</button>
+      <button className="app-button icon-button" aria-label="ซูมเข้า" title="ซูมเข้า" onClick={() => { movedViewMyself(); setCamera(slide.id, zoomAt(camera, { x: size.width / 2, y: size.height / 2 }, camera.zoom * 1.25)); }}>+</button>
     </div>
   </div>;
 }

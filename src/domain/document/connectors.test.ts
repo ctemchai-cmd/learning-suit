@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { applyDocumentCommand, type DocumentTransaction } from "./commands";
-import { anchorPoint, connectableAt, nearestAnchor, withConnectorUpdates } from "./connectors";
+import { anchorPoint, connectableAt, connectionPoint, connectionPoints, nearestAnchor, nearestConnectionPoint, sideOf, withConnectorUpdates, withLiveConnectors } from "./connectors";
+import { connectorPath, elbowLayout } from "./connector-route";
+import { getNodeBounds } from "./geometry";
 import { remapBindings } from "./copy";
 import { fallbackFontMetrics as metrics } from "./geometry";
 import { createProjectContent, type ArrowNode, type CanvasNode, type ProjectContent, type RectNode } from "./model";
@@ -84,5 +86,58 @@ describe("CON-01: connectors follow the objects they are attached to", () => {
     expect((copied[0] as ArrowNode).endBinding).toBeUndefined();
     expect(() => parseProjectContent(withNodes([arrow({ startBinding: { nodeId: uuid(1), anchor: "e" } })]))).not.toThrow();
     expect(() => parseProjectContent(withNodes([arrow({ startBinding: { nodeId: uuid(1), anchor: "x" as "e" } })]))).toThrow();
+  });
+});
+
+describe("CON-02: connection points and elbow / curved routes", () => {
+  it("offers corner and quarter points on boxes (12 round an ellipse) and attaches to the one near a point", () => {
+    const box = rect(1, 0, 0);
+    expect(connectionPoints(box)).toHaveLength(16);
+    expect(connectionPoints({ ...box, type: "ellipse" } as CanvasNode)).toHaveLength(12);
+    expect(connectionPoint(box, { x: 0.25, y: 1 }, metrics)).toEqual({ x: 25, y: 50 });
+    expect(connectionPoint(box, { x: 1, y: 0 }, metrics, 6).x).toBeCloseTo(104.243, 2); // a corner pushes out diagonally
+    expect(nearestConnectionPoint(box, { x: 27, y: 53 }, metrics, 10)).toEqual({ x: 0.25, y: 1 });
+    expect(nearestConnectionPoint(box, { x: 50, y: 25 }, metrics, 10)).toBeNull();
+    expect(sideOf(box, { x: 0.75, y: 0 }, metrics)).toBe("n");
+  });
+
+  it("keeps a fixed end on its connection point when the object moves, and records the side each end leaves from", () => {
+    const a = rect(1, 0, 0), b = rect(2, 300, 0);
+    const start = withNodes([a, b, arrow({ route: "elbow", startBinding: { nodeId: uuid(1), anchor: "fixed", at: { x: 1, y: 0.75 } }, endBinding: { nodeId: uuid(2), anchor: "auto" } })]);
+    const s = start.document.slides[0].id;
+    const moved = commit(start, { label: "x", affectedSlideId: null, commands: [{ type: "nodes.replace", slideId: s, nodes: [{ ...a, y: 10 }] }] });
+    const connector = moved.document.slides[0].nodes.find((node) => node.type === "arrow") as ArrowNode;
+    expect(ends(moved)[0]).toEqual({ x: 106, y: 47.5 });
+    expect(connector.startBinding).toEqual({ nodeId: uuid(1), anchor: "fixed", at: { x: 1, y: 0.75 }, side: "e" });
+    expect(connector.endBinding?.side).toBe("w");
+    expect(() => parseProjectContent(moved)).not.toThrow();
+    expect(() => parseProjectContent(withNodes([arrow({ startBinding: { nodeId: uuid(1), anchor: "fixed" } })]))).toThrow();
+  });
+
+  it("routes elbows at right angles (middle segment movable by `bend`), L shapes and curves", () => {
+    const across = arrow({ route: "elbow", points: [{ x: 0, y: 0 }, { x: 200, y: 100 }], startBinding: { nodeId: uuid(1), anchor: "e", side: "e" }, endBinding: { nodeId: uuid(2), anchor: "w", side: "w" } });
+    expect(connectorPath(across).points).toEqual([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 200, y: 100 }]);
+    expect(elbowLayout({ ...across, bend: 30 }).middle).toEqual({ from: { x: 130, y: 0 }, to: { x: 130, y: 100 }, axis: "x" });
+    const corner = { ...across, endBinding: { nodeId: uuid(2), anchor: "n" as const, side: "n" as const } };
+    expect(connectorPath(corner).points).toEqual([{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 100 }]);
+    expect(elbowLayout(corner).middle).toBeNull();
+    // Leaving away from the other end: out, across, back.
+    const back = arrow({ route: "elbow", points: [{ x: 0, y: 0 }, { x: -200, y: 100 }], startBinding: { nodeId: uuid(1), anchor: "e", side: "e" }, endBinding: { nodeId: uuid(2), anchor: "e", side: "e" } });
+    expect(connectorPath(back).points).toEqual([{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 50 }, { x: -180, y: 50 }, { x: -180, y: 100 }, { x: -200, y: 100 }]);
+    const curve = connectorPath({ ...across, route: "curved" });
+    expect(curve.bezier).toBe(true);
+    expect(curve.points).toHaveLength(4);
+    expect(connectorPath(arrow()).points).toEqual(arrow().points);
+    // The bounds follow the drawn path.
+    expect(getNodeBounds({ ...back, x: 0, y: 0, headLength: 1, headWidth: 1, strokeWidth: 2 }, metrics).x).toBeCloseTo(-202);
+  });
+
+  it("moves attached arrows live while their object is dragged, leaving the dragged ones alone", () => {
+    const a = rect(1, 0, 0), b = rect(2, 300, 0);
+    const link = arrow({ startBinding: { nodeId: uuid(1), anchor: "e" }, endBinding: { nodeId: uuid(2), anchor: "w" } });
+    const live = withLiveConnectors([{ ...a, y: 100 }, b, link], metrics, new Set([uuid(1)]));
+    const shown = live.find((node) => node.type === "arrow") as ArrowNode;
+    expect(shown.y).toBe(125);
+    expect(withLiveConnectors([{ ...a, y: 100 }, b, link], metrics, new Set([uuid(9)])).find((node) => node.type === "arrow")).toBe(link);
   });
 });

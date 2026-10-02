@@ -13,7 +13,13 @@ import { applyField, supports, type Field } from "@/features/editor/property-fie
 
 const COLOURS = ["#1F2937", "#DC2626", "#EA580C", "#CA8A04", "#16A34A", "#0891B2", "#2563EB", "#7C3AED", "#DB2777", "#FFFFFF"];
 const WIDTHS = [1, 2, 3, 5, 8];
-type Popover = "stroke" | "fill" | "color" | "headerFill" | "width";
+type Popover = "stroke" | "fill" | "color" | "headerFill" | "width" | "route";
+const ROUTES = [
+  { value: "straight", label: "เส้นตรง", path: "M3 15L15 3" },
+  { value: "elbow", label: "เส้นหักฉาก", path: "M3 15H9V3H15" },
+  { value: "curved", label: "เส้นโค้ง", path: "M3 15C10 15 8 3 15 3" },
+] as const;
+const RouteIcon = ({ path }: { path: string }) => <svg aria-hidden width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={path} /></svg>;
 type Point = { x: number; y: number };
 
 const overlaps = (a: Bounds, b: Bounds) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
@@ -181,6 +187,15 @@ export function QuickProperties({ nodes, slideId, selection, viewport }: {
       onClick={() => commit("strokeStyle", value("strokeStyle") === "dashed" ? "solid" : "dashed")}>
       <span aria-hidden className="block w-4 border-t-2 border-dashed border-current" />
     </BarButton>}
+    {all("route") && (() => {
+      const current = ROUTES.find((route) => route.value === (value("route") || "straight")) ?? ROUTES[0];
+      return <div className="relative">
+        <BarButton label={`รูปแบบเส้นเชื่อม: ${current.label}`} active={popover === "route"} onClick={() => setPopover(popover === "route" ? null : "route")}><RouteIcon path={current.path} /></BarButton>
+        {pop("route", <div className="flex gap-1">{ROUTES.map((route) => <button key={route.value} type="button" aria-label={route.label} title={route.label} aria-pressed={route.value === current.value}
+          className={`grid h-8 w-8 place-items-center rounded-md text-slate-700 ${route.value === current.value ? "bg-slate-900 text-white" : "hover:bg-slate-100"}`}
+          onClick={() => { commit("route", route.value); setPopover(null); }}><RouteIcon path={route.path} /></button>)}</div>)}
+      </div>;
+    })()}
     {all("headerFill") && colourButton("headerFill", "headerFill", "สีหัวตาราง")}
     {all("color") && colourButton("color", "color", nodes.every((node) => node.type === "stencil") ? "สี" : "สีตัวอักษร")}
     {all("fontSize") && <>

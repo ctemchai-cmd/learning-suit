@@ -1,6 +1,7 @@
 import { isWidgetNode, widgetNodeSize, type Bounds, type CanvasNode, type Point, type TextNode } from "./model";
 import { tableLayout } from "./table";
 import { codeLayout } from "./code";
+import { connectorPath } from "./connector-route";
 
 export interface FontMetrics {
   measureText(node: TextNode): { width: number; height: number };
@@ -55,10 +56,14 @@ export function getNodeBounds(node: CanvasNode, metrics: FontMetrics = fallbackF
     const size = widgetNodeSize(node);
     const width = size.width * node.scale, height = size.height * node.scale;
     points = [{ x: 0, y: 0 }, { x: width, y: 0 }, { x: width, y: height }, { x: 0, y: height }];
+  } else if (node.type === "line" || node.type === "arrow") {
+    // Elbows and curves can leave the box of the two ends (a curve stays within its control points).
+    points = connectorPath(node).points;
+    pad = node.strokeWidth / 2;
+    if (node.type === "arrow") pad += Math.max(node.headLength, node.headWidth);
   } else {
     points = node.points;
     pad = node.strokeWidth / 2;
-    if (node.type === "arrow") pad += Math.max(node.headLength, node.headWidth);
   }
   return aabb(points.map((point) => rotateAndTranslate(point, node)), pad);
 }

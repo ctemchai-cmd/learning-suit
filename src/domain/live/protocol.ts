@@ -15,12 +15,16 @@ export type LiveMessage =
   | { kind: "applied"; epoch: string; seq: number; opId: string; author: string; transaction: DocumentTransaction }
   | { kind: "reject"; to: string; opId: string; reason: string }
   | { kind: "cursor"; from: string; slideId: string; x: number; y: number }
+  /** What someone has selected and is doing with it (others see it outlined in their colour). */
+  | { kind: "select"; from: string; slideId: string; ids: string[]; activity: "moving" | "editing" | null }
   | { kind: "slide"; slideId: string }
   | { kind: "asset-request"; from: string; assetId: string }
   | { kind: "asset"; to: string; assetId: string; mime: string; data: string | null }
   | { kind: "closed" }
   /** Teacher heartbeat: who is in charge and how far the numbering got (lets students notice missed changes). */
-  | { kind: "host-alive"; epoch: string; seq: number };
+  | { kind: "host-alive"; epoch: string; seq: number }
+  /** The part of the board the teacher is looking at (world centre and size): students follow it. */
+  | { kind: "view"; slideId: string; x: number; y: number; width: number; height: number };
 
 /** Largest change a student may send (one pen stroke with many points fits easily). */
 export const MAX_GUEST_TRANSACTION_BYTES = 512 * 1024;

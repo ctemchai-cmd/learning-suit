@@ -33,11 +33,26 @@ export type EllipseNode = NodeBase & StrokeStyle & {
   height: number;
   fill: string;
 };
-/** Side of an object a connector end is attached to (plan 03 §connectors); "auto" = the side facing the other end. */
-export type ConnectorAnchor = "n" | "e" | "s" | "w" | "auto";
-export type ConnectorBinding = { nodeId: string; anchor: ConnectorAnchor };
-/** `startBinding`/`endBinding`: the end follows that object (points are kept up to date with it). */
-type ConnectorEnds = { startBinding?: ConnectorBinding; endBinding?: ConnectorBinding };
+/**
+ * Where a connector end is attached (plan 03 §connectors): a side's middle, "auto" = the side facing the other end,
+ * or "fixed" = one of the object's connection points (`at`, 0–1 across its width/height).
+ */
+export type ConnectorAnchor = "n" | "e" | "s" | "w" | "auto" | "fixed";
+export type ConnectorSide = "n" | "e" | "s" | "w";
+export type ConnectorBinding = {
+  nodeId: string;
+  anchor: ConnectorAnchor;
+  at?: Point;
+  /** Direction the end leaves its object (kept up to date with the object): elbow/curved lines start that way. */
+  side?: ConnectorSide;
+};
+/** How a line/arrow is drawn between its ends: straight, right-angled (draw.io style) or curved. */
+export type ConnectorRoute = "straight" | "elbow" | "curved";
+/**
+ * `startBinding`/`endBinding`: the end follows that object (points are kept up to date with it).
+ * `bend`: an elbow's middle segment moved by hand (world units from halfway).
+ */
+type ConnectorEnds = { startBinding?: ConnectorBinding; endBinding?: ConnectorBinding; route?: ConnectorRoute; bend?: number };
 export type LineNode = NodeBase & StrokeStyle & ConnectorEnds & {
   type: "line";
   points: [Point, Point];

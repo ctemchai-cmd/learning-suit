@@ -690,20 +690,93 @@ test("CAN-27: connectors — drag a selected object's connection point onto anot
   // Move the second rectangle up (⌘ = no snapping): the arrow's end follows.
   const before = await arrowEnd();
   await page.keyboard.press("Escape");
-  await page.mouse.move(box.cx + 220, box.cy + 100);
+  await page.mouse.move(box.cx + 190, box.cy + 100); // inside, away from the connection points on the outline
   await page.mouse.down();
   await page.keyboard.down("ControlOrMeta");
-  await page.mouse.move(box.cx + 220, box.cy - 100, { steps: 6 });
+  await page.mouse.move(box.cx + 190, box.cy - 100, { steps: 6 });
   await page.mouse.up();
   await page.keyboard.up("ControlOrMeta");
   await expect.poll(async () => (await arrowEnd()).y).toBeLessThan(before.y - 150);
 
   // Delete the second rectangle: the arrow stays, its end detached.
   await page.keyboard.press("Escape");
-  await page.mouse.click(box.cx + 220, box.cy - 100);
+  await page.mouse.click(box.cx + 190, box.cy - 100);
   await page.keyboard.press("Delete");
   await expect.poll(async () => (await nodes()).length).toBe(2);
   expect((await nodes()).find((node) => node.type === "arrow")!.endBinding).toBeUndefined();
   await page.getByRole("button", { name: "เลิกทำ" }).click();
   await expect.poll(async () => (await nodes()).find((node) => node.type === "arrow")!.endBinding?.nodeId).toBe(second.id);
+});
+
+test("CAN-28: connection points (draw.io style) — drag from a point by the outline, snap onto a point of another object, arrows follow while dragging, elbow / curved / straight, move the elbow's middle", async ({ page }) => {
+  await createProject(page, "จุดเชื่อม");
+  const box = await stageBox(page);
+  await drawRect(page, box.cx - 300, box.cy - 40, box.cx - 180, box.cy + 40);
+  await drawRect(page, box.cx + 100, box.cy - 40, box.cx + 220, box.cy + 40);
+  await page.keyboard.press("Escape");
+  type Binding = { nodeId: string; anchor: string; at?: { x: number; y: number }; side?: string };
+  type Node = { id: string; type: string; x: number; y: number; route?: string; bend?: number; points?: { x: number; y: number }[]; startBinding?: Binding; endBinding?: Binding };
+  const nodes = async () => (await readDraft(page))!.content.document.slides[0].nodes as unknown as Node[];
+  const arrow = async () => (await nodes()).find((node) => node.type === "arrow");
+  const shownArrow = () => page.evaluate(() => {
+    const stage = (window as unknown as { Konva: { stages: { find: (selector: string) => { points: () => number[] }[] }[] } }).Konva.stages[0];
+    return stage.find("Arrow")[0]?.points() ?? [];
+  });
+
+  // A selected box shows its other connection points just outside the outline (corners/middles are handles).
+  await page.mouse.click(box.cx - 300, box.cy);
+  await expect(page.getByRole("button", { name: /^ลากลูกศรเชื่อมจากจุดเชื่อม/ })).toHaveCount(8);
+  // From the right side's lower quarter point to near the left side's upper quarter point of the other box.
+  const from = (await page.getByRole("button", { name: "ลากลูกศรเชื่อมจากจุดเชื่อม 8" }).boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.cx - 50, box.cy, { steps: 4 });
+  await page.mouse.move(box.cx + 103, box.cy - 18, { steps: 4 });
+  await expect(page.locator("svg circle[r='6']")).toHaveCount(1); // the snapped point lights up
+  await page.mouse.up();
+  await expect.poll(async () => (await arrow())?.endBinding).toMatchObject({ anchor: "fixed", at: { x: 0, y: 0.25 }, side: "w" });
+  const made = (await arrow())!;
+  expect(made.route).toBe("elbow");
+  expect(made.startBinding).toMatchObject({ anchor: "fixed", at: { x: 1, y: 0.75 }, side: "e" });
+
+  // Dragging the second box: the arrow follows before the release.
+  await page.keyboard.press("Escape");
+  const before = await shownArrow();
+  await page.mouse.move(box.cx + 190, box.cy + 10);
+  await page.mouse.down();
+  await page.keyboard.down("ControlOrMeta");
+  await page.mouse.move(box.cx + 190, box.cy + 130, { steps: 6 });
+  await expect.poll(async () => JSON.stringify(await shownArrow())).not.toBe(JSON.stringify(before));
+  await page.mouse.up();
+  await page.keyboard.up("ControlOrMeta");
+
+  // The elbow's middle segment moves sideways; double-click puts it back.
+  await page.keyboard.press("Escape");
+  await page.mouse.click(box.cx - 40, box.cy + 20);
+  const middle = page.getByRole("button", { name: "ลากเพื่อเลื่อนแนวเส้นหักฉาก" });
+  const handle = (await middle.boundingBox())!;
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2 + 40, handle.y + handle.height / 2, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(async () => (await arrow())?.bend).toBe(40);
+  await middle.dblclick();
+  await expect.poll(async () => (await arrow())?.bend).toBeUndefined();
+
+  // Curved, then straight (the default: no field).
+  const bar = page.getByRole("toolbar", { name: "ปรับค่าด่วน" });
+  await bar.getByRole("button", { name: /รูปแบบเส้นเชื่อม/ }).click();
+  await bar.getByRole("button", { name: "เส้นโค้ง" }).click();
+  await expect.poll(async () => (await arrow())?.route).toBe("curved");
+  await bar.getByRole("button", { name: /รูปแบบเส้นเชื่อม/ }).click();
+  await bar.getByRole("button", { name: "เส้นตรง" }).click();
+  await expect.poll(async () => (await arrow())?.route).toBeUndefined();
+
+  // Dragging the arrow's end onto another connection point re-attaches it there.
+  const end = (await page.getByRole("button", { name: "ขยับ จุดปลาย" }).boundingBox())!;
+  await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.cx + 163, box.cy + 165, { steps: 5 }); // near the bottom middle of the moved box (y 80…160)
+  await page.mouse.up();
+  await expect.poll(async () => (await arrow())?.endBinding).toMatchObject({ anchor: "fixed", at: { x: 0.5, y: 1 }, side: "s" });
 });

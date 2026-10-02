@@ -5,20 +5,28 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Check, Copy, Radio, Users, X } from "lucide-react";
 import { worldToScreen } from "@/domain/document/camera";
 import type { Camera } from "@/domain/document/session";
+import type { CanvasNode } from "@/domain/document/model";
+import { getNodeBounds } from "@/domain/document/geometry";
+import { konvaFontMetrics } from "@/features/canvas/font-metrics";
 import { useEditorStore } from "@/features/editor/store";
 import { liveStats } from "@/services/live/transport";
-import { closeRoom, newRoomId, savedRoomId, startHosting, stopLive } from "./live-session";
+import { closeRoom, followTeacher, lookAtCursor, newRoomId, savedRoomId, startHosting, stopLive } from "./live-session";
 import { useLiveStore } from "./live-store";
 
 const roomLink = (roomId: string) => `${window.location.origin}/live/${roomId}`;
 
-function ParticipantList() {
+/** People in the room; a name with a pointer on the board takes me there (“where is everyone drawing?”). */
+function ParticipantList({ onGo }: { onGo?: () => void }) {
   const participants = useLiveStore((state) => state.participants);
   const me = useLiveStore((state) => state.me);
+  const cursors = useLiveStore((state) => state.cursors);
   return <ul className="max-h-48 space-y-1 overflow-y-auto" aria-label="คนในห้อง">
     {participants.map((participant) => <li key={participant.id} className="flex items-center gap-2 text-sm">
       <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: participant.color }} />
-      <span className="truncate">{participant.name}</span>
+      {participant.id !== me?.id && cursors[participant.id]
+        ? <button type="button" className="truncate text-left underline decoration-dotted underline-offset-2 hover:text-sky-700" title={`ไปดูตรงที่${participant.name}อยู่บนกระดาน`}
+          onClick={() => { if (lookAtCursor(participant.id)) onGo?.(); }}>{participant.name}</button>
+        : <span className="truncate">{participant.name}</span>}
       {participant.role === "host" && <span className="rounded bg-slate-100 px-1.5 text-[10px] text-slate-600">ครู</span>}
       {participant.id === me?.id && <span className="text-xs muted">(ฉัน)</span>}
     </li>)}
@@ -77,7 +85,7 @@ export function LiveButton({ projectId, ownerId, writable }: { projectId: string
         <p className={`mt-3 text-xs ${status === "error" ? "text-red-700" : "muted"}`} role="status">
           {status === "live" ? `เชื่อมต่อแล้ว · ในห้อง ${count} คน` : status === "error" ? "เชื่อมต่อห้องไม่ได้ ตรวจอินเทอร์เน็ตหรือการตั้งค่า Realtime" : "กำลังเชื่อมต่อ…"}
         </p>
-        <div className="mt-3 rounded-xl border border-slate-200 p-3"><ParticipantList /></div>
+        <div className="mt-3 rounded-xl border border-slate-200 p-3"><ParticipantList onGo={() => setOpen(false)} /></div>
         <button type="button" className="app-button mt-5 w-full !border-red-200 !text-red-700"
           onClick={() => { closeRoom(projectId); setOpen(false); }}>ปิดห้อง (ลิงก์ใช้ไม่ได้อีก)</button>
       </>}
@@ -91,12 +99,39 @@ export function LiveGuestBadge() {
   const follow = useLiveStore((state) => state.follow);
   const [open, setOpen] = useState(false);
   return <div className="relative flex items-center gap-1">
-    <label className="flex cursor-pointer items-center gap-1.5 rounded-lg px-2 text-sm" title="เปลี่ยนสไลด์ตามครูอัตโนมัติ">
-      <input type="checkbox" checked={follow} onChange={(event) => useLiveStore.getState().set({ follow: event.target.checked })} />ตามครู
+    <label className="flex cursor-pointer items-center gap-1.5 rounded-lg px-2 text-sm" title="ดูสไลด์และตำแหน่งบนกระดานเดียวกับครู (เลื่อนจอเองจะเลิกตาม)">
+      <input type="checkbox" checked={follow} onChange={(event) => followTeacher(event.target.checked)} />ตามครู
     </label>
     <button type="button" className="app-button" aria-expanded={open} onClick={() => setOpen(!open)} title="คนในห้อง"><Users size={17} /> {count}</button>
-    {open && <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-3 shadow-xl"><ParticipantList /></div>}
+    {open && <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-3 shadow-xl"><ParticipantList onGo={() => setOpen(false)} /></div>}
   </div>;
+}
+
+/** What other people have selected on this slide: outlined in their colour, their name (and what they are doing) on top. */
+export function RemoteSelections({ slideId, nodes, camera }: { slideId: string; nodes: CanvasNode[]; camera: Camera }) {
+  const selections = useLiveStore((state) => state.selections);
+  const participants = useLiveStore((state) => state.participants);
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  return <svg aria-hidden className="pointer-events-none absolute inset-0 z-20 h-full w-full overflow-visible">
+    {Object.entries(selections).map(([id, selection]) => {
+      const person = participants.find((participant) => participant.id === id);
+      const picked = selection.slideId === slideId ? selection.ids.map((nodeId) => byId.get(nodeId)).filter((node): node is CanvasNode => Boolean(node)) : [];
+      if (!person || !picked.length) return null;
+      const boxes = picked.map((node) => {
+        const bounds = getNodeBounds(node, konvaFontMetrics);
+        const topLeft = worldToScreen({ x: bounds.x, y: bounds.y }, camera);
+        return { x: topLeft.x - 3, y: topLeft.y - 3, width: bounds.width * camera.zoom + 6, height: bounds.height * camera.zoom + 6 };
+      });
+      const left = Math.min(...boxes.map((box) => box.x)), top = Math.min(...boxes.map((box) => box.y));
+      const label = `${person.name}${selection.activity === "editing" ? " · กำลังพิมพ์…" : selection.activity === "moving" ? " · กำลังย้าย…" : ""}`;
+      return <g key={id} data-testid="remote-selection" data-person={person.name}>
+        {boxes.map((box, index) => <rect key={index} {...box} rx={4} fill="none" stroke={person.color} strokeWidth={2} strokeDasharray={selection.activity ? undefined : "6 3"} />)}
+        <foreignObject x={left} y={top - 22} width={260} height={20} className="overflow-visible">
+          <span className="inline-block whitespace-nowrap rounded-md px-1.5 py-0.5 text-[11px] font-medium leading-none text-white" style={{ background: person.color }}>{label}</span>
+        </foreignObject>
+      </g>;
+    })}
+  </svg>;
 }
 
 /** Other people's pointers on this slide (names next to them); stale ones fade out. */
