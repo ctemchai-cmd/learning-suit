@@ -41,7 +41,7 @@ import ShortcutHelp from "./shortcut-help";
 import ContextMenu, { type MenuEntry } from "./context-menu";
 import { EditorSkeleton } from "@/features/loading/skeletons";
 import ThemeToggle from "@/features/theme/theme-toggle";
-import { LiveButton, LiveGuestBadge } from "@/features/live/live-ui";
+import { LiveButton, LiveDebug, LiveGuestBadge } from "@/features/live/live-ui";
 import StencilPicker from "./stencil-picker";
 import type { StencilSpec } from "@/domain/document/stencils";
 import { codeLayout, DEFAULT_CODE } from "@/domain/document/code";
@@ -770,6 +770,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
         {!guest && <button className="app-button" disabled={!writable} title="บันทึกบทเรียน (⌘S)" onClick={() => void save()}><Save size={17} /><span className="hidden lg:inline">บันทึกบทเรียน</span></button>}
         {!guest && <LiveButton projectId={projectId} ownerId={ownerId} writable={writable} />}
         {guest && <LiveGuestBadge />}
+        <LiveDebug />
         {!guest && <button className="app-button" disabled={!content} onClick={() => openExport()} title="ส่งออก PNG / PDF / ไฟล์โปรเจกต์"><Download size={17} /><span className="hidden lg:inline">Export</span></button>}
         <button className={`app-button ${teachingMode ? "!border-slate-900 !bg-slate-900 !text-white" : ""}`} aria-pressed={teachingMode} title="โหมดสอน: ซ่อนแผงข้างเพื่อพื้นที่วาด" onClick={() => { setOverlayPanel(false); setTeachingMode(!teachingMode); }}><GraduationCap size={17} /><span className="hidden xl:inline">{teachingMode ? "ออกจากโหมดสอน" : "โหมดสอน"}</span></button>
         <button className="app-button icon-button" aria-label="เต็มจอ" title="เต็มจอ (กด Esc เพื่อออก)" onClick={() => { if (document.fullscreenElement) void document.exitFullscreen(); else void document.documentElement.requestFullscreen().catch(() => undefined); }}><Expand size={17} /></button>

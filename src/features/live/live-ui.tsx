@@ -6,6 +6,7 @@ import { Check, Copy, Radio, Users, X } from "lucide-react";
 import { worldToScreen } from "@/domain/document/camera";
 import type { Camera } from "@/domain/document/session";
 import { useEditorStore } from "@/features/editor/store";
+import { liveStats } from "@/services/live/transport";
 import { closeRoom, newRoomId, savedRoomId, startHosting, stopLive } from "./live-session";
 import { useLiveStore } from "./live-store";
 
@@ -113,4 +114,32 @@ export function RemoteCursors({ slideId, camera }: { slideId: string; camera: Ca
       <span className="ml-3 block whitespace-nowrap rounded-md px-1.5 py-0.5 text-[11px] font-medium text-white" style={{ background: person.color }}>{person.name}</span>
     </div>;
   })}</>;
+}
+
+/** `?debug=live`: what the room sent and received, and what the server refused (for diagnosing a room that does not sync). */
+export function LiveDebug() {
+  const role = useLiveStore((state) => state.role);
+  const status = useLiveStore((state) => state.status);
+  const participants = useLiveStore((state) => state.participants);
+  const [enabled] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "live");
+  const [stats, setStats] = useState<{ channel: string; sent: string; received: string; errors: string[]; session: string } | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    const counts = (table: Record<string, number>) => Object.entries(table).map(([kind, value]) => `${kind} ${value}`).join(" · ") || "-";
+    const read = () => setStats({
+      channel: liveStats.channel, sent: counts(liveStats.sent), received: counts(liveStats.received), errors: [...liveStats.errors],
+      session: Object.entries(liveStats.session()).map(([key, value]) => `${key}=${String(value)}`).join(" "),
+    });
+    const timer = setInterval(read, 1000);
+    return () => clearInterval(timer);
+  }, [enabled]);
+  if (!enabled || !role || !stats) return null;
+  return <div data-board-chrome className="fixed bottom-3 left-3 z-[60] max-w-[min(26rem,calc(100vw-1.5rem))] rounded-lg bg-slate-900/90 p-3 font-mono text-[11px] leading-relaxed text-slate-100 shadow-xl" aria-label="ข้อมูลวินิจฉัยห้องวาดร่วม">
+    <div>บทบาท {role} · สถานะ {status} · ช่อง {stats.channel}</div>
+    <div>คนในห้อง {participants.map((participant) => `${participant.name}${participant.role === "host" ? "(ครู)" : ""}`).join(", ")}</div>
+    <div>{stats.session}</div>
+    <div>ส่ง: {stats.sent}</div>
+    <div>รับ: {stats.received}</div>
+    {stats.errors.length > 0 && <div className="mt-1 text-rose-300">{stats.errors.map((error, index) => <div key={index}>{error}</div>)}</div>}
+  </div>;
 }

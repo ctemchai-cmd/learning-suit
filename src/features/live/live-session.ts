@@ -5,7 +5,7 @@ import type { ProjectContent } from "@/domain/document/model";
 import { GuestReplica, guestPermission, participantColor, type Participant } from "@/domain/live/protocol";
 import { inverseTransaction } from "@/domain/live/selective-undo";
 import { getLocalAsset } from "@/services/persistence/local-db";
-import { openLiveTransport, type LiveTransport } from "@/services/live/transport";
+import { liveStats, openLiveTransport, type LiveTransport } from "@/services/live/transport";
 import { setLiveHooks, useEditorStore } from "@/features/editor/store";
 import { useLiveStore } from "./live-store";
 
@@ -146,9 +146,12 @@ export function startHosting(roomId: string, name: string, ownerId: string, proj
       }
     }),
   ];
+  // Heartbeat: students know the teacher is here and notice missed changes (they ask for a fresh copy).
+  const heartbeat = setInterval(() => transport.send({ kind: "host-alive", epoch, seq }), 4000);
+  liveStats.session = () => ({ epoch: epoch.slice(0, 8), seq });
   active = {
     transport,
-    stop: () => { unsubscribers.forEach((unsubscribe) => unsubscribe()); transport.close(); },
+    stop: () => { clearInterval(heartbeat); unsubscribers.forEach((unsubscribe) => unsubscribe()); transport.close(); },
   };
 }
 
@@ -169,14 +172,30 @@ export function joinRoom(roomId: string, name: string) {
   let hostPresent = false;
   const stacks = undoStacks(setUndoState);
   const assetWaiters = new Map<string, ((blob: Blob | null) => void)[]>();
-  const hello = () => transport.send({ kind: "hello", from: me.id, name });
+  // At most one request for a fresh copy every 3 s (a large lesson takes a moment to arrive).
+  let lastHello = 0;
+  const hello = () => { const now = Date.now(); if (now - lastHello < 3000) return; lastHello = now; transport.send({ kind: "hello", from: me.id, name }); };
   useLiveStore.getState().set({ role: "guest", roomId, status: "connecting", me, participants: [me], cursors: {} });
 
   const show = () => { if (replica) useEditorStore.getState().replaceLiveContent(replica.content); };
+  // The teacher counts as here when presence lists them OR a teacher message arrived recently (presence can lag).
+  let hostInPresence = false;
+  let lastHostSignal = 0;
+  const refreshHost = () => {
+    if (useLiveStore.getState().status === "closed") return;
+    const present = hostInPresence || Date.now() - lastHostSignal < 12_000;
+    if (present === hostPresent) return;
+    hostPresent = present;
+    if (present) hello(); // a returning teacher sends a fresh copy
+    if (replica) useLiveStore.getState().set({ status: present ? "live" : "waiting-host" });
+    useEditorStore.setState({ writable: present && Boolean(replica) });
+  };
+  const hostTimer = setInterval(refreshHost, 3000);
+  liveStats.session = () => ({ epoch: epoch?.slice(0, 8) ?? "-", seq: replica?.seq ?? "-", pending: replica?.pending.length ?? "-", hostPresent, hostInPresence, lastHostSignal: lastHostSignal ? `${Math.round((Date.now() - lastHostSignal) / 1000)} วิ` : "-" });
   const sendPending = () => replica?.pending.forEach((item) => transport.send({ kind: "op", from: me.id, opId: item.opId, transaction: item.transaction }));
   const guestTransact = (transaction: DocumentTransaction): boolean => {
     const store = useEditorStore.getState();
-    if (!replica || !hostPresent) { store.setNotice("ยังแก้ไม่ได้: รอครูเชื่อมต่อ"); return false; }
+    if (!replica) { store.setNotice("ยังแก้ไม่ได้: รอครูเชื่อมต่อ"); return false; }
     const refusal = guestPermission(transaction);
     if (refusal) { store.setNotice(refusal); return false; }
     const before = replica.content;
@@ -198,19 +217,23 @@ export function joinRoom(roomId: string, name: string) {
 
   const unsubscribers = [
     transport.onStatus((status) => {
-      if (status === "open") hello();
+      if (status === "open") { lastHello = 0; hello(); }
       else useLiveStore.getState().set({ status: "error" });
     }),
     presenceTracker(transport, (participants) => {
-      const present = participants.some((participant) => participant.role === "host");
-      if (present === hostPresent || useLiveStore.getState().status === "closed") return;
-      hostPresent = present;
-      if (present) hello(); // a returning teacher sends a fresh copy
-      if (replica) useLiveStore.getState().set({ status: present ? "live" : "waiting-host" });
-      useEditorStore.setState({ writable: present && Boolean(replica) });
+      hostInPresence = participants.some((participant) => participant.role === "host");
+      refreshHost();
     }),
     transport.onMessage((message) => {
+      if (message.kind === "snapshot" || message.kind === "applied" || message.kind === "slide" || message.kind === "host-alive") {
+        lastHostSignal = Date.now();
+        if (!hostPresent) refreshHost();
+      }
       switch (message.kind) {
+        case "host-alive":
+          // A different teacher session, or changes I never received: ask for a fresh copy.
+          if (replica && (message.epoch !== epoch || message.seq > replica.seq)) hello();
+          return;
         case "snapshot": {
           if (message.to !== me.id) return;
           const first = !replica;
@@ -271,7 +294,7 @@ export function joinRoom(roomId: string, name: string) {
 
   active = {
     transport,
-    stop: () => { clearTimeout(timeout); unsubscribers.forEach((unsubscribe) => unsubscribe()); transport.close(); },
+    stop: () => { clearTimeout(timeout); clearInterval(hostTimer); unsubscribers.forEach((unsubscribe) => unsubscribe()); transport.close(); },
   };
   return {
     /** Images of the lesson come from the teacher's machine. */

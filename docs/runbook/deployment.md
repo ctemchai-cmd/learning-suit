@@ -83,6 +83,7 @@ Production build ที่ตั้ง Supabase env (ค่า placeholder) + `n
 - Supabase Dashboard → Project Settings → Realtime: ถ้าเปิด “Private channels only” ไว้ ให้ปิด (ห้องใช้ public channel ชื่อ `live:<roomId>` ที่เดาไม่ได้)
 - ตรวจโควตา Realtime ของแพ็กเกจ (การเชื่อมต่อพร้อมกัน / ข้อความต่อเดือน) ให้พอกับจำนวนผู้เรียน
 - Smoke: ครูเปิดบทเรียน → วาดร่วม → เปิดห้อง → เปิดลิงก์ในอีก browser (หน้าต่างไม่ระบุตัวตน) ใส่ชื่อ → วาดสองฝั่ง → ปิดห้อง
+- วาดแล้วอีกฝั่งไม่เห็น: เปิดทั้งสองฝั่งด้วย `?debug=live` ต่อท้ายลิงก์ ดูว่า “ช่อง” เป็น `SUBSCRIBED` หรือไม่, ตัวนับ ส่ง/รับ ของ `op`/`applied` ขยับไหม และมีข้อผิดพลาดสีแดงจาก server หรือไม่
 
 ## 4. Preview smoke (DEP-03)
 

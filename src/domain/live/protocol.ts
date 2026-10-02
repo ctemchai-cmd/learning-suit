@@ -18,7 +18,9 @@ export type LiveMessage =
   | { kind: "slide"; slideId: string }
   | { kind: "asset-request"; from: string; assetId: string }
   | { kind: "asset"; to: string; assetId: string; mime: string; data: string | null }
-  | { kind: "closed" };
+  | { kind: "closed" }
+  /** Teacher heartbeat: who is in charge and how far the numbering got (lets students notice missed changes). */
+  | { kind: "host-alive"; epoch: string; seq: number };
 
 /** Largest change a student may send (one pen stroke with many points fits easily). */
 export const MAX_GUEST_TRANSACTION_BYTES = 512 * 1024;

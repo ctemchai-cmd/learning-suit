@@ -9,6 +9,12 @@ import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 // a BroadcastChannel between tabs of the same browser in the local development mode (and the e2e tests).
 // Large messages (the lesson for a newcomer, an image) travel in chunks.
 
+/** Counters for `?debug=live` (what was sent/received, what the server refused). */
+export type LiveStats = { sent: Record<string, number>; received: Record<string, number>; errors: string[]; channel: string; session: () => Record<string, string | number | boolean> };
+export const liveStats: LiveStats = { sent: {}, received: {}, errors: [], channel: "-", session: () => ({}) };
+const count = (table: Record<string, number>, kind: string) => { table[kind] = (table[kind] ?? 0) + 1; };
+const noteError = (text: string) => { liveStats.errors.push(`${new Date().toLocaleTimeString()} ${text}`); if (liveStats.errors.length > 8) liveStats.errors.shift(); };
+
 export interface LiveTransport {
   send(message: LiveMessage): void;
   onMessage(handler: (message: LiveMessage) => void): () => void;
@@ -27,6 +33,7 @@ function chunker(emit: (wire: Wire) => void) {
   const parts = new Map<string, { n: number; got: string[]; count: number; at: number }>();
   return {
     send(message: LiveMessage) {
+      count(liveStats.sent, message.kind);
       const json = JSON.stringify(message);
       if (json.length <= CHUNK) { emit({ m: message }); return; }
       const id = crypto.randomUUID();
@@ -34,7 +41,7 @@ function chunker(emit: (wire: Wire) => void) {
       for (let i = 0; i < n; i++) emit({ c: { id, i, n, d: json.slice(i * CHUNK, (i + 1) * CHUNK) } });
     },
     receive(wire: Wire): LiveMessage | null {
-      if ("m" in wire) return wire.m;
+      if ("m" in wire) { count(liveStats.received, wire.m.kind); return wire.m; }
       const { id, i, n, d } = wire.c;
       const now = Date.now();
       for (const [key, entry] of parts) if (now - entry.at > 60_000) parts.delete(key);
@@ -43,7 +50,7 @@ function chunker(emit: (wire: Wire) => void) {
       parts.set(id, entry);
       if (entry.count < entry.n) return null;
       parts.delete(id);
-      try { return JSON.parse(entry.got.join("")) as LiveMessage; } catch { return null; }
+      try { const message = JSON.parse(entry.got.join("")) as LiveMessage; count(liveStats.received, message.kind); return message; } catch { noteError("รวมข้อความไม่สำเร็จ"); return null; }
     },
   };
 }
@@ -56,32 +63,72 @@ class Listeners<T> {
 
 function supabaseTransport(roomId: string, me: Participant): LiveTransport {
   const client = getSupabaseBrowserClient();
+  const topic = `live:${roomId}`;
   const messages = new Listeners<LiveMessage>(), presence = new Listeners<Participant[]>(), status = new Listeners<"open" | "error">();
-  const channel: RealtimeChannel = client.channel(`live:${roomId}`, { config: { broadcast: { self: false, ack: false }, presence: { key: me.id } } });
-  const chunks = chunker((wire) => { void channel.send({ type: "broadcast", event: "w", payload: wire }); });
-  channel.on("broadcast", { event: "w" }, ({ payload }) => {
-    const message = chunks.receive(payload as Wire);
-    if (message) messages.emit(message);
-  });
-  channel.on("presence", { event: "sync" }, () => {
-    const state = channel.presenceState<Participant>();
-    presence.emit(Object.values(state).flatMap((entries) => entries.slice(0, 1).map(({ id, name, role, color }) => ({ id, name, role, color }))));
-  });
-  channel.subscribe((state) => {
-    if (state === "SUBSCRIBED") { void channel.track(me); status.emit("open"); }
-    else if (state === "CHANNEL_ERROR" || state === "TIMED_OUT") status.emit("error");
-  });
+  let channel: RealtimeChannel | null = null;
+  let joined = false, everOpened = false, closed = false;
+  let retry: ReturnType<typeof setTimeout> | null = null;
+  const queue: Wire[] = [];
+  const push = (target: RealtimeChannel, wire: Wire) => {
+    void target.send({ type: "broadcast", event: "w", payload: wire }).then((result) => { if (result !== "ok") noteError(`ส่งไม่สำเร็จ: ${result}`); }, (error) => noteError(`ส่งไม่สำเร็จ: ${String(error)}`));
+  };
+  // Until the room is joined, messages wait (a send before that would go out without us being able to hear replies).
+  const chunks = chunker((wire) => { if (channel && joined) push(channel, wire); else queue.push(wire); });
+
+  const connect = async () => {
+    // Supabase hands back an existing channel with the same name — e.g. one still closing after the teacher left
+    // and came back — and that one never hears anything again. Finish removing it first.
+    channel = null;
+    joined = false;
+    for (const old of client.getChannels().filter((item) => item.topic === `realtime:${topic}`)) await client.removeChannel(old).catch(() => "error");
+    if (closed) return;
+    // ack: the server confirms each message, so refusals (limits, permissions) show up in `?debug=live`.
+    const current = client.channel(topic, { config: { broadcast: { self: false, ack: true }, presence: { key: me.id } } });
+    channel = current;
+    current.on("broadcast", { event: "w" }, ({ payload }) => {
+      const message = chunks.receive(payload as Wire);
+      if (message) messages.emit(message);
+    });
+    current.on("presence", { event: "sync" }, () => {
+      const state = current.presenceState<Participant>();
+      presence.emit(Object.values(state).flatMap((entries) => entries.slice(0, 1).map(({ id, name, role, color }) => ({ id, name, role, color }))));
+    });
+    current.subscribe((state, error) => {
+      if (channel !== current || closed) return;
+      liveStats.channel = state;
+      if (state === "SUBSCRIBED") {
+        joined = true;
+        everOpened = true;
+        void current.track(me).then((result) => { if (result !== "ok") noteError(`presence: ${result}`); });
+        queue.splice(0).forEach((wire) => push(current, wire));
+        status.emit("open");
+        return;
+      }
+      joined = false;
+      noteError(`ช่อง ${state}${error ? `: ${error.message}` : ""}`);
+      // Lost the room (network, expired sign-in…): join again; only a room never reached counts as an error.
+      if (!everOpened && state !== "CLOSED") status.emit("error");
+      if (!retry) retry = setTimeout(() => { retry = null; if (!closed) void connect(); }, 3000);
+    });
+  };
+  void connect();
+
   return {
     send: (message) => chunks.send(message),
     onMessage: (handler) => messages.add(handler),
     onPresence: (handler) => presence.add(handler),
     onStatus: (handler) => status.add(handler),
-    close: () => { void channel.untrack(); void client.removeChannel(channel); },
+    close: () => {
+      closed = true;
+      if (retry) clearTimeout(retry);
+      if (channel) { const last = channel; void last.untrack().finally(() => client.removeChannel(last)); }
+    },
   };
 }
 
 /** Same protocol between tabs of one browser (local mode): presence by heartbeat. */
 function localTransport(roomId: string, me: Participant): LiveTransport {
+  liveStats.channel = "local";
   const raw = new BroadcastChannel(`learning-suit-live:${roomId}`);
   let closed = false;
   const channel = { postMessage: (data: unknown) => { if (!closed) raw.postMessage(data); } };
