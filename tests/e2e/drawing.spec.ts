@@ -608,7 +608,7 @@ test("CAN-25: an interrupted move or resize (window loses focus, the board chang
   await expect.poll(async () => (await rect()).width - before.width).toBeGreaterThan(40);
 });
 
-test("CAN-26: quick properties — selecting shows a bar next to the selection (not on it); colours, fill, width, dash, text size/bold, lock and delete; the bar can be pinned by dragging", async ({ page }) => {
+test("CAN-26: quick properties — selecting shows a bar next to the selection (not on it); colours, fill, width, dash, text size/bold, lock and delete; a dragged bar stays for that selection only", async ({ page }) => {
   await createProject(page, "ปรับไว");
   const box = await stageBox(page);
   await drawRect(page, box.cx - 80, box.cy - 40, box.cx + 80, box.cy + 40);
@@ -627,7 +627,7 @@ test("CAN-26: quick properties — selecting shows a bar next to the selection (
   await bar.getByRole("button", { name: /^เส้นทึบ/ }).click();
   await expect.poll(async () => (await nodes())[0]).toMatchObject({ stroke: "#DC2626", fill: "#CA8A04", strokeWidth: 5, strokeStyle: "dashed" });
 
-  // Pinning: drag the grip; the bar stays there for the next selection too.
+  // Dragged by its grip it stays there while the selection lasts (a property change keeps it) …
   const grip = bar.getByRole("button", { name: "ย้ายแถบปรับค่า" });
   const gripBox = (await grip.boundingBox())!;
   await page.mouse.move(gripBox.x + 5, gripBox.y + 10);
@@ -635,13 +635,20 @@ test("CAN-26: quick properties — selecting shows a bar next to the selection (
   await page.mouse.move(box.x + 300, box.y + box.height - 120, { steps: 5 });
   await page.mouse.up();
   const pinned = (await bar.boundingBox())!;
+  await bar.getByRole("button", { name: /^เส้นประ/ }).click();
+  expect(Math.round((await bar.boundingBox())!.x)).toBe(Math.round(pinned.x));
+  // … and a new selection starts next to the object again.
+  await page.keyboard.press("Escape");
+  await page.mouse.click(box.cx - 80, box.cy);
+  const again = (await bar.boundingBox())!;
+  expect(again.y + again.height).toBeLessThan(box.cy - 40);
 
   await page.keyboard.press("t");
   await page.mouse.click(box.cx - 200, box.cy + 150);
   await page.getByRole("textbox", { name: "แก้ข้อความบนกระดาน" }).fill("หัวข้อ");
   await page.keyboard.press("ControlOrMeta+Enter");
   await expect(bar.getByRole("button", { name: "ตัวหนา (⌘B)" })).toBeVisible();
-  expect(Math.round((await bar.boundingBox())!.x)).toBe(Math.round(pinned.x));
+  expect(Math.round((await bar.boundingBox())!.x)).not.toBe(Math.round(pinned.x));
   const text = async () => (await nodes()).find((node) => node.type === "text")!;
   const size = Number((await text()).fontSize);
   await bar.getByRole("button", { name: "ตัวอักษรใหญ่ขึ้น" }).click();

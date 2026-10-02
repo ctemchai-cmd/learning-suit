@@ -8,24 +8,14 @@ import { applyField, supports, type Field } from "@/features/editor/property-fie
 
 // Quick properties (plan 03 §quick properties): a small bar like the favorites toolbar that appears with a
 // selection — colours, width, line style, text size/bold, then Lock and Delete. It sits above the selection
-// (below when there is no room), never on it; dragged by its grip it stays where the teacher put it
-// (device preference), a double-click on the grip lets it follow the selection again.
+// (below when there is no room), never on it; dragged by its grip it stays there for THIS selection only —
+// a new selection starts at the automatic place again (the canvas keys the bar by the selected IDs).
 
-const POSITION_KEY = "learning-suit-quick-properties-v1";
 const COLOURS = ["#1F2937", "#DC2626", "#EA580C", "#CA8A04", "#16A34A", "#0891B2", "#2563EB", "#7C3AED", "#DB2777", "#FFFFFF"];
 const WIDTHS = [1, 2, 3, 5, 8];
 type Popover = "stroke" | "fill" | "color" | "headerFill" | "width";
 type Point = { x: number; y: number };
 
-const readPinned = (): Point | null => {
-  try {
-    const value = JSON.parse(localStorage.getItem(POSITION_KEY) ?? "null") as Point | null;
-    return value && Number.isFinite(value.x) && Number.isFinite(value.y) ? value : null;
-  } catch { return null; }
-};
-const writePinned = (point: Point | null) => {
-  try { if (point) localStorage.setItem(POSITION_KEY, JSON.stringify(point)); else localStorage.removeItem(POSITION_KEY); } catch { /* private mode */ }
-};
 const overlaps = (a: Bounds, b: Bounds) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
 function Swatch({ colour }: { colour: string }) {
@@ -64,7 +54,7 @@ export function QuickProperties({ nodes, slideId, selection, viewport }: {
   viewport: { width: number; height: number };
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [pinned, setPinned] = useState<Point | null>(readPinned);
+  const [pinned, setPinned] = useState<Point | null>(null);
   const [auto, setAuto] = useState<Point | null>(null);
   const [popover, setPopover] = useState<Popover | null>(null);
   const drag = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
@@ -159,7 +149,6 @@ export function QuickProperties({ nodes, slideId, selection, viewport }: {
     drag.current = null;
     setDragged(null);
     setPinned(point);
-    writePinned(point);
   };
 
   const position = dragged ?? pinned ?? auto;
@@ -174,9 +163,9 @@ export function QuickProperties({ nodes, slideId, selection, viewport }: {
     style={{ left: position?.x ?? -9999, top: position?.y ?? -9999, visibility: position ? "visible" : "hidden" }}
     onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
     <button type="button" className="flex h-8 w-5 cursor-grab items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 active:cursor-grabbing"
-      title={pinned ? "ลากเพื่อย้าย · ดับเบิลคลิกให้กลับไปอยู่เหนือวัตถุอัตโนมัติ" : "ลากเพื่อย้ายแถบปรับค่า"} aria-label="ย้ายแถบปรับค่า"
+      title={pinned ? "ลากเพื่อย้าย · ดับเบิลคลิกให้กลับไปอยู่ใกล้วัตถุ" : "ลากเพื่อย้ายแถบปรับค่า (เลือกใหม่จะกลับมาอยู่ใกล้วัตถุ)"} aria-label="ย้ายแถบปรับค่า"
       onPointerDown={startDrag} onPointerMove={(event) => { const point = place(event); if (point) setDragged(point); }} onPointerUp={endDrag} onPointerCancel={endDrag}
-      onDoubleClick={() => { setPinned(null); writePinned(null); }}><GripVertical size={14} /></button>
+      onDoubleClick={() => setPinned(null)}><GripVertical size={14} /></button>
     {all("stroke") && colourButton("stroke", "stroke", "สีเส้น")}
     {all("fill") && colourButton("fill", "fill", "สีพื้น", true)}
     {all("strokeWidth") && <div className="relative">

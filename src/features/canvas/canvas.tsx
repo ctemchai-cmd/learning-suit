@@ -879,7 +879,8 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       const stored = slide.nodes.filter((node) => selectedIds.includes(node.id) && !node.locked);
       if (!box || !stored.length) return null;
       const topLeft = worldToScreen({ x: box.x, y: box.y }, camera);
-      return <QuickProperties nodes={stored} slideId={slide.id} viewport={size}
+      // Keyed by the selection: a new selection starts at the automatic place again.
+      return <QuickProperties key={stored.map((node) => node.id).sort().join(",")} nodes={stored} slideId={slide.id} viewport={size}
         selection={{ x: topLeft.x, y: topLeft.y, width: box.width * camera.zoom, height: box.height * camera.zoom }} />;
     })()}
     {tableEdit?.slideId === slide.id && (() => {
