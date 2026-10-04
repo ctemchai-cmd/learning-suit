@@ -27,7 +27,7 @@ import { CodeEditorOverlay } from "./code-editor";
 import { QuickProperties } from "./quick-properties";
 import { ConnectorHandles, dropTarget, TargetPoints } from "./connector-handles";
 import { draggedEnd, ElbowHandle } from "./elbow-handle";
-import { CONNECTABLE, withLiveConnectors } from "@/domain/document/connectors";
+import { bindingAt, CONNECTABLE, withLiveConnectors } from "@/domain/document/connectors";
 import { RemoteCursors, RemoteSelections } from "@/features/live/live-ui";
 import { sendCursor } from "@/features/live/live-session";
 import { useLiveStore } from "@/features/live/live-store";
@@ -458,7 +458,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     const result = { ...next };
     // On a connection point: attached exactly there; elsewhere on the object: the side facing the other end.
     const { target, at } = dropTarget(slide.nodes, end.world, camera.zoom, end.otherBinding);
-    if (target) result[end.key] = at ? { nodeId: target.id, anchor: "fixed", at } : { nodeId: target.id, anchor: "auto" };
+    if (target) result[end.key] = at ? bindingAt(target.id, at) : { nodeId: target.id, anchor: "auto" };
     else delete result[end.key];
     return result;
   };

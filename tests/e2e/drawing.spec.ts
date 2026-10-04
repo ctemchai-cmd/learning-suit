@@ -723,11 +723,11 @@ test("CAN-28: connection points (draw.io style) — drag from a point by the out
     return stage.find("Arrow")[0]?.points() ?? [];
   });
 
-  // A selected box shows its other connection points just outside the outline (corners/middles are handles).
+  // A selected box shows its connection points just outside the outline: three per side, all alike.
   await page.mouse.click(box.cx - 300, box.cy);
-  await expect(page.getByRole("button", { name: /^ลากลูกศรเชื่อมจากจุดเชื่อม/ })).toHaveCount(8);
+  await expect(page.getByRole("button", { name: /^ลากลูกศรเชื่อมจาก/ })).toHaveCount(12);
   // From the right side's lower quarter point to near the left side's upper quarter point of the other box.
-  const from = (await page.getByRole("button", { name: "ลากลูกศรเชื่อมจากจุดเชื่อม 8" }).boundingBox())!;
+  const from = (await page.getByRole("button", { name: "ลากลูกศรเชื่อมจากจุดเชื่อม 6" }).boundingBox())!;
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
   await page.mouse.move(box.cx - 50, box.cy, { steps: 4 });
@@ -779,4 +779,44 @@ test("CAN-28: connection points (draw.io style) — drag from a point by the out
   await page.mouse.move(box.cx + 163, box.cy + 165, { steps: 5 }); // near the bottom middle of the moved box (y 80…160)
   await page.mouse.up();
   await expect.poll(async () => (await arrow())?.endBinding).toMatchObject({ anchor: "fixed", at: { x: 0.5, y: 1 }, side: "s" });
+});
+
+test("CAN-29: every line of a class box has its own connection points; an arrow from a line stays on that line when the box grows", async ({ page }) => {
+  await createProject(page, "คลาสเชื่อม");
+  const box = await stageBox(page);
+  await drawRect(page, box.cx + 200, box.cy - 40, box.cx + 320, box.cy + 40);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("i");
+  await page.getByRole("dialog", { name: "ภาพประกอบ" }).getByRole("button", { name: "กล่องคลาส / ตารางฐานข้อมูล" }).click();
+  await page.keyboard.press("Escape");
+  type Node = { type: string; x: number; y: number; rows?: unknown[]; points?: { x: number; y: number }[]; startBinding?: { row?: number; anchor: string } };
+  const nodes = async () => (await readDraft(page))!.content.document.slides[0].nodes as unknown as Node[];
+  const rows = (await nodes()).find((node) => node.type === "table")!.rows!.length;
+  // One point at each end of every line.
+  await expect(page.getByRole("button", { name: /^ลากลูกศรเชื่อมจากแถว \d+ ด้าน(ซ้าย|ขวา)$/ })).toHaveCount(rows * 2);
+
+  const from = (await page.getByRole("button", { name: "ลากลูกศรเชื่อมจากแถว 3 ด้านขวา" }).boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.cx + 150, box.cy, { steps: 4 });
+  await page.mouse.move(box.cx + 240, box.cy, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(async () => (await nodes()).find((node) => node.type === "arrow")?.startBinding).toMatchObject({ anchor: "fixed", row: 2 });
+  const startY = async () => { const arrow = (await nodes()).find((node) => node.type === "arrow")!; return arrow.y + arrow.points![0].y; };
+  const before = await startY();
+
+  // Bigger text: the lines grow, the arrow moves down with its line.
+  await page.keyboard.press("Escape");
+  await page.mouse.click(from.x - 20, from.y + from.height / 2);
+  const bar = page.getByRole("toolbar", { name: "ปรับค่าด่วน" });
+  await bar.getByRole("button", { name: "ตัวอักษรใหญ่ขึ้น" }).click();
+  await bar.getByRole("button", { name: "ตัวอักษรใหญ่ขึ้น" }).click();
+  await expect.poll(startY).toBeGreaterThan(before + 5);
+  expect((await nodes()).find((node) => node.type === "arrow")!.startBinding!.row).toBe(2);
+
+  // A line added above it: the arrow stays with its line (now the fourth).
+  const second = (await page.getByRole("button", { name: "ลากลูกศรเชื่อมจากแถว 2 ด้านขวา" }).boundingBox())!;
+  await page.mouse.click(second.x - 60, second.y + second.height / 2, { button: "right" });
+  await page.getByRole("menuitem", { name: "เพิ่มบรรทัดด้านล่าง" }).click();
+  await expect.poll(async () => (await nodes()).find((node) => node.type === "arrow")!.startBinding!.row).toBe(3);
 });

@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { applyDocumentCommand, type DocumentTransaction } from "./commands";
-import { anchorPoint, connectableAt, connectionPoint, connectionPoints, nearestAnchor, nearestConnectionPoint, sideOf, withConnectorUpdates, withLiveConnectors } from "./connectors";
+import { anchorPoint, bindingAt, connectableAt, connectionPoint, connectionPoints, nearestAnchor, nearestConnectionPoint, sideOf, withConnectorUpdates, withLiveConnectors } from "./connectors";
 import { connectorPath, elbowLayout } from "./connector-route";
 import { getNodeBounds } from "./geometry";
 import { remapBindings } from "./copy";
 import { fallbackFontMetrics as metrics } from "./geometry";
-import { createProjectContent, type ArrowNode, type CanvasNode, type ProjectContent, type RectNode } from "./model";
+import { createProjectContent, type ArrowNode, type CanvasNode, type ProjectContent, type RectNode, type TableNode } from "./model";
+import { tableLayout } from "./table";
 import { parseProjectContent } from "./schema";
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -90,12 +91,12 @@ describe("CON-01: connectors follow the objects they are attached to", () => {
 });
 
 describe("CON-02: connection points and elbow / curved routes", () => {
-  it("offers corner and quarter points on boxes (12 round an ellipse) and attaches to the one near a point", () => {
+  it("offers three points per side on boxes (12 round an ellipse) and attaches to the one near a point", () => {
     const box = rect(1, 0, 0);
-    expect(connectionPoints(box)).toHaveLength(16);
-    expect(connectionPoints({ ...box, type: "ellipse" } as CanvasNode)).toHaveLength(12);
+    expect(connectionPoints(box, metrics)).toHaveLength(12);
+    expect(connectionPoints({ ...box, type: "ellipse" } as CanvasNode, metrics)).toHaveLength(12);
     expect(connectionPoint(box, { x: 0.25, y: 1 }, metrics)).toEqual({ x: 25, y: 50 });
-    expect(connectionPoint(box, { x: 1, y: 0 }, metrics, 6).x).toBeCloseTo(104.243, 2); // a corner pushes out diagonally
+    expect(connectionPoint(box, { x: 1, y: 0.25 }, metrics, 6)).toEqual({ x: 106, y: 12.5 }); // pushed straight out of its side
     expect(nearestConnectionPoint(box, { x: 27, y: 53 }, metrics, 10)).toEqual({ x: 0.25, y: 1 });
     expect(nearestConnectionPoint(box, { x: 50, y: 25 }, metrics, 10)).toBeNull();
     expect(sideOf(box, { x: 0.75, y: 0 }, metrics)).toBe("n");
@@ -139,5 +140,58 @@ describe("CON-02: connection points and elbow / curved routes", () => {
     const shown = live.find((node) => node.type === "arrow") as ArrowNode;
     expect(shown.y).toBe(125);
     expect(withLiveConnectors([{ ...a, y: 100 }, b, link], metrics, new Set([uuid(9)])).find((node) => node.type === "arrow")).toBe(link);
+  });
+});
+
+describe("CON-03: every row of a table / class box has its own connection points (draw.io style)", () => {
+  const table = (rows: string[]): TableNode => ({
+    id: uuid(3), type: "table", variant: "class", x: 0, y: 0, rotation: 0, opacity: 1, locked: false,
+    columns: [200], rows: rows.map((text, index) => ({ cells: [text], divider: index === 0 })), header: true,
+    headerFill: "#DBEAFE", stroke: "#1F2937", color: "#1F2937", fontSize: 16,
+  });
+
+  it("puts one point at each end of every row (plus three on top and bottom)", () => {
+    const node = table(["User", "+ name: string", "+ age: number"]);
+    const spots = connectionPoints(node, metrics);
+    expect(spots).toHaveLength(3 + 3 + 3 + 3);
+    const rows = spots.filter((spot) => spot.row !== undefined);
+    expect(rows.map((spot) => `${spot.row}${spot.x}`).sort()).toEqual(["00", "01", "10", "11", "20", "21"]);
+    const layout = tableLayout(node, metrics);
+    const second = rows.find((spot) => spot.row === 1 && spot.x === 1)!;
+    expect(connectionPoint(node, second, metrics).y).toBeCloseTo(layout.rowY[1] + layout.rowH[1] / 2);
+    expect(bindingAt(uuid(3), second)).toEqual({ nodeId: uuid(3), anchor: "fixed", at: { x: 1, y: second.y }, row: 1 });
+  });
+
+  it("keeps an attached end on its line when lines above grow or are added, and on the last line when its line goes", () => {
+    const node = table(["User", "+ name: string", "+ age: number"]);
+    const start = withNodes([node, rect(1, 400, 0), arrow({ startBinding: bindingAt(uuid(3), connectionPoints(node, metrics).find((spot) => spot.row === 2 && spot.x === 1)!), endBinding: { nodeId: uuid(1), anchor: "w" } })]);
+    const s = start.document.slides[0].id;
+    const rowCentre = (content: ProjectContent, row: number) => {
+      const shown = content.document.slides[0].nodes.find((item) => item.type === "table") as TableNode;
+      const layout = tableLayout(shown, metrics);
+      return layout.rowY[row] + layout.rowH[row] / 2;
+    };
+    const grown = commit(start, { label: "x", affectedSlideId: null, commands: [{ type: "nodes.replace", slideId: s, nodes: [table(["User", "+ id: number", "+ name: string\n(multi-line)", "+ age: number"])] }] });
+    // “+ age: number” is now the fourth line (index 3).
+    expect(ends(grown)[0].y).toBeCloseTo(rowCentre(grown, 3));
+    const shrunk = commit(grown, { label: "x", affectedSlideId: null, commands: [{ type: "nodes.replace", slideId: s, nodes: [table(["User", "+ id: number"])] }] });
+    const connector = shrunk.document.slides[0].nodes.find((item) => item.type === "arrow") as ArrowNode;
+    expect(connector.startBinding?.row).toBe(1);
+    expect(ends(shrunk)[0].y).toBeCloseTo(rowCentre(shrunk, 1));
+    expect(() => parseProjectContent(shrunk)).not.toThrow();
+    expect(() => parseProjectContent(withNodes([arrow({ startBinding: { nodeId: uuid(1), anchor: "auto", row: 1 } })]))).toThrow();
+  });
+
+  it("follows its line when lines are added or removed above it", () => {
+    const node = table(["User", "+ name: string", "+ age: number"]);
+    const start = withNodes([node, rect(1, 400, 0), arrow({ startBinding: bindingAt(uuid(3), connectionPoints(node, metrics).find((spot) => spot.row === 2 && spot.x === 1)!), endBinding: { nodeId: uuid(1), anchor: "w" } })]);
+    const s = start.document.slides[0].id;
+    const row = (content: ProjectContent) => (content.document.slides[0].nodes.find((item) => item.type === "arrow") as ArrowNode).startBinding?.row;
+    // Same row objects (an edit in this editor) …
+    const added = commit(start, { label: "x", affectedSlideId: null, commands: [{ type: "nodes.replace", slideId: s, nodes: [{ ...node, rows: [node.rows[0], { cells: ["+ id: number"], divider: false }, node.rows[1], node.rows[2]] }] }] });
+    expect(row(added)).toBe(3);
+    // … or rows that arrived as data (the drawing room): matched by their text.
+    const removed = commit(added, { label: "x", affectedSlideId: null, commands: [{ type: "nodes.replace", slideId: s, nodes: [table(["User", "+ age: number"])] }] });
+    expect(row(removed)).toBe(1);
   });
 });

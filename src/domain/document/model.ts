@@ -43,6 +43,8 @@ export type ConnectorBinding = {
   nodeId: string;
   anchor: ConnectorAnchor;
   at?: Point;
+  /** A table/class row the end belongs to (its left or right end): it stays on that row when rows grow or move. */
+  row?: number;
   /** Direction the end leaves its object (kept up to date with the object): elbow/curved lines start that way. */
   side?: ConnectorSide;
 };
