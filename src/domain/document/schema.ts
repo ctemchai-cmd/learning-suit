@@ -2,7 +2,7 @@ import { z } from "zod";
 import { DATA_LIMITS } from "../data/model";
 import { DEPLOY_LIMITS } from "../deploy/model";
 import { AI_LIMITS } from "../ai/model";
-import { SSH_LIMITS } from "../ssh/model";
+import { LEGACY_SSH_VIEWS, SSH_LIMITS } from "../ssh/model";
 import { LIMITS } from "./limits";
 import { CODE_LANGUAGES, STENCIL_FRAMES, STENCIL_ICONS, type ProjectContent } from "./model";
 
@@ -233,11 +233,19 @@ const aiSimulator = z.strictObject({
 });
 
 // SSH simulator (plan 07 §4c).
-const sshMachine = z.strictObject({
-  priv: z.boolean(), pub: z.boolean(), known: z.boolean(),
+// Older documents stored `known` (the removed known_hosts row): accepted and dropped. Old step ids map to `setup`.
+const dropKnown = (value: unknown) => {
+  if (typeof value !== "object" || value === null || !("known" in value)) return value;
+  const rest = { ...(value as Record<string, unknown>) };
+  delete rest.known;
+  return rest;
+};
+const sshView = z.preprocess((value) => ((LEGACY_SSH_VIEWS as readonly unknown[]).includes(value) ? "setup" : value), z.enum(["setup", "others"]));
+const sshMachine = z.preprocess(dropKnown, z.strictObject({
+  priv: z.boolean(), pub: z.boolean(),
   cmd: z.string().refine((v) => codePoints(v) <= SSH_LIMITS.cmd),
   out: z.array(z.string().refine((v) => codePoints(v) >= 1 && codePoints(v) <= SSH_LIMITS.outLine)).max(SSH_LIMITS.outLines),
-}).refine((value) => value.priv || !value.pub, "A public key needs its private key");
+}).refine((value) => value.priv || !value.pub, "A public key needs its private key"));
 const sshState = z.strictObject({
   version: z.literal(1),
   a: sshMachine, b: sshMachine,
@@ -251,7 +259,7 @@ const sshState = z.strictObject({
 });
 const sshSimulator = z.strictObject({
   ...base, type: z.literal("ssh-simulator"), rotation: z.literal(0),
-  scale: z.number().finite().min(0.5).max(4), view: z.enum(["why", "keygen", "register", "connect", "others"]), state: sshState,
+  scale: z.number().finite().min(0.5).max(4), view: sshView, state: sshState,
 });
 
 export const canvasNodeSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, arrow, pen, highlighter, text, image, stencil, table, code, gitSimulator, dataSimulator, deploySimulator, aiSimulator, sshSimulator]);

@@ -1,8 +1,8 @@
 import type { Hop, Spot } from "@/domain/data/model";
-import type { Machine, SshView } from "@/domain/ssh/model";
+import { normalizeSshView, type Machine, type SshView } from "@/domain/ssh/model";
 
 // Pure geometry of the SSH widget (plan 07 §4c), widget base coordinates 1120×680.
-// Steps 1–4 share one wide layout (laptop A ↔ the door ↔ GitHub); the last step shrinks laptop A, adds laptop B and the copier.
+// The setup step is one wide layout (laptop A ↔ the door ↔ GitHub); the last step shrinks laptop A, adds laptop B and the copier.
 
 export type Box = { x: number; y: number; w: number; h: number };
 export type Pt = { x: number; y: number };
@@ -12,17 +12,16 @@ export const SSH_H = 680;
 export const CAPTION_BOX: Box = { x: 24, y: 620, w: 1072, h: 46 };
 
 export const SSH_VIEWS: { id: SshView; label: string; description: string }[] = [
-  { id: "why", label: "ทำไมต้องมีกุญแจ", description: "GitHub ต้องรู้ว่าเป็นเราจริงก่อนให้แก้ repo" },
-  { id: "keygen", label: "สร้างคู่กุญแจ (ssh-keygen)", description: "กุญแจลับ = นิ้วจริง, กุญแจสาธารณะ = ลายนิ้วมือ" },
-  { id: "register", label: "ลงทะเบียนกับ GitHub", description: "นำลายนิ้วมือ (.pub) ไปลงทะเบียนที่ประตูครั้งเดียว" },
-  { id: "connect", label: "เชื่อมต่อ (ทดสอบ / push)", description: "ประตูขอแตะนิ้วสดๆ (เลขสุ่มใช้ครั้งเดียว) เครื่องเราประทับด้วยกุญแจลับ ประตูเช็กกับลายนิ้วมือที่ลงทะเบียนไว้" },
+  { id: "setup", label: "เชื่อม GitHub ด้วย SSH (ทีละขั้น)", description: "ลองส่งโค้ด → สร้างคู่กุญแจ → ลงทะเบียน .pub → เชื่อมต่อ" },
   { id: "others", label: "เครื่องอื่น / กุญแจหาย", description: "เครื่องอื่นเข้าไม่ได้, คนคัดลอก .pub ก็เข้าไม่ได้, โน้ตบุ๊กหายให้ลบกุญแจออก" },
 ];
 
 export type MachineBox = {
   box: Box;
   folder: Box;
-  rows: { priv: Box; pub: Box; known: Box };
+  rows: { priv: Box; pub: Box };
+  /** The gap between the two key files, where the one-way link “pub is made from priv” is drawn. */
+  link: Box;
   /** Terminal strip: a full card in the wide layout, one line in the compact one. */
   term: Box;
   /** Where packets leave / enter the laptop (on the pipe, just outside it). */
@@ -35,7 +34,6 @@ export type Scene = {
   github: Box;
   /** Where the pipe meets GitHub's edge. */
   gEdge: Pt;
-  hostkey: Box;
   repo: Box;
   keys: Box;
   thief?: Box;
@@ -47,11 +45,13 @@ const center = (box: Box): Pt => ({ x: box.x + box.w / 2, y: box.y + box.h / 2 }
 
 function machineBox(box: Box, compact: boolean, edgeY: number): MachineBox {
   const folder = compact ? { x: box.x + 20, y: box.y + 36, w: box.w - 40, h: 124 } : { x: box.x + 20, y: box.y + 42, w: box.w - 40, h: 236 };
-  const rowH = compact ? 26 : 52, step = compact ? 30 : 60, first = compact ? 32 : 40;
-  const row = (index: number): Box => ({ x: folder.x + 16, y: folder.y + first + index * step, w: folder.w - 32, h: rowH });
+  const rowH = compact ? 26 : 52, gap = compact ? 22 : 44, first = compact ? 32 : 40;
+  const row = (index: number): Box => ({ x: folder.x + 16, y: folder.y + first + index * (rowH + gap), w: folder.w - 32, h: rowH });
+  const priv = row(0), pub = row(1);
   return {
     box, folder,
-    rows: { priv: row(0), pub: row(1), known: row(2) },
+    rows: { priv, pub },
+    link: { x: priv.x, y: priv.y + rowH, w: priv.w, h: gap },
     term: compact ? { x: box.x + 20, y: box.y + 166, w: box.w - 40, h: 20 } : { x: box.x + 20, y: box.y + 292, w: box.w - 40, h: 84 },
     edge: { x: box.x + box.w + 4, y: edgeY },
   };
@@ -64,10 +64,9 @@ function wideScene(): Scene {
   const gEdge = { x: github.x, y: 279 };
   return {
     compact: false, machines: { a }, scanner, github, gEdge,
-    hostkey: { x: 776, y: 126, w: 304, h: 56 },
-    repo: { x: 776, y: 194, w: 304, h: 72 },
-    keys: { x: 776, y: 278, w: 304, h: 208 },
-    legend: { x: 24, y: 520, w: 1072, h: 84 },
+    repo: { x: 776, y: 126, w: 304, h: 72 },
+    keys: { x: 776, y: 212, w: 304, h: 274 },
+    legend: { x: 24, y: 516, w: 1072, h: 92 },
     pipes: [{ from: a.edge, to: scanner }, { from: scanner, to: gEdge }],
   };
 }
@@ -81,9 +80,8 @@ function othersScene(): Scene {
   const thief = { x: 450, y: 524, w: 232, h: 80 };
   return {
     compact: true, machines: { a, b }, scanner, github, gEdge, thief,
-    hostkey: { x: 716, y: 126, w: 364, h: 56 },
-    repo: { x: 716, y: 194, w: 364, h: 72 },
-    keys: { x: 716, y: 278, w: 364, h: 224 },
+    repo: { x: 716, y: 126, w: 364, h: 72 },
+    keys: { x: 716, y: 212, w: 364, h: 290 },
     legend: { x: 700, y: 528, w: 396, h: 76 },
     pipes: [{ from: a.edge, to: scanner }, { from: b.edge, to: scanner }, { from: { x: 566, y: 524 }, to: scanner }, { from: scanner, to: gEdge }],
   };
@@ -91,7 +89,8 @@ function othersScene(): Scene {
 
 const WIDE = wideScene();
 const OTHERS = othersScene();
-export const sceneOf = (view: SshView): Scene => (view === "others" ? OTHERS : WIDE);
+/** `view` may be a legacy step id from an older document: it draws the setup scene. */
+export const sceneOf = (view: string): Scene => (normalizeSshView(view) === "others" ? OTHERS : WIDE);
 
 /** Row of GitHub's SSH keys list where a laptop's key is shown (fixed slot per laptop, so a removed key can fade out in place). */
 export function keySlot(scene: Scene, machine: Machine): Box {
@@ -99,7 +98,7 @@ export function keySlot(scene: Scene, machine: Machine): Box {
 }
 
 type Side = Machine | "g" | "scanner" | "thief";
-const FILES = ["priv", "pub", "known", "ssh"] as const;
+const FILES = ["priv", "pub", "ssh"] as const;
 type File = (typeof FILES)[number];
 const fileOf = (spot: Spot): { file: File; machine: Machine } | null => {
   const [name, suffix] = spot.split(":");
@@ -107,19 +106,18 @@ const fileOf = (spot: Spot): { file: File; machine: Machine } | null => {
 };
 function sideOf(spot: Spot): Side | null {
   if (spot === "a" || spot === "b" || spot === "scanner" || spot === "thief") return spot;
-  if (spot === "github" || spot === "hostkey" || spot === "repo" || spot === "keys" || spot === "key:a" || spot === "key:b") return "g";
+  if (spot === "github" || spot === "repo" || spot === "keys" || spot === "key:a" || spot === "key:b") return "g";
   return fileOf(spot)?.machine ?? null;
 }
 
 /** Where a named place is drawn in a step (null = not drawn in this step). */
-export function spotPoint(view: SshView, spot: Spot): Pt | null {
+export function spotPoint(view: string, spot: Spot): Pt | null {
   const scene = sceneOf(view);
   switch (spot) {
     case "a": return scene.machines.a.edge;
     case "b": return scene.machines.b?.edge ?? null;
     case "scanner": return scene.scanner;
     case "github": return scene.gEdge;
-    case "hostkey": return center(scene.hostkey);
     case "repo": return center(scene.repo);
     case "keys": return center(scene.keys);
     case "key:a": return center(keySlot(scene, "a"));
@@ -136,7 +134,7 @@ export function spotPoint(view: SshView, spot: Spot): Pt | null {
  * Polyline of a hop: everything between a laptop and GitHub passes the laptop's edge, the door (scanner) and GitHub's edge;
  * the copier's packets go straight; moves inside one laptop are straight too.
  */
-export function hopPath(view: SshView, move: Hop): Pt[] | null {
+export function hopPath(view: string, move: Hop): Pt[] | null {
   const start = spotPoint(view, move.from), end = spotPoint(view, move.to);
   if (!start || !end) return null;
   const scene = sceneOf(view);

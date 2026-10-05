@@ -8,15 +8,15 @@ import { hopPath, sceneOf, spotPoint } from "./ssh-layout";
 // Coverage of the scenes: every place a frame names (packet ends and highlighted spots) must be drawn in the step
 // where that action is available. The set of names comes from running the scenarios, not from the layout.
 
-const VIEWS: SshView[] = ["why", "keygen", "register", "connect", "others"];
+const VIEWS: SshView[] = ["setup", "others"];
 const ACTIONS: SshAction[] = [
   ...(["a", "b"] as const).flatMap((machine) => [{ type: "keygen", machine }, { type: "register", machine }, { type: "test", machine }, { type: "push", machine }, { type: "revoke", machine }] satisfies SshAction[]),
   { type: "thief.try" }, { type: "b.setup" },
 ];
 
 function framesPerView(): Record<SshView, FlowFrame<SshState>[]> {
-  const out: Record<SshView, FlowFrame<SshState>[]> = { why: [], keygen: [], register: [], connect: [], others: [] };
-  // Walk a few action sequences so every branch (first connect, known host, revoked key, B registered …) is hit.
+  const out: Record<SshView, FlowFrame<SshState>[]> = { setup: [], others: [] };
+  // Walk a few action sequences so every branch (first connect, revoked key, B registered …) is hit.
   const starts: SshState[] = [createInitialSshState()];
   for (const view of VIEWS) {
     let frontier = starts;
@@ -55,20 +55,34 @@ describe("scenes draw every place the scenarios use", () => {
 
   it("planted omission: a place the scene does not draw is reported (laptop B outside the last step, a made-up spot)", () => {
     const withB: FlowFrame<SshState>[] = [{ hop: { from: "b", to: "scanner", label: "x", tone: "request" }, caption: "x", state: createInitialSshState(), marks: [{ spot: "pub:b", tone: "new" }] }];
-    expect(missing("connect", withB).absent).toEqual(["b", "pub:b"]);
+    expect(missing("setup", withB).absent).toEqual(["b", "pub:b"]);
     expect(missing("others", withB).absent).toEqual([]);
     expect(missing("others", [{ ...withB[0], hop: { from: "nowhere", to: "scanner", label: "x", tone: "ok" }, marks: [] }]).absent).toEqual(["nowhere"]);
-    expect(hopPath("connect", { from: "nowhere", to: "scanner", label: "x", tone: "ok" })).toBeNull();
+    expect(hopPath("setup", { from: "nowhere", to: "scanner", label: "x", tone: "ok" })).toBeNull();
+  });
+});
+
+describe("known_hosts is gone", () => {
+  it("neither scene draws a host-key box or a known_hosts row", () => {
+    for (const view of VIEWS) {
+      expect(spotPoint(view, "hostkey")).toBeNull();
+      expect(spotPoint(view, "known")).toBeNull();
+      expect(Object.keys(sceneOf(view).machines.a.rows)).toEqual(["priv", "pub"]);
+    }
+  });
+  it("legacy step ids draw the setup scene", () => {
+    expect(sceneOf("why")).toBe(sceneOf("setup"));
+    expect(sceneOf("connect").compact).toBe(false);
   });
 });
 
 describe("hop paths", () => {
   const hop = (from: string, to: string): Hop => ({ from, to, label: "x", tone: "data" });
   it("laptop ↔ GitHub always passes the laptop's edge, the scanner and GitHub's edge", () => {
-    const scene = sceneOf("connect");
-    const path = hopPath("connect", hop("pub", "keys"))!;
-    expect(path.map((point) => `${point.x},${point.y}`)).toEqual([spotPoint("connect", "pub"), scene.machines.a.edge, scene.scanner, scene.gEdge, spotPoint("connect", "keys")].map((point) => `${point!.x},${point!.y}`));
-    expect(hopPath("connect", hop("a", "known"))).toHaveLength(2);
+    const scene = sceneOf("setup");
+    const path = hopPath("setup", hop("pub", "keys"))!;
+    expect(path.map((point) => `${point.x},${point.y}`)).toEqual([spotPoint("setup", "pub"), scene.machines.a.edge, scene.scanner, scene.gEdge, spotPoint("setup", "keys")].map((point) => `${point!.x},${point!.y}`));
+    expect(hopPath("setup", hop("a", "pub"))).toHaveLength(2);
     expect(hopPath("others", hop("keys", "thief"))).toHaveLength(2);
   });
   it("the compact scene keeps the copier clear of laptop B and the widget inside its frame", () => {

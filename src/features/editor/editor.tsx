@@ -416,7 +416,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
           ? { ...base, type: "deploy-simulator", view: "local", state: createInitialDeployState() }
           : kind === "ai"
             ? { ...base, type: "ai-simulator", view: "history", state: createInitialAiState() }
-            : { ...base, type: "ssh-simulator", view: "why", state: createInitialSshState() };
+            : { ...base, type: "ssh-simulator", view: "setup", state: createInitialSshState() };
     const size = widgetNodeSize(draft);
     // Never stack a new widget exactly on top of an existing one (it would hide the lesson so far).
     let x = center.x - size.width / 2, y = center.y - size.height / 2;

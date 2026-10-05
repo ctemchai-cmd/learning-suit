@@ -3,13 +3,13 @@ import { createInitialSshState } from "./initial";
 import { KEYGEN_COMMAND, type Machine, type SshAction, type SshMachine, type SshOutcome, type SshState, type SshTransition, type SshView } from "./model";
 
 // Pure scenarios of the SSH simulator (plan 07 §4c): the final state plus the frames the board plays.
-// Places ("spots") a frame names: a / b (the laptop's edge), priv / pub / known (+ ":b" for laptop B) = files in ~/.ssh,
-// scanner (GitHub's door), github (its edge), hostkey, repo, keys (SSH keys list), key:a / key:b (rows), thief.
+// Places ("spots") a frame names: a / b (the laptop's edge), priv / pub (+ ":b" for laptop B) = files in ~/.ssh,
+// scanner (GitHub's door), github (its edge), repo, keys (SSH keys list), key:a / key:b (rows), thief.
 
 const hop = (from: string, to: string, label: string, tone: FlowTone = "data", detail?: CarriedLine[]): Hop => ({ from, to, label, tone, ...(detail ? { detail } : {}) });
 export const NAME: Record<Machine, string> = { a: "เครื่อง A", b: "เครื่อง B" };
 /** Where a file of ~/.ssh is drawn: laptop A uses the plain name, laptop B adds “:b”. */
-export const fileSpot = (machine: Machine, file: "priv" | "pub" | "known" | "ssh") => (machine === "a" ? file : `${file}:b`);
+export const fileSpot = (machine: Machine, file: "priv" | "pub" | "ssh") => (machine === "a" ? file : `${file}:b`);
 export const hasKeys = (state: SshState, machine: Machine) => state[machine].priv && state[machine].pub;
 const patch = (state: SshState, machine: Machine, change: Partial<SshMachine>): SshState => ({ ...state, [machine]: { ...state[machine], ...change } });
 
@@ -46,14 +46,15 @@ function keygen(state: SshState, machine: Machine): SshTransition {
     (s) => patch(s, machine, { cmd: KEYGEN_COMMAND, out: ["Generating public/private ed25519 key pair."] }), [{ spot: ssh, tone: "changed" }]);
   flow.step(null, "ได้ id_ed25519 = กุญแจลับ เปรียบเหมือนนิ้วจริงของเรา: อยู่ในเครื่องนี้เท่านั้นและไม่ส่งให้ใคร",
     (s) => patch(s, machine, { priv: true, out: ["Your identification has been saved in ~/.ssh/id_ed25519"] }), [{ spot: priv, tone: "new" }]);
-  flow.step(null, "ได้ id_ed25519.pub = กุญแจสาธารณะ เปรียบเหมือนลายนิ้วมือ: แจกให้ GitHub ดูได้ ไม่เป็นอันตราย",
-    (s) => patch(s, machine, { pub: true, out: ["Your public key has been saved in ~/.ssh/id_ed25519.pub"] }), [{ spot: pub, tone: "new" }]);
+  flow.step(hop(priv, pub, "คำนวณ .pub", "ok"), "คำนวณ .pub ออกมาจากกุญแจลับ: ทางเดียว จาก .pub ย้อนกลับไปหากุญแจลับไม่ได้ (เหมือนจากภาพลายนิ้วมือ เสกนิ้วจริงไม่ได้)",
+    (s) => patch(s, machine, { pub: true, out: ["Your public key has been saved in ~/.ssh/id_ed25519.pub"] }), [{ spot: pub, tone: "new" }, { spot: priv, tone: "read" }]);
+  flow.step(null, "ได้ id_ed25519.pub = กุญแจสาธารณะ เปรียบเหมือนลายนิ้วมือ: แจกให้ GitHub ดูได้ ใช้ตรวจผลสแกนได้อย่างเดียว", undefined, [{ spot: pub, tone: "allowed" }]);
   return finish(state, flow, "success", `${who} สร้างคู่กุญแจแล้ว: id_ed25519 (ลับ) และ id_ed25519.pub (สาธารณะ)`);
 }
 
 function register(state: SshState, machine: Machine): SshTransition {
   const who = NAME[machine];
-  if (!hasKeys(state, machine)) return noop(state, `${who} ยังไม่มีกุญแจให้ลงทะเบียน: ไปขั้น “สร้างคู่กุญแจ” ก่อน`, "rejected");
+  if (!hasKeys(state, machine)) return noop(state, `${who} ยังไม่มีกุญแจให้ลงทะเบียน: ทำข้อ “สร้างคู่กุญแจ” ก่อน`, "rejected");
   if (state.registered.includes(machine)) return noop(state, `GitHub รู้จักลายนิ้วมือของ${who} แล้ว ไม่ต้องลงทะเบียนซ้ำ`);
   const flow = new Flow(state);
   flow.step(null, "เปิดไฟล์ .pub แล้วคัดลอกเนื้อหา: คัดลอกเฉพาะลายนิ้วมือ ไม่แตะกุญแจลับ",
@@ -86,7 +87,7 @@ function connect(state: SshState, machine: Machine, mode: "test" | "push"): SshT
   const who = NAME[machine];
   const command = mode === "push" ? "git push" : "ssh -T git@github.com";
   const flow = new Flow(state);
-  const priv = fileSpot(machine, "priv"), known = fileSpot(machine, "known");
+  const priv = fileSpot(machine, "priv");
   flow.step(hop(machine, "scanner", mode === "push" ? "git push" : "ssh -T", "request"), `${who} ขอเข้าประตูของ GitHub ผ่าน SSH`,
     (s) => patch(s, machine, { cmd: command, out: [] }));
   if (!state[machine].priv) {
@@ -95,22 +96,14 @@ function connect(state: SshState, machine: Machine, mode: "test" | "push"): SshT
         : "GitHub: คุณคือใคร? เครื่อง B ไม่มีนิ้วที่ตรงกับลายนิ้วมือที่ลงทะเบียนไว้ ✗ Permission denied (publickey)",
       (s) => patch(s, machine, { out: DENIED_OUT(mode) }), [{ spot: "scanner", tone: "blocked" }]);
     return finish(state, flow, "failed", machine === "a"
-      ? "เข้าไม่ได้: เครื่องเรายังไม่มีกุญแจ GitHub จึงไม่รู้ว่าเราคือใคร (ไปขั้น “สร้างคู่กุญแจ”)"
+      ? "เข้าไม่ได้: เครื่องเรายังไม่มีกุญแจ GitHub จึงไม่รู้ว่าเราคือใคร (ทำข้อ “สร้างคู่กุญแจ”)"
       : "เครื่อง B เข้าไม่ได้: ไม่มีนิ้ว (กุญแจลับ) ที่ตรงกับลายนิ้วมือที่ลงทะเบียนไว้");
-  }
-  // First connection only: check this really is GitHub before touching the scanner.
-  if (!state[machine].known) {
-    flow.step(hop("hostkey", machine, "ลายนิ้วมือ GitHub", "request"),
-      "ครั้งแรก: GitHub โชว์ลายนิ้วมือของตัวเอง ให้เช็กว่ามาถูกตึก (Are you sure you want to continue connecting?)",
-      (s) => patch(s, machine, { out: ["The authenticity of host 'github.com' can't be established.", "Are you sure you want to continue connecting (yes/no)?"] }), [{ spot: "hostkey", tone: "read" }]);
-    flow.step(hop(machine, known, "yes", "ok"), "ตอบ yes: เครื่องเราจดไว้ใน ~/.ssh/known_hosts ว่า “ใช่ GitHub ตัวจริง” ครั้งต่อไปไม่ต้องถามอีก ✓",
-      (s) => patch(s, machine, { known: true, out: ["Warning: Permanently added 'github.com' (ED25519) to the list of known hosts."] }), [{ spot: known, tone: "new" }]);
   }
   if (!state.registered.includes(machine)) {
     flow.step(hop("scanner", machine, "Permission denied", "blocked"),
       `GitHub: ไม่มีลายนิ้วมือนี้ในระบบ ✗ Permission denied (publickey) — ต้องนำ .pub ของ${who} ไปลงทะเบียนก่อน`,
       (s) => patch(s, machine, { out: DENIED_OUT(mode) }), [{ spot: "scanner", tone: "blocked" }, { spot: "keys", tone: "blocked" }]);
-    return finish(state, flow, "failed", `เข้าไม่ได้: GitHub ไม่มีลายนิ้วมือของ${who} (ยังไม่ได้ลงทะเบียน หรือถูกลบไปแล้ว) ไปขั้น “ลงทะเบียนกับ GitHub”`);
+    return finish(state, flow, "failed", `เข้าไม่ได้: GitHub ไม่มีลายนิ้วมือของ${who} (ยังไม่ได้ลงทะเบียน หรือถูกลบไปแล้ว) ทำข้อ “ลงทะเบียน .pub กับ GitHub”`);
   }
   // The random number = “touch the scanner now”: a fresh one every time, so yesterday's scan result is worthless.
   flow.step(hop("github", machine, "ขอแตะนิ้ว", "request", [{ kind: "note", text: "เลขสุ่ม 7f3a9c… (ใช้ได้ครั้งเดียว)" }]),
@@ -118,7 +111,7 @@ function connect(state: SshState, machine: Machine, mode: "test" | "push"): SshT
   flow.step(null, "เครื่องเรา “แตะนิ้ว” = ใช้กุญแจลับประทับลงบนเลขนั้นในเครื่อง ได้ผลสแกนของครั้งนี้ ตัวนิ้วไม่ออกไปไหน", undefined, [{ spot: priv, tone: "read" }]);
   flow.step(hop(machine, "scanner", "ผลสแกน", "data", [{ kind: "code", text: "ผลสแกน (ลายเซ็น) 9b1e42…" }, { kind: "pass", text: "ไม่มีกุญแจลับในก้อนนี้" }]),
     "ส่งกลับแค่ผลสแกนของเลขนี้ ไม่ใช่กุญแจลับ");
-  flow.step(null, "ประตูเช็กผลสแกนกับลายนิ้วมือที่ลงทะเบียนไว้ (.pub) ตรงกัน ✓ ประตูเปิด", undefined,
+  flow.step(null, "ประตูใช้ลายนิ้วมือที่ลงทะเบียนไว้ (.pub) ตรวจผลสแกนที่กุญแจลับทำขึ้น ตรงกัน ✓ ประตูเปิด", undefined,
     [{ spot: "scanner", tone: "allowed" }, { spot: `key:${machine}`, tone: "allowed" }]);
   if (mode === "test") {
     flow.step(hop("scanner", machine, "Hi you!", "ok"), "GitHub: Hi you! You've successfully authenticated ✓ ประตูเปิดให้เราแล้ว",
@@ -141,7 +134,8 @@ function thiefTry(state: SshState): SshTransition {
     (s) => ({ ...s, thief: "copied" }));
   flow.step(hop("thief", "scanner", "ขอเข้า", "request"), "เขาเอา .pub ไปแจ้ง GitHub ว่า “ฉันคือเจ้าของ”");
   flow.step(hop("scanner", "thief", "ขอแตะนิ้ว", "request", [{ kind: "note", text: "เลขสุ่ม 41c8d0… (ใช้ได้ครั้งเดียว)" }]), "ประตูส่งเลขสุ่มมา ขอให้แตะนิ้วตอนนี้");
-  flow.step(null, "เขามีแต่ภาพลายนิ้วมือ (.pub) ไม่มีนิ้วจริง (กุญแจลับ) จึงทำผลสแกนให้ไม่ได้", undefined, [{ spot: "thief", tone: "blocked" }]);
+  flow.step(null, "เขามีแต่ภาพลายนิ้วมือ (.pub) ไม่มีนิ้วจริง (กุญแจลับ) จึงไม่มีอะไรให้แตะสแกน", undefined, [{ spot: "thief", tone: "blocked" }]);
+  flow.step(null, ".pub ตรวจผลสแกนได้อย่างเดียว ทำผลสแกนไม่ได้ และย้อนไปหากุญแจลับก็ไม่ได้ → เข้าไม่ได้ ✗", undefined, [{ spot: "thief", tone: "blocked" }]);
   flow.step(hop("scanner", "thief", "Permission denied", "blocked"), "ประตูไม่เปิด ✗ ภาพถ่ายลายนิ้วมือสแกนไม่ผ่าน",
     (s) => ({ ...s, thief: "denied" }), [{ spot: "scanner", tone: "blocked" }]);
   return finish(state, flow, "failed", "คนที่คัดลอก .pub ไปเข้าไม่ได้: มีแค่ภาพลายนิ้วมือ ไม่มีนิ้วจริง (กุญแจลับ) ไว้แตะสแกน");

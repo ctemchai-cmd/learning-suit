@@ -4,8 +4,11 @@ import type { FlowFrame } from "../data/model";
 // Analogy: GitHub is a building whose door has a fingerprint scanner. The private key is our real finger (never leaves
 // the laptop), the public key is the fingerprint pattern we registered once at the scanner (GitHub → Settings → SSH keys).
 
-/** Lesson steps: why a key → create the pair → register → connect → other machines / lost laptop. */
-export type SshView = "why" | "keygen" | "register" | "connect" | "others";
+/** Lesson steps: the guided setup (try → key pair → register → connect), then other machines / lost laptop. */
+export type SshView = "setup" | "others";
+/** Views of documents saved before the four setup steps were merged: they behave as `setup`. */
+export const LEGACY_SSH_VIEWS = ["why", "keygen", "register", "connect"] as const;
+export const normalizeSshView = (view: string): SshView => (view === "others" ? "others" : "setup");
 
 /** Laptop A is ours; laptop B is a friend's / a new one. */
 export type Machine = "a" | "b";
@@ -16,8 +19,6 @@ export type SshMachine = {
   priv: boolean;
   /** `id_ed25519.pub` — the public key (the fingerprint pattern). Always comes together with `priv`. */
   pub: boolean;
-  /** `known_hosts` has the real GitHub's fingerprint (the first-connection check was answered “yes”). */
-  known: boolean;
   /** Last command typed and its output lines (screens are cleared when the lesson step changes). */
   cmd: string;
   out: string[];

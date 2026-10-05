@@ -1,11 +1,11 @@
 "use client";
 
-import { useId, type JSX } from "react";
+import { useId, type JSX, type ReactNode } from "react";
 import { Fingerprint, GitPullRequestArrow, KeyRound, LaptopMinimal, Send, ShieldCheck, Trash2, UserRoundX } from "lucide-react";
 import type { DocumentTransaction } from "@/domain/document/commands";
 import type { SshSimulatorNode } from "@/domain/document/model";
-import { KEYGEN_COMMAND, type SshAction, type SshState, type SshView } from "@/domain/ssh/model";
-import { applySshAction } from "@/domain/ssh/reducer";
+import { KEYGEN_COMMAND, normalizeSshView, type SshAction, type SshState, type SshView } from "@/domain/ssh/model";
+import { applySshAction, hasKeys } from "@/domain/ssh/reducer";
 import { useEditorStore } from "@/features/editor/store";
 import { Action, PanelHeader, PlaybackControls, ResetLink, ResultMessage, Section, StepSelect } from "@/features/flow/flow-panel-parts";
 import { useFlowSession } from "@/features/flow/flow-session";
@@ -32,7 +32,7 @@ export function SshPanel({ node, slideId, writable, transact }: {
 }): JSX.Element {
   const ids = useId();
   const nodeId = node.id;
-  const { view } = node;
+  const view = normalizeSshView(node.view);
   const result = useFlowSession((s) => s.results[nodeId]);
   const flow = useFlowSession.getState();
 
@@ -68,17 +68,7 @@ export function SshPanel({ node, slideId, writable, transact }: {
   return <section className="space-y-4 p-4 text-sm" aria-label="ตัวจำลอง SSH">
     <PanelHeader icon={<KeyRound size={16} />} color="bg-slate-900" title="SSH กุญแจของ GitHub" />
     <StepSelect id={ids} value={view} steps={SSH_VIEWS} disabled={!writable} onChange={changeView} />
-    {view === "why" && <Section title="ลองกด"><div className="space-y-1.5">
-      <Action primary icon={<Send size={14} />} disabled={!writable} onClick={() => run({ type: "push", machine: "a" })}>ส่งโค้ดขึ้น (git push)</Action>
-    </div></Section>}
-    {view === "keygen" && <KeygenControls {...props} />}
-    {view === "register" && <Section title="ลองกด"><div className="space-y-1.5">
-      <Action primary icon={<Fingerprint size={14} />} disabled={!writable} onClick={() => run({ type: "register", machine: "a" })}>คัดลอก .pub ไปใส่ GitHub</Action>
-    </div></Section>}
-    {view === "connect" && <Section title="ลองกด"><div className="space-y-1.5">
-      <Action primary icon={<ShieldCheck size={14} />} disabled={!writable} onClick={() => run({ type: "test", machine: "a" })}>ทดสอบ ssh -T git@github.com</Action>
-      <Action icon={<Send size={14} />} disabled={!writable} onClick={() => run({ type: "push", machine: "a" })}>git push</Action>
-    </div></Section>}
+    {view === "setup" && <SetupControls state={node.state} {...props} />}
     {view === "others" && <OthersControls {...props} />}
     <PlaybackControls nodeId={nodeId} />
     <ResultMessage result={result} />
@@ -88,13 +78,47 @@ export function SshPanel({ node, slideId, writable, transact }: {
 
 type Props = { writable: boolean; run: (action: SshAction) => void };
 
-function KeygenControls({ writable, run }: Props) {
-  return <Section title="ลองกด">
-    <div className="space-y-1.5">
-      <p className="rounded-lg bg-slate-900 px-2.5 py-2 font-mono text-[11px] leading-snug text-slate-100" aria-label="คำสั่งสร้างกุญแจ">$ {KEYGEN_COMMAND}</p>
-      <Action primary icon={<KeyRound size={14} />} disabled={!writable} onClick={() => run({ type: "keygen", machine: "a" })}>สร้างกุญแจ</Action>
+type Next = "try" | "keygen" | "register" | "connect";
+/** The next useful card: nothing done yet → the demo; no key → create; not registered → register; else connect. */
+export function nextCard(state: SshState): Next {
+  if (!hasKeys(state, "a")) return !state.a.priv && state.a.cmd === "" && state.pushes === 0 ? "try" : "keygen";
+  return state.registered.includes("a") ? "connect" : "register";
+}
+
+/** One numbered step of the guided setup. Highlighted when it is the next thing to do. */
+function StepCard({ number, title, description, active, children }: { number: number; title: string; description: string; active: boolean; children: ReactNode }) {
+  return <li className={`rounded-xl border p-3 transition-colors ${active ? "border-blue-300 bg-blue-50/70 shadow-sm shadow-blue-100" : "border-slate-200 bg-white"}`}>
+    <div className="flex items-start gap-2.5">
+      <span aria-hidden className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs font-bold ${active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-500"}`}>{number}</span>
+      <div className="min-w-0 flex-1">
+        <h3 className="flex items-center gap-1.5 font-semibold leading-6 text-slate-900">
+          {title}{active && <span className="shrink-0 whitespace-nowrap rounded-full bg-blue-600/10 px-1.5 py-px text-[10px] font-semibold text-blue-700">ทำต่อ</span>}
+        </h3>
+        <p className="text-xs leading-snug text-slate-500">{description}</p>
+      </div>
     </div>
-  </Section>;
+    <div className="mt-2.5 space-y-1.5">{children}</div>
+  </li>;
+}
+
+function SetupControls({ state, writable, run }: Props & { state: SshState }) {
+  const next = nextCard(state);
+  return <ol className="space-y-3" aria-label="ขั้นตอนเชื่อม GitHub ด้วย SSH">
+    <StepCard number={1} title="ลองส่งโค้ดก่อน (ยังไม่มีกุญแจ)" description="ดูว่า GitHub ทำอย่างไรกับคนที่ยังพิสูจน์ตัวไม่ได้" active={next === "try"}>
+      <Action primary={next === "try"} icon={<Send size={14} />} disabled={!writable} onClick={() => run({ type: "push", machine: "a" })}>ส่งโค้ดขึ้น (git push)</Action>
+    </StepCard>
+    <StepCard number={2} title="สร้างคู่กุญแจ" description="กุญแจลับ = นิ้วจริง, กุญแจสาธารณะ (.pub) = ลายนิ้วมือที่สร้างจากกุญแจลับ" active={next === "keygen"}>
+      <p className="rounded-lg bg-slate-900 px-2.5 py-2 font-mono text-[11px] leading-snug text-slate-100" aria-label="คำสั่งสร้างกุญแจ">$ {KEYGEN_COMMAND}</p>
+      <Action primary={next === "keygen"} icon={<KeyRound size={14} />} disabled={!writable} onClick={() => run({ type: "keygen", machine: "a" })}>สร้างกุญแจ</Action>
+    </StepCard>
+    <StepCard number={3} title="ลงทะเบียน .pub กับ GitHub" description="นำลายนิ้วมือไปลงทะเบียนที่ประตูครั้งเดียว" active={next === "register"}>
+      <Action primary={next === "register"} icon={<Fingerprint size={14} />} disabled={!writable} onClick={() => run({ type: "register", machine: "a" })}>คัดลอก .pub ไปใส่ GitHub</Action>
+    </StepCard>
+    <StepCard number={4} title="เชื่อมต่อ" description="ประตูขอให้แตะนิ้ว เครื่องเราส่งผลสแกน ประตูตรวจกับ .pub ที่ลงทะเบียนไว้" active={next === "connect"}>
+      <Action primary={next === "connect"} icon={<ShieldCheck size={14} />} disabled={!writable} onClick={() => run({ type: "test", machine: "a" })}>ทดสอบ ssh -T git@github.com</Action>
+      <Action icon={<Send size={14} />} disabled={!writable} onClick={() => run({ type: "push", machine: "a" })}>git push</Action>
+    </StepCard>
+  </ol>;
 }
 
 function OthersControls({ writable, run }: Props) {
