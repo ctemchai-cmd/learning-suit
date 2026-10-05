@@ -66,7 +66,7 @@ export function SshPanel({ node, slideId, writable, transact }: {
 
   const props = { writable, run };
   return <section className="space-y-4 p-4 text-sm" aria-label="ตัวจำลอง SSH">
-    <PanelHeader icon={<KeyRound size={16} />} color="bg-slate-900" title="SSH กุญแจของ GitHub" />
+    <PanelHeader icon={<KeyRound size={16} />} color="bg-slate-900" title="กุญแจ SSH" />
     <StepSelect id={ids} value={view} steps={SSH_VIEWS} disabled={!writable} onChange={changeView} />
     {view === "setup" && <SetupControls state={node.state} {...props} />}
     {view === "others" && <OthersControls {...props} />}
@@ -104,18 +104,18 @@ function StepCard({ number, title, description, active, children }: { number: nu
 function SetupControls({ state, writable, run }: Props & { state: SshState }) {
   const next = nextCard(state);
   return <ol className="space-y-3" aria-label="ขั้นตอนเชื่อม GitHub ด้วย SSH">
-    <StepCard number={1} title="ลองส่งโค้ดก่อน (ยังไม่มีกุญแจ)" description="ดูว่า GitHub ทำอย่างไรกับคนที่ยังพิสูจน์ตัวไม่ได้" active={next === "try"}>
-      <Action primary={next === "try"} icon={<Send size={14} />} disabled={!writable} onClick={() => run({ type: "push", machine: "a" })}>ส่งโค้ดขึ้น (git push)</Action>
+    <StepCard number={1} title="ลอง push ก่อน" description="ยังไม่มีกุญแจ → โดนปฏิเสธ" active={next === "try"}>
+      <Action primary={next === "try"} icon={<Send size={14} />} disabled={!writable} onClick={() => run({ type: "push", machine: "a" })}>ลอง git push</Action>
     </StepCard>
-    <StepCard number={2} title="สร้างคู่กุญแจ" description="กุญแจลับ = นิ้วจริง, กุญแจสาธารณะ (.pub) = ลายนิ้วมือที่สร้างจากกุญแจลับ" active={next === "keygen"}>
+    <StepCard number={2} title="สร้างคู่กุญแจ" description="ลับ = นิ้วจริง · .pub = ลายนิ้วมือ" active={next === "keygen"}>
       <p className="rounded-lg bg-slate-900 px-2.5 py-2 font-mono text-[11px] leading-snug text-slate-100" aria-label="คำสั่งสร้างกุญแจ">$ {KEYGEN_COMMAND}</p>
       <Action primary={next === "keygen"} icon={<KeyRound size={14} />} disabled={!writable} onClick={() => run({ type: "keygen", machine: "a" })}>สร้างกุญแจ</Action>
     </StepCard>
-    <StepCard number={3} title="ลงทะเบียน .pub กับ GitHub" description="นำลายนิ้วมือไปลงทะเบียนที่ประตูครั้งเดียว" active={next === "register"}>
-      <Action primary={next === "register"} icon={<Fingerprint size={14} />} disabled={!writable} onClick={() => run({ type: "register", machine: "a" })}>คัดลอก .pub ไปใส่ GitHub</Action>
+    <StepCard number={3} title="ลงทะเบียน .pub" description="ทำครั้งเดียว" active={next === "register"}>
+      <Action primary={next === "register"} icon={<Fingerprint size={14} />} disabled={!writable} onClick={() => run({ type: "register", machine: "a" })}>ใส่ .pub ใน GitHub</Action>
     </StepCard>
-    <StepCard number={4} title="เชื่อมต่อ" description="ประตูขอให้แตะนิ้ว เครื่องเราส่งผลสแกน ประตูตรวจกับ .pub ที่ลงทะเบียนไว้" active={next === "connect"}>
-      <Action primary={next === "connect"} icon={<ShieldCheck size={14} />} disabled={!writable} onClick={() => run({ type: "test", machine: "a" })}>ทดสอบ ssh -T git@github.com</Action>
+    <StepCard number={4} title="เชื่อมต่อ" description="แตะนิ้ว → ประตูเปิด" active={next === "connect"}>
+      <Action primary={next === "connect"} icon={<ShieldCheck size={14} />} disabled={!writable} onClick={() => run({ type: "test", machine: "a" })}>ssh -T git@github.com</Action>
       <Action icon={<Send size={14} />} disabled={!writable} onClick={() => run({ type: "push", machine: "a" })}>git push</Action>
     </StepCard>
   </ol>;
@@ -123,17 +123,17 @@ function SetupControls({ state, writable, run }: Props & { state: SshState }) {
 
 function OthersControls({ writable, run }: Props) {
   return <>
-    <Section title="เครื่องอื่นและคนแปลกหน้า">
+    <Section title="เครื่องอื่น">
       <div className="space-y-1.5">
         <Action primary icon={<LaptopMinimal size={14} />} disabled={!writable} onClick={() => run({ type: "push", machine: "b" })}>เครื่อง B ส่งโค้ด</Action>
-        <Action icon={<UserRoundX size={14} />} disabled={!writable} onClick={() => run({ type: "thief.try" })}>มีคนคัดลอก .pub ไปลองเข้า</Action>
+        <Action icon={<UserRoundX size={14} />} disabled={!writable} onClick={() => run({ type: "thief.try" })}>คนคัดลอก .pub ลองเข้า</Action>
       </div>
     </Section>
-    <Section title="โน้ตบุ๊กหาย / เครื่องใหม่">
+    <Section title="เครื่องหาย / เครื่องใหม่">
       <div className="space-y-1.5">
-        <Action danger icon={<Trash2 size={14} />} disabled={!writable} onClick={() => run({ type: "revoke", machine: "a" })}>ทำโน้ตบุ๊ก A หาย → ลบกุญแจออกจาก GitHub</Action>
+        <Action danger icon={<Trash2 size={14} />} disabled={!writable} onClick={() => run({ type: "revoke", machine: "a" })}>A หาย → ลบกุญแจ A</Action>
         <Action icon={<GitPullRequestArrow size={14} />} disabled={!writable} onClick={() => run({ type: "push", machine: "a" })}>เครื่อง A ส่งโค้ด</Action>
-        <Action icon={<KeyRound size={14} />} disabled={!writable} onClick={() => run({ type: "b.setup" })}>เครื่อง B สร้างกุญแจของตัวเองแล้วลงทะเบียน</Action>
+        <Action icon={<KeyRound size={14} />} disabled={!writable} onClick={() => run({ type: "b.setup" })}>B ลงกุญแจของตัวเอง</Action>
       </div>
     </Section>
   </>;

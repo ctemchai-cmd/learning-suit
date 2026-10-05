@@ -12,7 +12,7 @@ export const SSH_H = 680;
 export const CAPTION_BOX: Box = { x: 24, y: 620, w: 1072, h: 46 };
 
 export const SSH_VIEWS: { id: SshView; label: string; description: string }[] = [
-  { id: "setup", label: "เชื่อม GitHub ด้วย SSH (ทีละขั้น)", description: "ลองส่งโค้ด → สร้างคู่กุญแจ → ลงทะเบียน .pub → เชื่อมต่อ" },
+  { id: "setup", label: "เชื่อม GitHub ด้วย SSH", description: "ลองส่งโค้ด → สร้างคู่กุญแจ → ลงทะเบียน .pub → เชื่อมต่อ" },
   { id: "others", label: "เครื่องอื่น / กุญแจหาย", description: "เครื่องอื่นเข้าไม่ได้, คนคัดลอก .pub ก็เข้าไม่ได้, โน้ตบุ๊กหายให้ลบกุญแจออก" },
 ];
 

@@ -24,9 +24,9 @@ test("SSH-E2E-01/02: one guided step — the demo is blocked, then create the ke
   await expect(select.locator("option")).toHaveCount(2);
   await expect(panel(page).getByRole("list", { name: "ขั้นตอนเชื่อม GitHub ด้วย SSH" }).getByRole("listitem")).toHaveCount(4);
   await expect(next(page)).toHaveCount(1);
-  await expect(next(page)).toContainText("ลองส่งโค้ดก่อน (ยังไม่มีกุญแจ)");
+  await expect(next(page)).toContainText("ลอง push ก่อน");
 
-  await button(page, "ส่งโค้ดขึ้น (git push)").click();
+  await button(page, "ลอง git push").click();
   await expect(panel(page)).toContainText("เข้าไม่ได้: เครื่องเรายังไม่มีกุญแจ");
   await expect(panel(page)).toContainText("จังหวะ 2/2");
   let node = await sshNode(page);
@@ -34,7 +34,7 @@ test("SSH-E2E-01/02: one guided step — the demo is blocked, then create the ke
   expect(node.state.pushes).toBe(0);
   await expect(next(page)).toContainText("สร้างคู่กุญแจ");
 
-  await button(page, "คัดลอก .pub ไปใส่ GitHub").click();
+  await button(page, "ใส่ .pub ใน GitHub").click();
   await expect(panel(page)).toContainText("ยังไม่มีกุญแจให้ลงทะเบียน");
   expect((await sshNode(page)).state.registered).toEqual([]);
 
@@ -47,13 +47,13 @@ test("SSH-E2E-01/02: one guided step — the demo is blocked, then create the ke
   node = await sshNode(page);
   expect(node.view).toBe("setup");
   expect(node.state.a).toMatchObject({ priv: true, pub: true });
-  await expect(next(page)).toContainText("ลงทะเบียน .pub กับ GitHub");
+  await expect(next(page)).toContainText("ลงทะเบียน .pub");
 
-  await button(page, "คัดลอก .pub ไปใส่ GitHub").click();
+  await button(page, "ใส่ .pub ใน GitHub").click();
   await expect(panel(page)).toContainText("ลงทะเบียนกุญแจสาธารณะของเครื่อง A กับ GitHub แล้ว");
   expect((await sshNode(page)).state.registered).toEqual(["a"]);
   await expect(next(page)).toContainText("เชื่อมต่อ");
-  await button(page, "คัดลอก .pub ไปใส่ GitHub").click();
+  await button(page, "ใส่ .pub ใน GitHub").click();
   await expect(panel(page)).toContainText("ไม่ต้องลงทะเบียนซ้ำ");
 });
 
@@ -61,10 +61,10 @@ test("SSH-E2E-03: connect — the door asks for a touch, the scan result goes ba
   await createProject(page, "SSH 2");
   await page.getByRole("button", { name: "เพิ่มตัวจำลอง SSH" }).first().click();
   await button(page, "สร้างกุญแจ").click();
-  await button(page, "คัดลอก .pub ไปใส่ GitHub").click();
+  await button(page, "ใส่ .pub ใน GitHub").click();
 
   await button(page, "ทีละจังหวะ").click();
-  await button(page, "ทดสอบ ssh -T git@github.com").click();
+  await button(page, "ssh -T git@github.com").click();
   await expect(panel(page)).toContainText("ทดสอบผ่าน: GitHub ทักว่า Hi you!");
   await expect(panel(page)).toContainText("จังหวะ 1/6");
   await panel(page).getByRole("button", { name: "ถัดไป" }).click();
@@ -89,27 +89,27 @@ test("SSH-E2E-04/05: other machines — B is rejected, a copied .pub is rejected
   await createProject(page, "SSH 3");
   await page.getByRole("button", { name: "เพิ่มตัวจำลอง SSH" }).first().click();
   await button(page, "สร้างกุญแจ").click();
-  await button(page, "คัดลอก .pub ไปใส่ GitHub").click();
+  await button(page, "ใส่ .pub ใน GitHub").click();
   await step(page, "others");
 
   await button(page, "เครื่อง A ส่งโค้ด").click();
   await expect(panel(page)).toContainText("git push สำเร็จ");
   await button(page, "เครื่อง B ส่งโค้ด").click();
   await expect(panel(page)).toContainText("เครื่อง B เข้าไม่ได้: ไม่มีนิ้ว");
-  await button(page, "มีคนคัดลอก .pub ไปลองเข้า").click();
+  await button(page, "คนคัดลอก .pub ลองเข้า").click();
   await expect(panel(page)).toContainText("คนที่คัดลอก .pub ไปเข้าไม่ได้");
   await skip(page);
   let node = await sshNode(page);
   expect(node.state).toMatchObject({ thief: "denied", pushes: 1, registered: ["a"] });
 
-  await button(page, "ทำโน้ตบุ๊ก A หาย → ลบกุญแจออกจาก GitHub").click();
+  await button(page, "A หาย → ลบกุญแจ A").click();
   await expect(panel(page)).toContainText("ลบกุญแจของเครื่อง A ออกจาก GitHub แล้ว");
   expect((await sshNode(page)).state.registered).toEqual([]);
   await button(page, "เครื่อง A ส่งโค้ด").click();
   await expect(panel(page)).toContainText("ถูกลบไปแล้ว");
   expect((await sshNode(page)).state.pushes).toBe(1);
 
-  await button(page, "เครื่อง B สร้างกุญแจของตัวเองแล้วลงทะเบียน").click();
+  await button(page, "B ลงกุญแจของตัวเอง").click();
   await expect(panel(page)).toContainText("เครื่อง B สร้างกุญแจของตัวเองและลงทะเบียนแล้ว");
   await button(page, "เครื่อง B ส่งโค้ด").click();
   await expect(panel(page)).toContainText("git push สำเร็จ");
