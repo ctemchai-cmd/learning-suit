@@ -12,14 +12,21 @@ import {
   type MachineRepository,
 } from "./model";
 import {
+  MAIN_BRANCH,
+  analyzeBranchMerge,
   ancestorsOf,
+  branchExists,
+  branchTip,
   copySnapshot,
+  currentBranch,
+  headCommitId,
   headSnapshot,
   isAncestor,
   isClean,
   jsonEqual,
   snapshotsEqual,
   sortCommitIds,
+  validateBranchName,
   validateCommitMessage,
   validateFileSnapshot,
 } from "./selectors";
@@ -39,6 +46,10 @@ export function applyGitAction(state: GitSimulationState, action: GitAction): Gi
     case "pull": return pull(state, action.machine);
     case "merge": return merge(state, action.machine, action.keep);
     case "resetToRemote": return resetToRemote(state, action.machine);
+    case "branchCreate": return branchCreate(state, action.machine, action.name);
+    case "branchSwitch": return branchSwitch(state, action.machine, action.name);
+    case "branchMerge": return branchMerge(state, action.machine, action.name, action.keep);
+    case "branchDelete": return branchDelete(state, action.machine, action.name);
     case "reset": return reset(state);
     default: {
       action satisfies never;
@@ -53,6 +64,23 @@ function unchanged(state: GitSimulationState, outcome: "noop" | "rejected", code
 
 function withMachine(state: GitSimulationState, machine: MachineId, repo: MachineRepository): GitSimulationState {
   return { ...state, machines: { ...state.machines, [machine]: repo } };
+}
+
+/** Points the current branch (`main` or another) at `id`. */
+function moveCurrentBranch(repo: MachineRepository, id: CommitId): MachineRepository {
+  const head = currentBranch(repo);
+  return head === MAIN_BRANCH ? { ...repo, mainHead: id } : { ...repo, branches: { ...repo.branches, [head]: id } };
+}
+
+/** HEAD moves to `head` and the branch list stays canonical (no empty `branches`, no `head: "main"`). */
+function withBranches(repo: MachineRepository, branches: Record<string, CommitId>, head: string): MachineRepository {
+  const { branches: _branches, head: _head, ...rest } = repo;
+  void _branches; void _head;
+  return { ...rest, ...(Object.keys(branches).length ? { branches } : {}), ...(head !== MAIN_BRANCH ? { head } : {}) };
+}
+
+function onMain(repo: MachineRepository): boolean {
+  return currentBranch(repo) === MAIN_BRANCH;
 }
 
 function transferOf(from: GitTransfer["from"], to: GitTransfer["to"], commitIds: CommitId[]): GitTransfer | null {
@@ -91,11 +119,11 @@ function commit(state: GitSimulationState, machine: MachineId, message: string):
     ...state,
     commits: {
       ...state.commits,
-      [id]: { id, parentId: repo.mainHead, message: validation.message, snapshot: copySnapshot(repo.index) },
+      [id]: { id, parentId: headCommitId(repo), message: validation.message, snapshot: copySnapshot(repo.index) },
     },
     machines: {
       ...state.machines,
-      [machine]: { ...repo, mainHead: id, knownCommitIds: sortCommitIds([...repo.knownCommitIds, id]) },
+      [machine]: { ...moveCurrentBranch(repo, id), knownCommitIds: sortCommitIds([...repo.knownCommitIds, id]) },
     },
     nextCommitNumber: state.nextCommitNumber + 1,
   };
@@ -105,6 +133,7 @@ function commit(state: GitSimulationState, machine: MachineId, message: string):
 function push(state: GitSimulationState, machine: MachineId): GitTransition {
   const repo = state.machines[machine];
   if (!repo.initialized) return unchanged(state, "rejected", "NOT_INITIALIZED");
+  if (!onMain(repo)) return unchanged(state, "rejected", "NOT_ON_MAIN");
   const localHead = repo.mainHead;
   if (localHead === null) return unchanged(state, "rejected", "NO_LOCAL_COMMITS");
   const remote = state.remote;
@@ -166,8 +195,9 @@ function clone(state: GitSimulationState, machine: MachineId): GitTransition {
 
 function pull(state: GitSimulationState, machine: MachineId): GitTransition {
   const repo = state.machines[machine];
-  // 1. initialized
+  // 1. initialized, and on main (Pull moves `main` and the file)
   if (!repo.initialized) return unchanged(state, "rejected", "NOT_INITIALIZED");
+  if (!onMain(repo)) return unchanged(state, "rejected", "NOT_ON_MAIN");
   // 2. clean BEFORE fetch (simulator rule)
   if (!isClean(state, machine)) return unchanged(state, "rejected", "DIRTY_WORKTREE");
   // 3. remote empty: tracking untouched
@@ -241,6 +271,7 @@ export const MERGE_MESSAGES = {
 function merge(state: GitSimulationState, machine: MachineId, keep: "ours" | "theirs"): GitTransition {
   const repo = state.machines[machine];
   if (!repo.initialized) return unchanged(state, "rejected", "NOT_INITIALIZED");
+  if (!onMain(repo)) return unchanged(state, "rejected", "NOT_ON_MAIN");
   if (!isClean(state, machine)) return unchanged(state, "rejected", "DIRTY_WORKTREE");
   const origin = repo.originMainHead;
   const ours = headSnapshot(state, repo);
@@ -278,6 +309,7 @@ function merge(state: GitSimulationState, machine: MachineId, keep: "ours" | "th
 function resetToRemote(state: GitSimulationState, machine: MachineId): GitTransition {
   const repo = state.machines[machine];
   if (!repo.initialized) return unchanged(state, "rejected", "NOT_INITIALIZED");
+  if (!onMain(repo)) return unchanged(state, "rejected", "NOT_ON_MAIN");
   const origin = repo.originMainHead;
   const snapshot = origin === null ? null : state.commits[origin]?.snapshot ?? null;
   if (origin === null || snapshot === null) return unchanged(state, "rejected", "REMOTE_EMPTY");
@@ -285,6 +317,91 @@ function resetToRemote(state: GitSimulationState, machine: MachineId): GitTransi
   const nextRepo: MachineRepository = { ...repo, mainHead: origin, working: copySnapshot(snapshot), index: copySnapshot(snapshot), knownCommitIds };
   if (jsonEqual(nextRepo, repo)) return unchanged(state, "noop", "NO_CHANGE");
   return { nextState: withMachine(state, machine, nextRepo), outcome: "success", changed: true, code: "RESET_TO_REMOTE", affectedCommitIds: [origin], transfer: null };
+}
+
+/** `git switch -c`: needs a commit to branch from; uncommitted work comes along, like in Git. */
+function branchCreate(state: GitSimulationState, machine: MachineId, name: string): GitTransition {
+  const repo = state.machines[machine];
+  if (!repo.initialized) return unchanged(state, "rejected", "NOT_INITIALIZED");
+  const validation = validateBranchName(repo, name);
+  if (!validation.ok) return unchanged(state, "rejected", validation.error === "branch-exists" ? "BRANCH_EXISTS" : "INVALID_BRANCH_NAME");
+  const tip = headCommitId(repo);
+  if (tip === null) return unchanged(state, "rejected", "NEED_COMMIT_FOR_BRANCH");
+  if (Object.keys(repo.branches ?? {}).length >= GIT_LIMITS.branches) return unchanged(state, "rejected", "BRANCH_LIMIT");
+  const nextRepo = withBranches(repo, { ...repo.branches, [validation.name]: tip }, validation.name);
+  return { nextState: withMachine(state, machine, nextRepo), outcome: "success", changed: true, code: "BRANCH_CREATED", affectedCommitIds: [tip], transfer: null };
+}
+
+/** `git switch`: working file and Staging become the target tip. Refused while anything is uncommitted. */
+function branchSwitch(state: GitSimulationState, machine: MachineId, name: string): GitTransition {
+  const repo = state.machines[machine];
+  if (!repo.initialized) return unchanged(state, "rejected", "NOT_INITIALIZED");
+  if (!branchExists(repo, name)) return unchanged(state, "rejected", "BRANCH_NOT_FOUND");
+  if (name === currentBranch(repo)) return unchanged(state, "noop", "NO_CHANGE");
+  if (!isClean(state, machine)) return unchanged(state, "rejected", "DIRTY_WORKTREE");
+  const tip = branchTip(repo, name);
+  const snapshot = tip === null ? null : state.commits[tip]?.snapshot ?? null;
+  if (tip === null || snapshot === null) return unchanged(state, "rejected", "BRANCH_NOT_FOUND");
+  const nextRepo: MachineRepository = { ...withBranches(repo, repo.branches ?? {}, name), working: copySnapshot(snapshot), index: copySnapshot(snapshot) };
+  return { nextState: withMachine(state, machine, nextRepo), outcome: "success", changed: true, code: "SWITCHED", affectedCommitIds: [tip], transfer: null };
+}
+
+/** `git merge <name>` into the current branch: up to date, fast-forward, or a merge commit with two parents. */
+function branchMerge(state: GitSimulationState, machine: MachineId, name: string, keep: "ours" | "theirs" | undefined): GitTransition {
+  const repo = state.machines[machine];
+  if (!repo.initialized) return unchanged(state, "rejected", "NOT_INITIALIZED");
+  if (!branchExists(repo, name)) return unchanged(state, "rejected", "BRANCH_NOT_FOUND");
+  if (name === currentBranch(repo)) return unchanged(state, "rejected", "SAME_BRANCH");
+  if (!isClean(state, machine)) return unchanged(state, "rejected", "DIRTY_WORKTREE");
+  const { plan, file } = analyzeBranchMerge(state, machine, name);
+  const ours = headCommitId(repo);
+  const theirs = branchTip(repo, name);
+  if (plan === "unavailable" || ours === null || theirs === null) return unchanged(state, "rejected", "BRANCH_NOT_FOUND");
+  if (plan === "up-to-date") return unchanged(state, "noop", "NO_CHANGE");
+
+  if (plan === "fast-forward") {
+    const snapshot = state.commits[theirs]?.snapshot;
+    if (!snapshot) return unchanged(state, "rejected", "BRANCH_NOT_FOUND");
+    const nextRepo: MachineRepository = { ...moveCurrentBranch(repo, theirs), working: copySnapshot(snapshot), index: copySnapshot(snapshot) };
+    return { nextState: withMachine(state, machine, nextRepo), outcome: "success", changed: true, code: "FAST_FORWARDED", affectedCommitIds: [theirs], transfer: null };
+  }
+
+  let result = file;
+  if (plan === "conflict") {
+    if (!keep) return unchanged(state, "rejected", "MERGE_CONFLICT");
+    result = state.commits[keep === "ours" ? ours : theirs]?.snapshot ?? null;
+  }
+  if (!result) return unchanged(state, "rejected", "BRANCH_NOT_FOUND");
+  if (Object.keys(state.commits).length >= GIT_LIMITS.commits) return unchanged(state, "rejected", "COMMIT_LIMIT");
+  const id = `C${state.nextCommitNumber}`;
+  const message = `Merge branch '${name}'`;
+  const nextState: GitSimulationState = {
+    ...state,
+    commits: { ...state.commits, [id]: { id, parentId: ours, mergeParentId: theirs, message, snapshot: copySnapshot(result) } },
+    machines: {
+      ...state.machines,
+      [machine]: {
+        ...moveCurrentBranch(repo, id), working: copySnapshot(result), index: copySnapshot(result),
+        knownCommitIds: sortCommitIds([...repo.knownCommitIds, id]),
+      },
+    },
+    nextCommitNumber: state.nextCommitNumber + 1,
+  };
+  return { nextState, outcome: "success", changed: true, code: "BRANCH_MERGED", affectedCommitIds: [id], transfer: null };
+}
+
+/** `git branch -d`: only another branch whose work the current branch already contains. Commits stay in the history. */
+function branchDelete(state: GitSimulationState, machine: MachineId, name: string): GitTransition {
+  const repo = state.machines[machine];
+  if (!repo.initialized) return unchanged(state, "rejected", "NOT_INITIALIZED");
+  if (!branchExists(repo, name)) return unchanged(state, "rejected", "BRANCH_NOT_FOUND");
+  if (name === MAIN_BRANCH || name === currentBranch(repo)) return unchanged(state, "rejected", "CANNOT_DELETE_BRANCH");
+  const tip = branchTip(repo, name);
+  if (tip === null || !isAncestor(tip, headCommitId(repo), repo.knownCommitIds, state.commits)) return unchanged(state, "rejected", "BRANCH_NOT_MERGED");
+  const { [name]: _removed, ...rest } = repo.branches ?? {};
+  void _removed;
+  const nextRepo = withBranches(repo, rest, currentBranch(repo));
+  return { nextState: withMachine(state, machine, nextRepo), outcome: "success", changed: true, code: "BRANCH_DELETED", affectedCommitIds: [tip], transfer: null };
 }
 
 function reset(state: GitSimulationState): GitTransition {

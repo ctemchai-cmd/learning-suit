@@ -1,5 +1,6 @@
 import type { DataState, DataView } from "../data/model";
 import type { DeployState, DeployView } from "../deploy/model";
+import type { SshState, SshView } from "../ssh/model";
 import type { AiState, AiView } from "../ai/model";
 import type { GitSimulationState } from "../git/model";
 import { copyNodes } from "./copy";
@@ -133,10 +134,10 @@ export type TableNode = NodeBase & {
 };
 /**
  * Lesson step shown by a Git widget (display only; the full state is always kept):
- * `local` = A → Git, `remote` = A → Git → GitHub, `full` = A+Git → GitHub → B+Git.
+ * `local` = A → Git, `remote` = A → Git → GitHub, `full` = A+Git → GitHub → B+Git, `branch` = A + Git with lanes.
  * Missing in older documents means `full`.
  */
-export type GitView = "local" | "remote" | "full";
+export type GitView = "local" | "remote" | "full" | "branch";
 export type GitSimulatorNode = NodeBase & {
   type: "git-simulator";
   rotation: 0;
@@ -183,22 +184,31 @@ export type AiSimulatorNode = NodeBase & {
   state: AiState;
 };
 
+/** SSH teaching simulator (plan 07 §4c, fingerprint-scanner analogy); `view` is its lesson step. */
+export type SshSimulatorNode = NodeBase & {
+  type: "ssh-simulator";
+  rotation: 0;
+  scale: number;
+  view: SshView;
+  state: SshState;
+};
+
 /** Teaching widgets: drawn by their own renderer, uniform scale only, never rotated. */
-export type WidgetNode = GitSimulatorNode | DataSimulatorNode | DeploySimulatorNode | AiSimulatorNode;
+export type WidgetNode = GitSimulatorNode | DataSimulatorNode | DeploySimulatorNode | AiSimulatorNode | SshSimulatorNode;
 export const isWidgetNode = (node: CanvasNode): node is WidgetNode =>
-  node.type === "git-simulator" || node.type === "data-simulator" || node.type === "deploy-simulator" || node.type === "ai-simulator";
+  node.type === "git-simulator" || node.type === "data-simulator" || node.type === "deploy-simulator" || node.type === "ai-simulator" || node.type === "ssh-simulator";
 /** Widgets whose actions play as a flow (packets on pipes). */
-export type FlowWidgetNode = DataSimulatorNode | DeploySimulatorNode | AiSimulatorNode;
-export const isFlowWidget = (node: CanvasNode): node is FlowWidgetNode => node.type === "data-simulator" || node.type === "deploy-simulator" || node.type === "ai-simulator";
+export type FlowWidgetNode = DataSimulatorNode | DeploySimulatorNode | AiSimulatorNode | SshSimulatorNode;
+export const isFlowWidget = (node: CanvasNode): node is FlowWidgetNode => node.type === "data-simulator" || node.type === "deploy-simulator" || node.type === "ai-simulator" || node.type === "ssh-simulator";
 /** Base (scale 1) size of any teaching widget: the single source for bounds, transforms and export. */
 export function widgetNodeSize(node: WidgetNode): { width: number; height: number } {
-  // Data, deploy and AI widgets share the 1120×680 frame in every step.
+  // Data, deploy, AI and SSH widgets share the 1120×680 frame in every step.
   return node.type === "git-simulator" ? gitNodeSize(node) : { ...DATA_BASE_SIZE };
 }
 
 export type CanvasNode =
   | RectNode | EllipseNode | LineNode | ArrowNode
-  | FreehandNode | TextNode | ImageNode | StencilNode | TableNode | CodeNode | GitSimulatorNode | DataSimulatorNode | DeploySimulatorNode | AiSimulatorNode;
+  | FreehandNode | TextNode | ImageNode | StencilNode | TableNode | CodeNode | GitSimulatorNode | DataSimulatorNode | DeploySimulatorNode | AiSimulatorNode | SshSimulatorNode;
 
 export type SlideDocument = {
   id: string;

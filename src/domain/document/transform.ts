@@ -103,6 +103,7 @@ function localBox(node: CanvasNode, metrics: FontMetrics): LocalBox {
     case "data-simulator":
     case "deploy-simulator":
     case "ai-simulator":
+    case "ssh-simulator":
       return { minX: 0, minY: 0, maxX: widgetNodeSize(node).width * node.scale, maxY: widgetNodeSize(node).height * node.scale };
     default: {
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -160,6 +161,7 @@ function singleHandleIds(node: CanvasNode, box: LocalBox): TransformHandleId[] {
     case "data-simulator":
     case "deploy-simulator":
     case "ai-simulator":
+    case "ssh-simulator":
       return [...CORNER_HANDLES];
     default: {
       // Freehand: corners + edges, minus handles on a zero-size axis (they would overlap and cannot scale).
@@ -346,6 +348,7 @@ export function transformSingle(
     case "data-simulator":
     case "deploy-simulator":
     case "ai-simulator":
+    case "ssh-simulator":
       return isCornerHandle(handle) ? scaleWidgetFromCorner(start, handle, pointer, metrics) : { ...start };
     case "code":
       return isCornerHandle(handle) ? scaleCodeFromCorner(start, handle, pointer, metrics) : { ...start };
@@ -503,6 +506,7 @@ function selectionFactorRange(nodes: CanvasNode[], anchor: Point, frameSize: num
       case "data-simulator":
       case "deploy-simulator":
       case "ai-simulator":
+      case "ssh-simulator":
         min = Math.max(min, MIN_GIT_SCALE / node.scale);
         max = Math.min(max, MAX_GIT_SCALE / node.scale);
         break;
@@ -552,6 +556,7 @@ function scaleNodeAbout(node: CanvasNode, anchor: Point, factor: number): Canvas
     case "data-simulator":
     case "deploy-simulator":
     case "ai-simulator":
+    case "ssh-simulator":
       return { ...node, x, y, scale: scaleWithin(node.scale, factor, MIN_GIT_SCALE, MAX_GIT_SCALE) };
     case "line":
     case "arrow":

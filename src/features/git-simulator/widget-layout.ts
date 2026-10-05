@@ -42,7 +42,7 @@ function machine(x: number, width: number, fileWidth: number, gap: number): Mach
 export function widgetLayout(view: GitView): WidgetLayout {
   const pushY = CARD_Y + HEADER_H + GIT_COLUMN.commitsY + 96;
   const pullY = pushY + 64;
-  if (view === "local") {
+  if (view === "local" || view === "branch") {
     const A = machine(24, 1072, 480, 72);
     return { view, A, remote: null, B: null, left: null, right: null, pushY, pullY, compact: false };
   }
@@ -64,14 +64,18 @@ export function widgetLayout(view: GitView): WidgetLayout {
 
 /** Machines and tabs that exist in a lesson step (the Git panel shows only these). */
 export function viewRepositories(view: GitView): ("A" | "remote" | "B")[] {
-  return view === "local" ? ["A"] : view === "remote" ? ["A", "remote"] : ["A", "remote", "B"];
+  return view === "local" || view === "branch" ? ["A"] : view === "remote" ? ["A", "remote"] : ["A", "remote", "B"];
 }
 
 export const GIT_VIEWS: { id: GitView; label: string; description: string }[] = [
   { id: "local", label: "A → Git", description: "แก้ไฟล์ แล้ว Add และ Commit ในเครื่องเดียว" },
   { id: "remote", label: "A → Git → GitHub", description: "ส่ง commit ขึ้น GitHub ด้วย Push และรับด้วย Pull" },
   { id: "full", label: "A+Git → GitHub → B+Git", description: "สองเครื่องทำงานร่วมกันผ่าน GitHub (Clone / Push / Pull)" },
+  { id: "branch", label: "Branch (ทางแยก)", description: "แตกทางแยกลองของใหม่โดย main ไม่โดนกระทบ แล้ว Merge กลับ (สร้าง / สลับ / Merge)" },
 ];
+
+/** Steps that show GitHub (and so Push / Pull / tracking tags). The Branch step is machine A only. */
+export const viewHasRemote = (view: GitView) => view === "remote" || view === "full";
 
 // ---------------------------------------------------------------------------
 // Shared geometry for drawing AND for the DOM overlay (edit / commit buttons).

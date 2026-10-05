@@ -1,8 +1,12 @@
 import { applyGitAction } from "../../domain/git/reducer";
 import {
-  aheadBehind, headSnapshot, isClean, isDiverged, snapshotsEqual, validateCommitMessage, validateFileSnapshot, type FileValidation,
+  MAIN_BRANCH, aheadBehind, branchNames, branchTip, currentBranch, headCommitId, headSnapshot, isAncestor, isClean, isDiverged, planBranchMerge, snapshotsEqual,
+  validateBranchName, validateCommitMessage, validateFileSnapshot, type BranchMergePlan, type FileValidation,
 } from "../../domain/git/selectors";
-import { DIRTY_WORKTREE_MESSAGE, describeFileValidationError, describeMessageValidationError, repositoryLabel } from "../../domain/git/messages";
+import {
+  DIRTY_SWITCH_MESSAGE, DIRTY_WORKTREE_MESSAGE, NEED_COMMIT_FOR_BRANCH_MESSAGE, NOT_ON_MAIN_MESSAGE,
+  describeBranchNameError, describeFileValidationError, describeMessageValidationError, repositoryLabel,
+} from "../../domain/git/messages";
 import { GIT_LIMITS, type FileSnapshot, type GitSimulationState, type MachineId } from "../../domain/git/model";
 
 /** Pure helpers shared by the Canvas widget, the board editor and the DOM panel (no React/Konva). */
@@ -108,6 +112,7 @@ export function getActionAvailability({ state, machine, draft, message, writable
     if (Object.keys(state.commits).length >= GIT_LIMITS.commits) commit.push("ครบ 200 commit แล้ว ให้กด Reset demo หรือเพิ่มตัวจำลองใหม่");
 
     if (repo.mainHead === null) push.push(`${repositoryLabel(machine)} ยังไม่มี commit ให้ Push`);
+    if (currentBranch(repo) !== MAIN_BRANCH) { push.push(NOT_ON_MAIN_MESSAGE); pull.push(NOT_ON_MAIN_MESSAGE); merge.push(NOT_ON_MAIN_MESSAGE); resetToRemote.push(NOT_ON_MAIN_MESSAGE); }
 
     if (projection.ok && !isClean(projected, machine)) pull.push(DIRTY_WORKTREE_MESSAGE);
     if (remoteEmpty) pull.push("GitHub ยังไม่มี commit ให้ Pull");
@@ -152,4 +157,87 @@ export function nextGitStep(state: GitSimulationState, machine: MachineId, avail
   if (counts.behind && !counts.ahead) return "pull";
   if (counts.behind && counts.ahead) return "merge";
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Branch step
+// ---------------------------------------------------------------------------
+
+export type BranchRow = {
+  name: string;
+  plan: BranchMergePlan;
+  /** `git switch <name>` */
+  switch: Availability;
+  /** `git merge <name>` into the current branch (for a conflict both ours/theirs buttons use this). */
+  merge: Availability;
+  /** `git branch -d <name>` */
+  delete: Availability;
+};
+export type BranchAvailability = {
+  current: string;
+  create: Availability;
+  /** Why the typed name is not usable (null when it is fine). */
+  nameError: string | null;
+  /** Every branch except the current one, `main` first. */
+  others: BranchRow[];
+};
+
+export type BranchAvailabilityInput = { state: GitSimulationState; machine: MachineId; draft: FileSnapshot | null; name: string; writable: boolean };
+
+/** Enablement of the Branch card. The dirty check reads the projected working copy (a valid draft counts as an edit). */
+export function getBranchAvailability({ state, machine, draft, name, writable }: BranchAvailabilityInput): BranchAvailability {
+  const projection = projectState(state, machine, draft);
+  const blockers: string[] = [];
+  if (!writable) blockers.push(READ_ONLY_REASON);
+  if (!projection.ok) blockers.push(INVALID_DRAFT_REASON);
+  const repo = state.machines[machine];
+  const current = currentBranch(repo);
+  const dirty = projection.ok && !isClean(projection.state, machine);
+  const full = Object.keys(state.commits).length >= GIT_LIMITS.commits;
+  const limit = "ครบ 200 commit แล้ว ให้กด Reset demo หรือเพิ่มตัวจำลองใหม่";
+
+  const check = validateBranchName(repo, name);
+  const nameError = check.ok ? null : describeBranchNameError(check.error);
+  const create = [...blockers];
+  if (nameError) create.push(nameError);
+  if (headCommitId(repo) === null) create.push(NEED_COMMIT_FOR_BRANCH_MESSAGE);
+  if (Object.keys(repo.branches ?? {}).length >= GIT_LIMITS.branches) create.push("สร้าง branch ได้ไม่เกิน 20 อัน ลบอันที่รวมแล้วก่อน");
+
+  const others = branchNames(repo).filter((branch) => branch !== current).map((branch): BranchRow => {
+    const plan = planBranchMerge(state, machine, branch);
+    const sw = [...blockers];
+    if (dirty) sw.push(DIRTY_SWITCH_MESSAGE);
+    const merge = [...blockers];
+    if (dirty) merge.push("Commit งานที่ค้างก่อน Merge");
+    if (plan === "up-to-date") merge.push(`Already up to date: ${current} มีงานของ ${branch} ครบแล้ว`);
+    if (plan === "unavailable") merge.push("ยังไม่มี commit ให้ Merge");
+    if ((plan === "merge" || plan === "conflict") && full) merge.push(limit);
+    const remove = [...blockers];
+    if (branch === MAIN_BRANCH) remove.push("main ลบไม่ได้");
+    else if (plan !== "up-to-date") remove.push(`ยังมีงานที่ยังไม่ได้ Merge เข้า ${current}`);
+    return { name: branch, plan, switch: availability(sw), merge: availability(merge), delete: availability(remove) };
+  });
+  return { current, create: availability(create), nameError, others };
+}
+
+export type BranchStepTarget = { step: GitStep | "create" | "switch" | "mergeBranch"; branch: string | null };
+
+/**
+ * The Branch step's "next": Add / Commit first; then — on main — create a branch (none yet) or merge one that has
+ * work main lacks; on a branch that has its own commits, switch back to main.
+ */
+export function nextBranchStep(state: GitSimulationState, machine: MachineId, availability: Record<GitPanelAction, Availability>): BranchStepTarget | null {
+  const base = nextGitStep(state, machine, availability, false);
+  if (base) return { step: base, branch: null };
+  const repo = state.machines[machine];
+  const head = headCommitId(repo);
+  if (!repo.initialized || head === null) return null;
+  if (currentBranch(repo) === MAIN_BRANCH) {
+    const names = branchNames(repo).filter((name) => name !== MAIN_BRANCH);
+    if (names.length === 0) return { step: "create", branch: null };
+    const pending = names.find((name) => ["fast-forward", "merge", "conflict"].includes(planBranchMerge(state, machine, name)));
+    return pending ? { step: "mergeBranch", branch: pending } : null;
+  }
+  const hasOwnWork = !isAncestor(head, branchTip(repo, MAIN_BRANCH), repo.knownCommitIds, state.commits);
+  return hasOwnWork ? { step: "switch", branch: MAIN_BRANCH } : null;
 }

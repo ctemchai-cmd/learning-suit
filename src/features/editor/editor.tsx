@@ -9,6 +9,7 @@ import { ImageCache, ImageCacheContext } from "@/features/canvas/image-cache";
 import { konvaFontMetrics } from "@/features/canvas/font-metrics";
 import { DataPanel } from "@/features/data-simulator/data-panel";
 import { DeployPanel } from "@/features/deploy-simulator/deploy-panel";
+import { SshPanel } from "@/features/ssh-simulator/ssh-panel";
 import { AiPanel } from "@/features/ai-simulator/ai-panel";
 import { useFlowSession } from "@/features/flow/flow-session";
 import { GitPanel } from "@/features/git-simulator/git-panel";
@@ -23,6 +24,7 @@ import { DEFAULTS, LIMITS } from "@/domain/document/limits";
 import { reorderNodeIds, type ZOrderAction } from "@/domain/document/z-order";
 import { createInitialDataState } from "@/domain/data/initial";
 import { createInitialDeployState } from "@/domain/deploy/initial";
+import { createInitialSshState } from "@/domain/ssh/initial";
 import { createInitialAiState } from "@/domain/ai/initial";
 import { createInitialGitState } from "@/domain/git/initial";
 import { ingestImage } from "@/services/assets/ingest";
@@ -64,6 +66,7 @@ function WidgetPanelEmpty({ slide, writable, onSelect, onInsert }: {
   const data = unlocked.filter((node) => node.type === "data-simulator");
   const deploy = unlocked.filter((node) => node.type === "deploy-simulator");
   const ai = unlocked.filter((node) => node.type === "ai-simulator");
+  const ssh = unlocked.filter((node) => node.type === "ssh-simulator");
   const pick = (list: CanvasNode[], name: string) => list.map((node, index) => <button key={node.id} className="app-button app-button-primary w-full" onClick={() => onSelect(node.id)}>
     {list.length > 1 ? `เลือก${name} ชิ้นที่ ${index + 1}` : `เลือก${name}ที่มีอยู่`}</button>);
   return <div className="space-y-3 p-4 text-sm">
@@ -72,14 +75,16 @@ function WidgetPanelEmpty({ slide, writable, onSelect, onInsert }: {
     {pick(data, "ตัวจำลองข้อมูล")}
     {pick(deploy, "ตัวจำลอง Deploy ")}
     {pick(ai, "ตัวจำลอง AI ")}
+    {pick(ssh, "ตัวจำลอง SSH ")}
     <button className="app-button w-full" disabled={!writable} onClick={() => onInsert("git")}>{git.length ? "เพิ่มตัวจำลอง Git ใหม่" : "เพิ่มตัวจำลอง Git กลางจอ"}</button>
     <button className="app-button w-full" disabled={!writable} onClick={() => onInsert("data")}>{data.length ? "เพิ่มตัวจำลองข้อมูลใหม่" : "เพิ่มตัวจำลองข้อมูลกลางจอ"}</button>
     <button className="app-button w-full" disabled={!writable} onClick={() => onInsert("deploy")}>{deploy.length ? "เพิ่มตัวจำลอง Deploy ใหม่" : "เพิ่มตัวจำลอง Deploy กลางจอ"}</button>
     <button className="app-button w-full" disabled={!writable} onClick={() => onInsert("ai")}>{ai.length ? "เพิ่มตัวจำลอง AI ใหม่" : "เพิ่มตัวจำลอง AI กลางจอ"}</button>
+    <button className="app-button w-full" disabled={!writable} onClick={() => onInsert("ssh")}>{ssh.length ? "เพิ่มตัวจำลอง SSH ใหม่" : "เพิ่มตัวจำลอง SSH กลางจอ"}</button>
   </div>;
 }
 
-type WidgetKind = "git" | "data" | "deploy" | "ai";
+type WidgetKind = "git" | "data" | "deploy" | "ai" | "ssh";
 
 function reorderSelection(action: ZOrderAction) {
   const state = useEditorStore.getState();
@@ -409,14 +414,16 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
         ? { ...base, type: "data-simulator", view: "where", state: createInitialDataState() }
         : kind === "deploy"
           ? { ...base, type: "deploy-simulator", view: "local", state: createInitialDeployState() }
-          : { ...base, type: "ai-simulator", view: "history", state: createInitialAiState() };
+          : kind === "ai"
+            ? { ...base, type: "ai-simulator", view: "history", state: createInitialAiState() }
+            : { ...base, type: "ssh-simulator", view: "why", state: createInitialSshState() };
     const size = widgetNodeSize(draft);
     // Never stack a new widget exactly on top of an existing one (it would hide the lesson so far).
     let x = center.x - size.width / 2, y = center.y - size.height / 2;
     const others = current?.nodes.filter(isWidgetNode) ?? [];
     while (others.some((node) => Math.abs(node.x - x) < 40 && Math.abs(node.y - y) < 40)) { x += 64; y += 64; }
     const node = { ...draft, x, y } as WidgetNode;
-    if (!insertNodes([node], [], { git: "เพิ่มตัวจำลอง Git", data: "เพิ่มตัวจำลองข้อมูล", deploy: "เพิ่มตัวจำลอง Deploy", ai: "เพิ่มตัวจำลอง AI" }[kind])) return;
+    if (!insertNodes([node], [], { git: "เพิ่มตัวจำลอง Git", data: "เพิ่มตัวจำลองข้อมูล", deploy: "เพิ่มตัวจำลอง Deploy", ai: "เพิ่มตัวจำลอง AI", ssh: "เพิ่มตัวจำลอง SSH" }[kind])) return;
     showWidgetPanel();
     // Zoom out (never in) so the whole widget is visible beside the panel, not under it.
     const slideId = state.activeSlideId;
@@ -740,7 +747,9 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
               ? <DataPanel key={selectedWidget.id} node={selectedWidget} slideId={slide.id} writable={writable} transact={transact} />
               : selectedWidget.type === "deploy-simulator"
                 ? <DeployPanel key={selectedWidget.id} node={selectedWidget} slideId={slide.id} writable={writable} transact={transact} />
-                : <AiPanel key={selectedWidget.id} node={selectedWidget} slideId={slide.id} writable={writable} transact={transact} />
+                : selectedWidget.type === "ai-simulator"
+                  ? <AiPanel key={selectedWidget.id} node={selectedWidget} slideId={slide.id} writable={writable} transact={transact} />
+                  : <SshPanel key={selectedWidget.id} node={selectedWidget} slideId={slide.id} writable={writable} transact={transact} />
           : <WidgetPanelEmpty slide={slide} writable={writable} onSelect={(id) => { if (setSelectedIds([id])) showWidgetPanel(); }} onInsert={insertWidget} />
         : <PropertiesPanel slide={slide} selected={selected} writable={writable} lockSelected={lockSelected} removeSelected={removeSelected} />}
   </>;
@@ -790,7 +799,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
           onDeleteSlide={() => slides.length > 1 && setDialog({ kind: "delete-slide", value: "" })}
           onMoveSlide={moveSlide}
           onReorderSlides={(orderedIds) => slide && transact({ label: "จัดลำดับสไลด์", affectedSlideId: slide.id, commands: [{ type: "slide.reorder", orderedIds }] })}
-          onInsertGit={() => insertWidget("git")} onInsertData={() => insertWidget("data")} onInsertDeploy={() => insertWidget("deploy")} onInsertAi={() => insertWidget("ai")} onAction={runToolAction} />}
+          onInsertGit={() => insertWidget("git")} onInsertData={() => insertWidget("data")} onInsertDeploy={() => insertWidget("deploy")} onInsertAi={() => insertWidget("ai")} onInsertSsh={() => insertWidget("ssh")} onAction={runToolAction} />}
         <div className="relative min-w-0 flex-1">
           {/* Messages float over the top-right of the board (clear of the favorites toolbar): they never change its size —
               a resize mid-drag used to end the drag. */}

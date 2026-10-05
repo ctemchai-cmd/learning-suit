@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createInitialGitState } from "./initial";
 import { applyGitAction } from "./reducer";
-import { aheadBehind, ancestorsOf, hasStaged, hasUnstaged, isAncestor, knownCommitsNewestFirst } from "./selectors";
+import { aheadBehind, ancestorsOf, branchNames, currentBranch, hasStaged, hasUnstaged, isAncestor, knownCommitsNewestFirst, planBranchMerge, suggestBranchName, validateBranchName } from "./selectors";
 import { describeGitTransition } from "./messages";
 import type { FileSnapshot, GitAction, GitCommit, GitResultCode, GitSimulationState, GitTransition, MachineRepository } from "./model";
 import { createProjectContent, type GitSimulatorNode, type ProjectContent } from "../document/model";
@@ -674,6 +674,236 @@ describe("GIT-07 — resolve a diverged history", () => {
     expect(describeGitTransition(resetToRemote("A"), reset)).toBe("เครื่อง A ทิ้งงานของตัวเองแล้ว ใช้เวอร์ชันของ GitHub (main = C2) ย้อนกลับด้วย Undo ได้");
     expect(run(reset.nextState, resetToRemote("A"))).toMatchObject({ outcome: "noop", code: "NO_CHANGE" });
     expect(run(editStageCommit(createInitialGitState(), "A", S1, "x"), resetToRemote("A"))).toMatchObject({ outcome: "rejected", code: "REMOTE_EMPTY" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GIT-09 — branches
+// ---------------------------------------------------------------------------
+
+const switchTo = (name: string): GitAction => ({ type: "branchSwitch", machine: "A", name });
+const create = (name: string): GitAction => ({ type: "branchCreate", machine: "A", name });
+const mergeBranch = (name: string, keep?: "ours" | "theirs"): GitAction => ({ type: "branchMerge", machine: "A", name, ...(keep ? { keep } : {}) });
+const deleteBranch = (name: string): GitAction => ({ type: "branchDelete", machine: "A", name });
+const F = (content: string): FileSnapshot => ({ name: "index.html", content });
+const repoA = (state: GitSimulationState) => state.machines.A;
+const filler = (from: number, count: number): Record<string, GitCommit> =>
+  Object.fromEntries(Array.from({ length: count }, (_, i) => [`C${from + i}`, commitOf(`C${from + i}`, null, "x", F("x\n"))]));
+
+/** main: C1 "base"; feature: C2 "feature work" (HEAD on feature). */
+function onFeature(): GitSimulationState {
+  let state = editStageCommit(createInitialGitState(), "A", F("base\n"), "base");
+  state = step(state, create("feature"), "BRANCH_CREATED");
+  return editStageCommit(state, "A", F("feature work\n"), "feature work");
+}
+
+describe("GIT-09 — branches", () => {
+  it("creates a branch at the current commit, switches onto it, and commits advance only that branch", () => {
+    let state = editStageCommit(createInitialGitState(), "A", F("base\n"), "base");
+    const created = run(state, create("feature"));
+    expect(created).toMatchObject({ outcome: "success", changed: true, code: "BRANCH_CREATED", affectedCommitIds: ["C1"] });
+    state = created.nextState;
+    expect(repoA(state)).toMatchObject({ mainHead: "C1", head: "feature", branches: { feature: "C1" } });
+    expect(describeGitTransition(create("feature"), created)).toContain("HEAD → feature");
+
+    const committed = run(step(step(state, edit("A", F("feature work\n")), "EDITED"), stage("A"), "STAGED"), commitAction("A", "feature work"));
+    state = committed.nextState;
+    expect(repoA(state)).toMatchObject({ mainHead: "C1", head: "feature", branches: { feature: "C2" } });
+    expect(state.commits.C2.parentId).toBe("C1");
+    expect(describeGitTransition(commitAction("A", "feature work"), committed)).toBe("สร้าง C2 บน branch feature แล้ว (main ยังเหมือนเดิม)");
+  });
+
+  it("switching replaces the working file and Staging with the target tip", () => {
+    let state = onFeature();
+    state = step(state, switchTo("main"), "SWITCHED");
+    expect(repoA(state)).toMatchObject({ mainHead: "C1", working: F("base\n"), index: F("base\n") });
+    expect(repoA(state).head).toBeUndefined();
+    expect(repoA(state).branches).toEqual({ feature: "C2" });
+    state = step(state, switchTo("feature"), "SWITCHED");
+    expect(repoA(state)).toMatchObject({ head: "feature", working: F("feature work\n"), index: F("feature work\n") });
+    expect(run(state, switchTo("feature"))).toMatchObject({ outcome: "noop", code: "NO_CHANGE" });
+    expect(run(state, switchTo("nope"))).toMatchObject({ outcome: "rejected", code: "BRANCH_NOT_FOUND" });
+  });
+
+  it("refuses to switch with an unadded edit or something staged, and says why", () => {
+    const edited = step(onFeature(), edit("A", F("scribble\n")), "EDITED");
+    const refused = run(edited, switchTo("main"));
+    expect(refused).toMatchObject({ outcome: "rejected", changed: false, code: "DIRTY_WORKTREE" });
+    expect(describeGitTransition(switchTo("main"), refused)).toContain("Commit งานที่ค้างก่อนสลับ branch");
+    const staged = step(edited, stage("A"), "STAGED");
+    expect(run(staged, switchTo("main"))).toMatchObject({ outcome: "rejected", code: "DIRTY_WORKTREE" });
+  });
+
+  it("refuses to branch before the first commit, and validates names", () => {
+    const empty = createInitialGitState();
+    const refused = run(empty, create("feature"));
+    expect(refused).toMatchObject({ outcome: "rejected", code: "NEED_COMMIT_FOR_BRANCH" });
+    expect(describeGitTransition(create("feature"), refused)).toBe("ต้อง commit อย่างน้อยหนึ่งครั้งก่อนแตก branch");
+    const state = editStageCommit(empty, "A", F("a\n"), "a");
+    for (const name of ["", "   ", "has space", "ก", "HEAD", "__proto__", "x".repeat(41), "a:b"]) {
+      expect(run(state, create(name)), name).toMatchObject({ outcome: "rejected", code: "INVALID_BRANCH_NAME" });
+    }
+    expect(run(state, create("main"))).toMatchObject({ outcome: "rejected", code: "BRANCH_EXISTS" });
+    expect(run(state, create("x".repeat(40)))).toMatchObject({ outcome: "success" });
+    expect(repoA(run(state, create("  feature/x-1.2_y  ")).nextState).head).toBe("feature/x-1.2_y");
+    let many = state;
+    for (let i = 1; i <= 20; i++) many = step(many, create(`b${i}`), "BRANCH_CREATED");
+    expect(run(many, create("one-too-many"))).toMatchObject({ outcome: "rejected", code: "BRANCH_LIMIT" });
+  });
+
+  it("fast-forwards when the current branch is an ancestor: pointer and file move, no new commit", () => {
+    const state = step(onFeature(), switchTo("main"), "SWITCHED");
+    const merged = run(state, mergeBranch("feature"));
+    expect(merged).toMatchObject({ outcome: "success", code: "FAST_FORWARDED", affectedCommitIds: ["C2"] });
+    expect(Object.keys(merged.nextState.commits)).toHaveLength(Object.keys(state.commits).length);
+    expect(repoA(merged.nextState)).toMatchObject({ mainHead: "C2", working: F("feature work\n"), index: F("feature work\n") });
+    expect(describeGitTransition(mergeBranch("feature"), merged)).toContain("Fast-forward");
+    expect(run(merged.nextState, mergeBranch("feature"))).toMatchObject({ outcome: "noop", code: "NO_CHANGE" });
+  });
+
+  it("says Already up to date when the other branch is an ancestor of the current one", () => {
+    const state = step(onFeature(), switchTo("main"), "SWITCHED");
+    const ahead = editStageCommit(state, "A", F("main moved on\n"), "main moved on"); // C3; feature (C2) is not an ancestor
+    expect(run(ahead, mergeBranch("feature"))).toMatchObject({ outcome: "rejected", code: "MERGE_CONFLICT" });
+    const merged = step(state, mergeBranch("feature"), "FAST_FORWARDED");
+    const noop = run(merged, mergeBranch("feature"));
+    expect(noop).toMatchObject({ outcome: "noop", changed: false });
+    expect(describeGitTransition(mergeBranch("feature"), noop)).toContain("Already up to date");
+    expect(run(merged, mergeBranch("main"))).toMatchObject({ outcome: "rejected", code: "SAME_BRANCH" });
+    // the other direction: main contains the (unchanged) branch tip
+    const untouched = step(editStageCommit(createInitialGitState(), "A", F("a\n"), "a"), create("early"), "BRANCH_CREATED");
+    const main = editStageCommit(step(untouched, switchTo("main"), "SWITCHED"), "A", F("b\n"), "b");
+    expect(run(main, mergeBranch("early"))).toMatchObject({ outcome: "noop", code: "NO_CHANGE" });
+  });
+
+  it("true merge commit with two parents, taking the file of the only side that changed it", () => {
+    let state = onFeature(); // C1 base, C2 feature work (changed)
+    state = step(state, switchTo("main"), "SWITCHED");
+    state = editStageCommit(state, "A", F("temp\n"), "temp"); // C3
+    state = editStageCommit(state, "A", F("base\n"), "back to base"); // C4: same file as the common ancestor C1
+    expect(planBranchMerge(state, "A", "feature")).toBe("merge");
+    const merged = run(state, mergeBranch("feature"));
+    expect(merged).toMatchObject({ outcome: "success", code: "BRANCH_MERGED", affectedCommitIds: ["C5"] });
+    const next = merged.nextState;
+    expect(next.commits.C5).toEqual({ id: "C5", parentId: "C4", mergeParentId: "C2", message: "Merge branch 'feature'", snapshot: F("feature work\n") });
+    expect(repoA(next)).toMatchObject({ mainHead: "C5", working: F("feature work\n"), index: F("feature work\n"), branches: { feature: "C2" } });
+    expect(repoA(next).knownCommitIds).toEqual(["C1", "C2", "C3", "C4", "C5"]);
+    expect(describeGitTransition(mergeBranch("feature"), merged)).toContain("merge commit");
+  });
+
+  it("conflict: both sides changed the file differently, so ours/theirs is required and both tips become the parents", () => {
+    let state = step(onFeature(), switchTo("main"), "SWITCHED");
+    state = editStageCommit(state, "A", F("main work\n"), "main work"); // C3
+    expect(planBranchMerge(state, "A", "feature")).toBe("conflict");
+    const refused = run(state, mergeBranch("feature"));
+    expect(refused).toMatchObject({ outcome: "rejected", changed: false, code: "MERGE_CONFLICT" });
+    expect(describeGitTransition(mergeBranch("feature"), refused)).toContain("ชนกัน");
+
+    const ours = run(state, mergeBranch("feature", "ours"));
+    expect(ours).toMatchObject({ outcome: "success", code: "BRANCH_MERGED" });
+    expect(ours.nextState.commits.C4).toMatchObject({ parentId: "C3", mergeParentId: "C2", snapshot: F("main work\n") });
+    expect(repoA(ours.nextState)).toMatchObject({ mainHead: "C4", working: F("main work\n"), index: F("main work\n") });
+
+    const theirs = run(state, mergeBranch("feature", "theirs"));
+    expect(theirs.nextState.commits.C4).toMatchObject({ parentId: "C3", mergeParentId: "C2", snapshot: F("feature work\n") });
+    expect(repoA(theirs.nextState).working).toEqual(F("feature work\n"));
+    expect(describeGitTransition(mergeBranch("feature", "theirs"), theirs)).toContain("ของ feature");
+
+    // both sides converged on the same file: nothing to choose
+    const same = editStageCommit(step(onFeature(), switchTo("main"), "SWITCHED"), "A", F("feature work\n"), "same change");
+    expect(planBranchMerge(same, "A", "feature")).toBe("merge");
+    expect(run(same, mergeBranch("feature"))).toMatchObject({ outcome: "success", code: "BRANCH_MERGED" });
+  });
+
+  it("refuses to merge from a dirty tree and when the branch is missing, and respects the commit limit", () => {
+    const state = step(onFeature(), switchTo("main"), "SWITCHED");
+    expect(run(step(state, edit("A", F("wip\n")), "EDITED"), mergeBranch("feature"))).toMatchObject({ outcome: "rejected", code: "DIRTY_WORKTREE" });
+    expect(run(state, mergeBranch("nope"))).toMatchObject({ outcome: "rejected", code: "BRANCH_NOT_FOUND" });
+    const diverged = editStageCommit(state, "A", F("main work\n"), "main work");
+    const full: GitSimulationState = { ...diverged, commits: { ...diverged.commits, ...filler(50, 197) }, nextCommitNumber: 300 };
+    expect(Object.keys(full.commits)).toHaveLength(200);
+    expect(run(full, mergeBranch("feature", "ours"))).toMatchObject({ outcome: "rejected", code: "COMMIT_LIMIT" });
+  });
+
+  it("the commit limit also applies to commits on a branch", () => {
+    const state = onFeature();
+    const full: GitSimulationState = { ...state, commits: { ...state.commits, ...filler(50, 198) }, nextCommitNumber: 300 };
+    const edited = step(step(full, edit("A", F("more\n")), "EDITED"), stage("A"), "STAGED");
+    expect(run(edited, commitAction("A", "too many"))).toMatchObject({ outcome: "rejected", code: "COMMIT_LIMIT" });
+  });
+
+  it("deletes only a merged, non-current branch; its commits stay in the history; state is canonical again", () => {
+    let state = step(onFeature(), switchTo("main"), "SWITCHED");
+    expect(run(state, deleteBranch("feature"))).toMatchObject({ outcome: "rejected", code: "BRANCH_NOT_MERGED" });
+    expect(run(state, deleteBranch("main"))).toMatchObject({ outcome: "rejected", code: "CANNOT_DELETE_BRANCH" });
+    expect(run(state, deleteBranch("nope"))).toMatchObject({ outcome: "rejected", code: "BRANCH_NOT_FOUND" });
+    state = step(state, mergeBranch("feature"), "FAST_FORWARDED");
+    const deleted = run(state, deleteBranch("feature"));
+    expect(deleted).toMatchObject({ outcome: "success", code: "BRANCH_DELETED" });
+    expect(deleted.nextState.commits.C2).toBeDefined();
+    expect("branches" in repoA(deleted.nextState)).toBe(false);
+    expect("head" in repoA(deleted.nextState)).toBe(false);
+    const current = step(onFeature(), create("other"), "BRANCH_CREATED");
+    expect(run(current, deleteBranch("other"))).toMatchObject({ outcome: "rejected", code: "CANNOT_DELETE_BRANCH" });
+  });
+
+  it("works on old states without branch fields: only main, HEAD on main", () => {
+    const old = editStageCommit(createInitialGitState(), "A", F("a\n"), "a");
+    expect("branches" in repoA(old)).toBe(false);
+    expect("head" in repoA(old)).toBe(false);
+    expect(currentBranch(repoA(old))).toBe("main");
+    expect(run(old, switchTo("main"))).toMatchObject({ outcome: "noop" });
+    expect(run(old, deleteBranch("main"))).toMatchObject({ code: "CANNOT_DELETE_BRANCH" });
+    expect(run(old, mergeBranch("main"))).toMatchObject({ code: "SAME_BRANCH" });
+    expect(applyGitAction(onFeature(), { type: "reset" }).nextState).toEqual(createInitialGitState());
+  });
+
+  it("Push, Pull, Resolve and Reset-to-GitHub work on main only: off main they are refused with a clear message", () => {
+    const state = onFeature();
+    for (const action of [push("A"), pull("A"), { type: "merge", machine: "A", keep: "ours" } as GitAction, { type: "resetToRemote", machine: "A" } as GitAction]) {
+      const refused = run(state, action);
+      expect(refused, action.type).toMatchObject({ outcome: "rejected", changed: false, code: "NOT_ON_MAIN" });
+      expect(describeGitTransition(action, refused)).toContain("main");
+    }
+  });
+
+  it("Push sends main only: an unmerged branch stays local, a merged one goes with main", () => {
+    let state = step(onFeature(), switchTo("main"), "SWITCHED");
+    expect(run(state, push("A")).nextState.remote).toEqual({ mainHead: "C1", knownCommitIds: ["C1"] });
+    state = step(state, mergeBranch("feature"), "FAST_FORWARDED");
+    expect(run(state, push("A")).nextState.remote).toEqual({ mainHead: "C2", knownCommitIds: ["C1", "C2"] });
+  });
+});
+
+describe("GIT-09 — branch selectors and schema", () => {
+  it("suggests feature, feature-2, … and validates names", () => {
+    let state = editStageCommit(createInitialGitState(), "A", F("a\n"), "a");
+    expect(suggestBranchName(repoA(state))).toBe("feature");
+    state = step(state, create("feature"), "BRANCH_CREATED");
+    expect(suggestBranchName(repoA(state))).toBe("feature-2");
+    expect(validateBranchName(repoA(state), "feature")).toEqual({ ok: false, error: "branch-exists" });
+    expect(validateBranchName(repoA(state), " ok-1 ")).toEqual({ ok: true, name: "ok-1" });
+    expect(validateBranchName(repoA(state), "bad name")).toEqual({ ok: false, error: "branch-invalid-character" });
+    expect(currentBranch(repoA(state))).toBe("feature");
+    expect(branchNames(repoA(state))).toEqual(["main", "feature"]);
+    expect(planBranchMerge(state, "A", "main")).toBe("up-to-date");
+  });
+
+  it("the document schema rejects broken branch data", () => {
+    const base = onFeature();
+    const parse = (state: GitSimulationState) => {
+      const content = createProjectContent("บทเรียน Git");
+      content.document.slides[0].nodes.push({ id: "0c8b0f3e-6f4a-4c1e-8a57-5b0f7c2d9e10", type: "git-simulator", x: 0, y: 0, rotation: 0, opacity: 1, locked: false, scale: 1, view: "branch", state });
+      return () => parseProjectContent(JSON.parse(JSON.stringify(content)));
+    };
+    expect(parse(base)()).toBeDefined();
+    const withA = (patch: Partial<MachineRepository>): GitSimulationState => ({ ...base, machines: { ...base.machines, A: { ...base.machines.A, ...patch } } });
+    expect(parse(withA({ head: "ghost" }))).toThrow();
+    expect(parse(withA({ head: "main" }))).toThrow();
+    expect(parse(withA({ branches: { HEAD: "C1" } }))).toThrow();
+    expect(parse(withA({ branches: { "bad name": "C1" } }))).toThrow();
+    expect(parse(withA({ branches: { feature: "C9" } }))).toThrow();
+    expect(parse(withA({ branches: Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`b${i}`, "C1"])) }))).toThrow();
   });
 });
 

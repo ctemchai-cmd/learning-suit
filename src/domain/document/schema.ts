@@ -2,6 +2,7 @@ import { z } from "zod";
 import { DATA_LIMITS } from "../data/model";
 import { DEPLOY_LIMITS } from "../deploy/model";
 import { AI_LIMITS } from "../ai/model";
+import { SSH_LIMITS } from "../ssh/model";
 import { LIMITS } from "./limits";
 import { CODE_LANGUAGES, STENCIL_FRAMES, STENCIL_ICONS, type ProjectContent } from "./model";
 
@@ -80,9 +81,11 @@ const fileSnapshot = z.strictObject({
 });
 const commitId = z.string().regex(/^C[1-9]\d*$/);
 const commit = z.strictObject({ id: commitId, parentId: commitId.nullable(), mergeParentId: commitId.optional(), message: z.string().refine((v) => v === v.trim() && codePoints(v) >= 1 && codePoints(v) <= 200 && !/[\r\n\u2028\u2029]/.test(v)), snapshot: fileSnapshot });
+const branchName = z.string().regex(/^[A-Za-z0-9._/-]{1,40}$/).refine((v) => v !== "HEAD" && v !== "main" && v !== "__proto__", "Reserved branch name");
 const machine = z.strictObject({
   initialized: z.boolean(), working: fileSnapshot.nullable(), index: fileSnapshot.nullable(),
   mainHead: commitId.nullable(), originMainHead: commitId.nullable(), knownCommitIds: z.array(commitId),
+  branches: z.record(branchName, commitId).optional(), head: branchName.optional(),
 });
 const remote = z.strictObject({ mainHead: commitId.nullable(), knownCommitIds: z.array(commitId) });
 const gitState = z.strictObject({
@@ -119,14 +122,18 @@ const gitState = z.strictObject({
     const repo = state.machines[id];
     checkKnown(repo.knownCommitIds, repo.mainHead, id);
     if (repo.originMainHead && !repo.knownCommitIds.includes(repo.originMainHead)) fail(`${id} origin/main is unknown`);
-    if (!repo.initialized && (repo.working || repo.index || repo.mainHead || repo.originMainHead || repo.knownCommitIds.length)) fail(`${id} uninitialized state invalid`);
+    const branches = Object.entries(repo.branches ?? {});
+    if (branches.length > 20) fail(`${id} has too many branches`);
+    for (const [name, tip] of branches) if (!repo.knownCommitIds.includes(tip)) fail(`${id} branch ${name} tip is unknown`);
+    if (repo.head !== undefined && !(repo.branches && Object.prototype.hasOwnProperty.call(repo.branches, repo.head))) fail(`${id} HEAD is on a missing branch`);
+    if (!repo.initialized && (repo.working || repo.index || repo.mainHead || repo.originMainHead || repo.knownCommitIds.length || branches.length)) fail(`${id} uninitialized state invalid`);
     if (repo.initialized && (!repo.working || (repo.mainHead && !repo.index))) fail(`${id} initialized state invalid`);
   }
   if (!state.machines.A.initialized) fail("Machine A must be initialized");
 });
 const gitSimulator = z.strictObject({
   ...base, type: z.literal("git-simulator"), rotation: z.literal(0),
-  scale: z.number().finite().min(0.5).max(4), view: z.enum(["local", "remote", "full"]).optional(), state: gitState,
+  scale: z.number().finite().min(0.5).max(4), view: z.enum(["local", "remote", "full", "branch"]).optional(), state: gitState,
 });
 
 // Data-storage simulator (plan 07 §3): small coffee-shop tables with referential integrity.
@@ -225,7 +232,29 @@ const aiSimulator = z.strictObject({
   scale: z.number().finite().min(0.5).max(4), view: z.enum(["history", "thinking", "memory", "agent", "ccMemory"]), state: aiState,
 });
 
-export const canvasNodeSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, arrow, pen, highlighter, text, image, stencil, table, code, gitSimulator, dataSimulator, deploySimulator, aiSimulator]);
+// SSH simulator (plan 07 §4c).
+const sshMachine = z.strictObject({
+  priv: z.boolean(), pub: z.boolean(), known: z.boolean(),
+  cmd: z.string().refine((v) => codePoints(v) <= SSH_LIMITS.cmd),
+  out: z.array(z.string().refine((v) => codePoints(v) >= 1 && codePoints(v) <= SSH_LIMITS.outLine)).max(SSH_LIMITS.outLines),
+}).refine((value) => value.priv || !value.pub, "A public key needs its private key");
+const sshState = z.strictObject({
+  version: z.literal(1),
+  a: sshMachine, b: sshMachine,
+  registered: z.array(z.enum(["a", "b"])).max(2),
+  pushes: z.number().int().min(0).max(SSH_LIMITS.pushes),
+  thief: z.enum(["idle", "copied", "denied"]),
+}).superRefine((state, ctx) => {
+  if (new Set(state.registered).size !== state.registered.length || state.registered.some((machine) => !state[machine].pub)) {
+    ctx.addIssue({ code: "custom", message: "Only machines with a public key can be registered, once each" });
+  }
+});
+const sshSimulator = z.strictObject({
+  ...base, type: z.literal("ssh-simulator"), rotation: z.literal(0),
+  scale: z.number().finite().min(0.5).max(4), view: z.enum(["why", "keygen", "register", "connect", "others"]), state: sshState,
+});
+
+export const canvasNodeSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, arrow, pen, highlighter, text, image, stencil, table, code, gitSimulator, dataSimulator, deploySimulator, aiSimulator, sshSimulator]);
 export const slideSchema = z.strictObject({ id: uuid, name: title, background: color, nodes: z.array(canvasNodeSchema) });
 export const assetSchema = z.strictObject({
   id: uuid, mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]),

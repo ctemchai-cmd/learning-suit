@@ -66,7 +66,7 @@ export function Action({ children, onClick, disabled, icon, primary, danger, cou
   return <button type="button" disabled={disabled} onClick={onClick}
     className={`flex w-full items-center gap-2.5 rounded-xl border px-3 py-2 text-left text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${tone}`}>
     {icon && <span aria-hidden className={`grid h-6 w-6 shrink-0 place-items-center rounded-md ${primary ? "bg-white/20" : "bg-slate-100 text-slate-600"}`}>{icon}</span>}
-    <span className="min-w-0 flex-1 truncate">{children}</span>
+    <span className="min-w-0 flex-1 break-words leading-snug">{children}</span>
     {count !== undefined && <span className={`rounded-full px-1.5 text-[11px] font-semibold ${primary ? "bg-white/20" : "bg-slate-100 text-slate-600"}`}>{count}</span>}
   </button>;
 }

@@ -48,6 +48,10 @@ Pull เลือกโหมด **fast-forward only** อย่างชัด�
 - ไม่จำลองหลายไฟล์ การลบไฟล์ staging บางบรรทัด branches, merge, rebase, force push, reset ของ Git, detached HEAD, credentials หรือ network failure ของ GitHub จริง
 - `Reset demo` เป็นคำสั่งของแอปเพื่อเริ่มบทเรียนใหม่ ไม่ใช่ `git reset`; Undo ของแอปย้อนทุกฝั่งได้และไม่ควรถูกอธิบายว่าเป็นพฤติกรรมของ Git จริง
 
+## อัปเดต 2026-10-05: Branch อยู่ในขอบเขตแล้ว
+
+ผู้สอนขอบทเรียน Branch จึงเพิ่มขั้นบทเรียนที่ 4 "Branch (ทางแยก)" ให้สร้าง สลับ Merge และลบ branch ได้ (เฉพาะเครื่อง A, ไฟล์เดียวเหมือนเดิม) ข้อห้ามเรื่อง branch ก่อนหน้านี้จึงไม่ใช้กับขั้นนี้ ส่วน Push/Pull/Clone ยังทำงานกับ `main` เท่านั้น (ปฏิเสธเมื่อ HEAD อยู่ branch อื่น) และไม่มี remote branch รายละเอียดดู [สเปก §Branch](../plan/04-git-simulator.md)
+
 ## เงื่อนไขทบทวน
 
 ทบทวน ADR ก่อนเพิ่มหลายไฟล์หรือหลาย parent ของ commit เพราะกระทบ snapshot, ancestry, UI และ archive schema หากต้องเชื่อม GitHub จริง ให้ทำ ADR แยกสำหรับสิทธิ์และขอบเขตการแก้ repository โดยไม่เปลี่ยนความหมายของ simulator เดิมเงียบ ๆ

@@ -14,11 +14,101 @@ export function copySnapshot(snapshot: FileSnapshot): FileSnapshot {
   return { name: snapshot.name, content: snapshot.content };
 }
 
-/** Snapshot of the machine's `mainHead`, or `null` before the first commit. */
+/** Snapshot of the commit HEAD points at (the current branch's tip), or `null` before the first commit. */
 export function headSnapshot(state: GitSimulationState, repo: MachineRepository): FileSnapshot | null {
-  if (repo.mainHead === null) return null;
-  return state.commits[repo.mainHead]?.snapshot ?? null;
+  const head = headCommitId(repo);
+  if (head === null) return null;
+  return state.commits[head]?.snapshot ?? null;
 }
+
+// ---------------------------------------------------------------------------
+// Branches (absent fields = only `main`, HEAD on `main`)
+// ---------------------------------------------------------------------------
+
+export const MAIN_BRANCH = "main";
+
+export function currentBranch(repo: MachineRepository): string {
+  return repo.head ?? MAIN_BRANCH;
+}
+
+/** Tip of a branch (`main` lives in `mainHead`); `null` when the branch has no commit or does not exist. */
+export function branchTip(repo: MachineRepository, name: string): CommitId | null {
+  return name === MAIN_BRANCH ? repo.mainHead : hasBranch(repo, name) ? repo.branches![name] : null;
+}
+
+export function branchExists(repo: MachineRepository, name: string): boolean {
+  return name === MAIN_BRANCH || hasBranch(repo, name);
+}
+
+const hasBranch = (repo: MachineRepository, name: string) => Object.prototype.hasOwnProperty.call(repo.branches ?? {}, name);
+
+/** The commit HEAD points at: the tip of the current branch. */
+export function headCommitId(repo: MachineRepository): CommitId | null {
+  return branchTip(repo, currentBranch(repo));
+}
+
+/** `main` first, then the other branches in creation order. */
+export function branchNames(repo: MachineRepository): string[] {
+  return [MAIN_BRANCH, ...Object.keys(repo.branches ?? {})];
+}
+
+export type BranchNameError = "branch-empty" | "branch-too-long" | "branch-invalid-character" | "branch-reserved" | "branch-exists";
+const BRANCH_NAME_CHARACTERS = /^[A-Za-z0-9._/-]+$/;
+
+/** 1–40 characters of A–Z a–z 0–9 . _ / -, not `HEAD` (or `__proto__`), not an existing branch. */
+export function validateBranchName(repo: MachineRepository, name: string): { ok: true; name: string } | { ok: false; error: BranchNameError } {
+  const trimmed = name.trim();
+  if (trimmed.length < 1) return { ok: false, error: "branch-empty" };
+  if (trimmed.length > GIT_LIMITS.branchNameCodePoints) return { ok: false, error: "branch-too-long" };
+  if (!BRANCH_NAME_CHARACTERS.test(trimmed)) return { ok: false, error: "branch-invalid-character" };
+  if (trimmed === "HEAD" || trimmed === "__proto__") return { ok: false, error: "branch-reserved" };
+  if (branchExists(repo, trimmed)) return { ok: false, error: "branch-exists" };
+  return { ok: true, name: trimmed };
+}
+
+/** "feature", then "feature-2", "feature-3"… the first name nobody uses yet. */
+export function suggestBranchName(repo: MachineRepository): string {
+  for (let n = 1; n <= GIT_LIMITS.branches + 1; n++) {
+    const name = n === 1 ? "feature" : `feature-${n}`;
+    if (!branchExists(repo, name)) return name;
+  }
+  return "feature";
+}
+
+/** Nearest commit both tips contain (highest number among the common ancestors), or `null`. */
+export function mergeBase(state: GitSimulationState, repo: MachineRepository, a: CommitId, b: CommitId): CommitId | null {
+  const ofA = new Set(ancestorsOf(a, repo.knownCommitIds, state.commits));
+  const common = ancestorsOf(b, repo.knownCommitIds, state.commits).filter((id) => ofA.has(id));
+  return common.length ? common[common.length - 1] : null;
+}
+
+export type BranchMergePlan = "up-to-date" | "fast-forward" | "merge" | "conflict" | "unavailable";
+
+/**
+ * What `git merge <other>` would do on the current branch. `conflict` = both sides changed the file differently
+ * since their common ancestor (the learner then picks ours/theirs). `file` is the merge commit's file when no
+ * choice is needed (the side that changed, or ours when both ended up identical).
+ */
+export function analyzeBranchMerge(state: GitSimulationState, machine: MachineId, other: string): { plan: BranchMergePlan; file: FileSnapshot | null } {
+  const repo = state.machines[machine];
+  const ours = headCommitId(repo);
+  const theirs = branchTip(repo, other);
+  const none = { plan: "unavailable", file: null } as const;
+  if (!repo.initialized || other === currentBranch(repo) || !branchExists(repo, other) || ours === null || theirs === null) return none;
+  if (isAncestor(theirs, ours, repo.knownCommitIds, state.commits)) return { plan: "up-to-date", file: null };
+  if (isAncestor(ours, theirs, repo.knownCommitIds, state.commits)) return { plan: "fast-forward", file: null };
+  const base = mergeBase(state, repo, ours, theirs);
+  const baseSnapshot = base === null ? null : state.commits[base]?.snapshot ?? null;
+  const oursSnapshot = state.commits[ours]?.snapshot ?? null;
+  const theirsSnapshot = state.commits[theirs]?.snapshot ?? null;
+  if (!oursSnapshot || !theirsSnapshot) return none;
+  const oursChanged = !snapshotsEqual(oursSnapshot, baseSnapshot);
+  const theirsChanged = !snapshotsEqual(theirsSnapshot, baseSnapshot);
+  if (oursChanged && theirsChanged && !snapshotsEqual(oursSnapshot, theirsSnapshot)) return { plan: "conflict", file: null };
+  return { plan: "merge", file: copySnapshot(theirsChanged && !oursChanged ? theirsSnapshot : oursSnapshot) };
+}
+
+export const planBranchMerge = (state: GitSimulationState, machine: MachineId, other: string): BranchMergePlan => analyzeBranchMerge(state, machine, other).plan;
 
 export function hasUnstaged(state: GitSimulationState, machine: MachineId): boolean {
   const repo = state.machines[machine];

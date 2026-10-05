@@ -3,7 +3,7 @@ import { createInitialGitState } from "../../domain/git/initial";
 import { applyGitAction } from "../../domain/git/reducer";
 import type { FileSnapshot, GitAction, GitSimulationState } from "../../domain/git/model";
 import {
-  INVALID_DRAFT_REASON, READ_ONLY_REASON, codeLines, getActionAvailability, nextGitStep, previewLines, projectState, truncateCodePoints,
+  INVALID_DRAFT_REASON, READ_ONLY_REASON, codeLines, getActionAvailability, getBranchAvailability, nextBranchStep, nextGitStep, previewLines, projectState, truncateCodePoints,
 } from "./view-model";
 
 const S1: FileSnapshot = { name: "index.html", content: "<h1>รุ่นหนึ่ง</h1>\n" };
@@ -119,5 +119,70 @@ describe("next step highlighted in the panel", () => {
     const bAhead = play(pushed, { type: "edit", machine: "B", file: SA }, { type: "stage", machine: "B" }, { type: "commit", machine: "B", message: "b" }, { type: "push", machine: "B" });
     expect(next(bAhead)).toBeNull(); // A does not know about B's push until it pulls (tracking is local)
     expect(next(bAhead, true, null, "B")).toBeNull();
+  });
+});
+
+describe("Branch step", () => {
+  const A = (action: Omit<GitAction, "machine"> & { type: GitAction["type"] }) => ({ ...action, machine: "A" }) as GitAction;
+  const edit = (content: string) => A({ type: "edit", file: { name: "index.html", content } } as never);
+  const commit = (content: string, message: string): GitAction[] => [edit(content), A({ type: "stage" }), A({ type: "commit", message } as never)];
+  const create = (name: string) => A({ type: "branchCreate", name } as never);
+  const switchTo = (name: string) => A({ type: "branchSwitch", name } as never);
+  const merge = (name: string, keep?: "ours" | "theirs") => A({ type: "branchMerge", name, keep } as never);
+  const avail = (state: GitSimulationState, name = "x", draft: FileSnapshot | null = null, writable = true) => getBranchAvailability({ state, machine: "A", draft, name, writable });
+  const next = (state: GitSimulationState) => nextBranchStep(state, "A", getActionAvailability({ state, machine: "A", draft: null, message: "", writable: true }));
+
+  it("create needs a commit and a valid, unused name; switch and delete follow the dirty/merged rules", () => {
+    const empty = createInitialGitState();
+    expect(avail(empty, "feature").create).toEqual({ enabled: false, reasons: ["ต้อง commit อย่างน้อยหนึ่งครั้งก่อนแตก branch"] });
+    const base = play(empty, ...commit("base\n", "base"));
+    expect(avail(base, "feature").create.enabled).toBe(true);
+    expect(avail(base, "").nameError).toBe("พิมพ์ชื่อ branch ก่อน");
+    expect(avail(base, "bad name").create.enabled).toBe(false);
+    expect(avail(base, "main").nameError).toBe("มี branch ชื่อนี้อยู่แล้ว");
+    expect(avail(base, "feature", null, false).create.reasons).toContain(READ_ONLY_REASON);
+
+    const onFeature = play(base, create("feature"), ...commit("feature\n", "feature work"));
+    const view = avail(onFeature);
+    expect(view.current).toBe("feature");
+    expect(view.others.map((row) => [row.name, row.plan, row.switch.enabled, row.merge.enabled, row.delete.enabled])).toEqual([["main", "up-to-date", true, false, false]]);
+    expect(view.others[0].delete.reasons).toEqual(["main ลบไม่ได้"]);
+
+    // an unsaved board draft counts as dirty for switching
+    const dirty = avail(onFeature, "x", { name: "index.html", content: "scribble\n" });
+    expect(dirty.others[0].switch).toEqual({ enabled: false, reasons: ["Commit งานที่ค้างก่อนสลับ branch (ไม่เช่นนั้นงานที่ยังไม่ Commit จะหาย)"] });
+    expect(avail(play(onFeature, edit("wip\n")), "x").others[0].switch.enabled).toBe(false);
+
+    const onMain = play(onFeature, switchTo("main"));
+    const row = avail(onMain).others[0];
+    expect(row).toMatchObject({ name: "feature", plan: "fast-forward", switch: { enabled: true }, merge: { enabled: true } });
+    expect(row.delete).toEqual({ enabled: false, reasons: ["ยังมีงานที่ยังไม่ได้ Merge เข้า main"] });
+    const merged = play(onMain, merge("feature"));
+    expect(avail(merged).others[0]).toMatchObject({ plan: "up-to-date", merge: { enabled: false }, delete: { enabled: true } });
+  });
+
+  it("flags a conflict and Push/Pull reasons off main", () => {
+    const state = play(createInitialGitState(), ...commit("base\n", "base"), create("feature"), ...commit("f\n", "f"), switchTo("main"), ...commit("m\n", "m"));
+    expect(avail(state).others[0].plan).toBe("conflict");
+    const away = play(state, switchTo("feature"));
+    const availability = getActionAvailability({ state: away, machine: "A", draft: null, message: "", writable: true });
+    expect(availability.push.reasons.join(" ")).toContain("ไม่ได้อยู่ที่ main");
+    expect(availability.pull.enabled).toBe(false);
+  });
+
+  it("suggests create → edit/add/commit → switch to main → merge", () => {
+    const initial = createInitialGitState();
+    expect(next(initial)?.step).toBe("stage");
+    const base = play(initial, ...commit("base\n", "base"));
+    expect(next(base)).toEqual({ step: "create", branch: null });
+    const fresh = play(base, create("feature"));
+    expect(next(fresh)).toBeNull(); // on the new branch: edit the file next
+    expect(next(play(fresh, edit("f\n")))?.step).toBe("stage");
+    expect(next(play(fresh, edit("f\n"), A({ type: "stage" })))?.step).toBe("commit");
+    const worked = play(fresh, ...commit("f\n", "f"));
+    expect(next(worked)).toEqual({ step: "switch", branch: "main" });
+    const back = play(worked, switchTo("main"));
+    expect(next(back)).toEqual({ step: "mergeBranch", branch: "feature" });
+    expect(next(play(back, merge("feature")))).toBeNull();
   });
 });

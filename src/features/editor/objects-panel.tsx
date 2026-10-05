@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowUpRight, Bot, PanelTop, SquareCode, Table, ChevronDown, ChevronsDown, ChevronsUp, ChevronUp, Circle, Database, GitBranch, Rocket, Highlighter, Image as ImageIcon, Lock, PenLine, Slash, Square, Type, Unlock } from "lucide-react";
+import { ArrowUpRight, Bot, KeyRound, PanelTop, SquareCode, Table, ChevronDown, ChevronsDown, ChevronsUp, ChevronUp, Circle, Database, GitBranch, Rocket, Highlighter, Image as ImageIcon, Lock, PenLine, Slash, Square, Type, Unlock } from "lucide-react";
 import type { CanvasNode, SlideDocument } from "@/domain/document/model";
 import type { DocumentTransaction } from "@/domain/document/commands";
 import { hasZOrderChange, type ZOrderAction } from "@/domain/document/z-order";
@@ -15,6 +15,7 @@ export function nodeLabel(node: CanvasNode): string {
   if (node.type === "data-simulator") return "data-simulator";
   if (node.type === "deploy-simulator") return "deploy-simulator";
   if (node.type === "ai-simulator") return "ai-simulator";
+  if (node.type === "ssh-simulator") return "ssh-simulator";
   if (node.type === "code") return `โค้ด ${CODE_LABEL[node.language]}: ${[...(node.code.split("\n").find((line) => line.trim()) ?? "").trim()].slice(0, 28).join("")}`;
   if (node.type === "table") return `${node.variant === "class" ? "กล่องคลาส" : "ตาราง"}: ${[...(node.rows[0]?.cells.join(" · ") ?? "")].slice(0, 28).join("")}`;
   if (node.type === "stencil") return `${stencilSpec(node.kind).name}${node.label && node.label !== stencilSpec(node.kind).name ? `: ${node.label}` : ""}`;
@@ -38,6 +39,7 @@ function NodeIcon({ node }: { node: CanvasNode }) {
     case "data-simulator": return <Database {...props} />;
     case "deploy-simulator": return <Rocket {...props} />;
     case "ai-simulator": return <Bot {...props} />;
+    case "ssh-simulator": return <KeyRound {...props} />;
   }
 }
 

@@ -5,13 +5,14 @@ import { Arrow, Circle, Group, Line, Rect, Text } from "react-konva";
 import type Konva from "konva";
 import { gitViewOf, type GitSimulatorNode, type GitView } from "@/domain/document/model";
 import type { GitSimulationState, MachineId, RepositoryId } from "@/domain/git/model";
+import { currentBranch } from "@/domain/git/selectors";
 import { GIT_TRANSFER_DURATION_MS, type GitPreview, type GitTab, type GitTransferAnimation } from "./session-store";
-import { commitGraph, machineDiagram, remoteDiagram, shortSyncText, type GraphRow, type Tone, type ZoneLine } from "./diagram-model";
+import { branchPill, commitGraph, laneMetrics, machineDiagram, remoteDiagram, shortSyncText, type GraphRow, type Tone, type ZoneLine } from "./diagram-model";
 import { diffCounts, diffWindow, lineDiff } from "@/domain/git/diff";
 import { codeLines } from "./view-model";
 import {
   COMMIT_LIST, codeText, commitListBox, commitListStyle, commitRowLimit, fileCodeBox, fileEditorBox, fileNameBox, GIT_COLUMN, gitShift, remoteCodeBox,
-  remoteCodeText, remoteFileBox, REMOTE_COLUMN, widgetLayout, widgetWidth, WIDGET_H,
+  remoteCodeText, remoteFileBox, REMOTE_COLUMN, viewHasRemote, widgetLayout, widgetWidth, WIDGET_H,
   type Box, type MachineLayout, type WidgetLayout,
 } from "./widget-layout";
 
@@ -84,7 +85,7 @@ function FileColumn({ layout, machine, state, previewCommit, font }: { layout: W
   const tabW = commit ? Math.min(tab.w, Math.max(72, editor.w - 120)) : tab.w;
   return <Group x={box.x} y={box.y} listening={false}>
     <Rect width={box.w} height={box.h} cornerRadius={12} fill={commit ? C.previewFill : C.fileCol} stroke={tone.stroke} strokeWidth={commit || model.working.tone === "pending" ? 2 : 1} />
-    <Label x={12} y={big ? 12 : 9} width={box.w - 24} text={commit ? `โค้ดของ ${commit.id} (ดูอย่างเดียว)` : "ไฟล์ที่แก้อยู่"} size={big ? 17 : 13} bold color={commit ? "#1D4ED8" : C.title} font={font} />
+    <Label x={12} y={big ? 12 : 9} width={box.w - 24} text={commit ? `โค้ดของ ${commit.id} (ดูอย่างเดียว)` : layout.view === "branch" ? `ไฟล์ที่แก้อยู่ (branch ${currentBranch(state.machines[machine])})` : "ไฟล์ที่แก้อยู่"} size={big ? 17 : 13} bold color={commit ? "#1D4ED8" : C.title} font={font} />
     <Rect x={editor.x} y={editor.y} width={editor.w} height={editor.h} cornerRadius={radius} fill={EDITOR.bg} />
     <Rect x={editor.x} y={editor.y} width={editor.w} height={tab.h} cornerRadius={[radius, radius, 0, 0]} fill={EDITOR.bar} />
     <Rect x={tab.x} y={tab.y} width={tabW} height={tab.h} cornerRadius={[radius, tabW < editor.w ? 6 : radius, 0, 0]} fill={EDITOR.bg} />
@@ -119,24 +120,38 @@ function FileColumn({ layout, machine, state, previewCommit, font }: { layout: W
 const TAG_W = { main: 44, "origin/main": 84 } as const;
 const TAG_W_SMALL = { main: 34, "origin/main": 70 } as const;
 
+type TagStyle = { label: string; width: number; fill: string; stroke: string; text: string };
+/** main (dark), origin/main (purple), other branches (green), HEAD → current branch (blue, the one the learner is on). */
+function tagStyle(row: GraphRow, tag: string, small: boolean): TagStyle {
+  const head = row.headTag === tag;
+  const label = head ? `HEAD → ${tag}` : tag;
+  const known = !head && (tag === "main" || tag === "origin/main") ? (small ? TAG_W_SMALL : TAG_W)[tag] : null;
+  const width = known ?? Math.min(small ? 130 : 168, Math.round([...label].length * (small ? 6.4 : 7.6) + (small ? 14 : 20)));
+  if (head) return { label, width, fill: "#2563EB", stroke: "#1D4ED8", text: "#FFFFFF" };
+  if (tag === "main") return { label, width, fill: "#0F172A", stroke: "#0F172A", text: "#FFFFFF" };
+  if (tag === "origin/main") return { label, width, fill: "#FFFFFF", stroke: "#7C3AED", text: "#6D28D9" };
+  return { label, width, fill: "#F0FDF4", stroke: "#16A34A", text: "#15803D" };
+}
+
 /**
  * Commit circles (ID inside, colour per commit) with parent lines, branch tags and the commit message.
  * Wide lists: one line (message left, tags right). Narrow lists: two lines — small tags on top, the message
- * under them — so the message is never squeezed out (`commitListStyle`).
+ * under them — so the message is never squeezed out (`commitListStyle`). Each branch with commits has its own lane.
  */
-function CommitList({ box, rows, hiddenCount, twoLine, rowH, selected, font }: { box: Box; rows: GraphRow[]; hiddenCount: number; twoLine: boolean; rowH: number; selected: string | null; font: string }) {
+function CommitList({ box, rows, hiddenCount, twoLine, rowH, selected, font, headHint = false }: { box: Box; rows: GraphRow[]; hiddenCount: number; twoLine: boolean; rowH: number; selected: string | null; font: string; headHint?: boolean }) {
   const index = new Map(rows.map((row, position) => [row.id, position]));
   const compact = twoLine;
   const cy = (position: number) => COMMIT_LIST.top + position * rowH + (twoLine ? rowH / 2 : 14);
-  const lane = (value: 0 | 1) => twoLine ? 20 + value * 28 : 22 + value * 30;
-  const radius = twoLine ? 13 : 14;
-  const hasLane1 = rows.some((row) => row.lane === 1);
-  const textX = twoLine ? (hasLane1 ? 68 : 42) : (hasLane1 ? 76 : 46);
-  const tagWidth = (tag: keyof typeof TAG_W) => twoLine ? TAG_W_SMALL[tag] : TAG_W[tag];
+  const metrics = laneMetrics(Math.max(1, ...rows.map((row) => row.lane + 1)), twoLine);
+  const lane = (value: number) => metrics.x0 + value * metrics.gap;
+  const radius = metrics.radius;
+  const textX = metrics.textX;
   const tagH = twoLine ? 16 : 20;
+  const headWidth = headHint ? 176 : 0;
   return <Group x={box.x} y={box.y} listening={false}>
     <Rect width={box.w} height={box.h} cornerRadius={10} fill="#FFFFFF" stroke={C.cardStroke} />
-    <Label x={10} y={9} width={hiddenCount > 0 ? box.w - 90 : box.w - 20} text="Commits" size={14} bold color={C.title} font={font} />
+    <Label x={10} y={9} width={hiddenCount > 0 ? box.w - 90 - headWidth : box.w - 20 - headWidth} text="Commits" size={14} bold color={C.title} font={font} />
+    {headHint && <Label x={box.w - 10 - headWidth - (hiddenCount > 0 ? 84 : 0)} y={10} width={headWidth} text="HEAD = คุณอยู่ที่นี่" size={12} bold color="#1D4ED8" align="right" font={font} />}
     {hiddenCount > 0 && <Label x={box.w - 94} y={10} width={84} text={`+${hiddenCount} ก่อนหน้า`} size={11} color={C.muted} align="right" font={font} />}
     {rows.length === 0 && <Label x={10} y={COMMIT_LIST.top + 6} width={box.w - 20} text="ยังไม่มี commit" size={13} color={C.muted} font={font} />}
     {rows.map((row, position) => row.id === selected
@@ -151,24 +166,25 @@ function CommitList({ box, rows, hiddenCount, twoLine, rowH, selected, font }: {
     }))}
     {rows.map((row, position) => {
       const y = cy(position);
-      const tagsWidth = row.tags.reduce((sum, tag) => sum + tagWidth(tag) + 4, 0);
+      const styles = row.tags.map((tag) => tagStyle(row, tag, twoLine));
+      const tagsWidth = styles.reduce((sum, tag) => sum + tag.width + 4, 0);
       // Wide: tags at the right end of the line. Narrow: tags on the first line, message on the second.
       let tagX = compact ? textX : box.w - 8 - tagsWidth;
       const tagY = compact ? y - 18 : y - 10;
       const message = compact
         ? <Label x={textX} y={row.tags.length ? y + 2 : y - 8} width={box.w - textX - 8} text={row.message} size={13} color={C.text} font={font} />
-        : <Label x={textX} y={y - 8} width={box.w - 12 - tagsWidth - textX} text={row.message} size={14} font={font} />;
+        : <Label x={textX} y={y - 8} width={Math.max(20, box.w - 12 - tagsWidth - textX)} text={row.message} size={14} font={font} />;
       return <Group key={row.id}>
+        {row.headTag && <Circle x={lane(row.lane)} y={y} radius={radius + 4} stroke="#2563EB" strokeWidth={2.5} />}
         <Circle x={lane(row.lane)} y={y} radius={radius} fill={row.color} stroke={row.id === selected ? "#1D4ED8" : "#FFFFFF"} strokeWidth={row.id === selected ? 3 : 2} />
-        <Label x={lane(row.lane) - radius} y={y - 7} width={radius * 2} text={row.id} size={12} bold color="#FFFFFF" align="center" font={font} />
+        <Label x={lane(row.lane) - radius} y={y - 7} width={radius * 2} text={row.id} size={radius < 14 ? 10 : 12} bold color="#FFFFFF" align="center" font={font} />
         {message}
-        {row.tags.map((tag) => {
-          const width = tagWidth(tag);
-          const node = <Group key={tag} x={tagX} y={tagY}>
-            <Rect width={width} height={tagH} cornerRadius={tagH / 2} fill={tag === "main" ? "#0F172A" : "#FFFFFF"} stroke={tag === "main" ? "#0F172A" : "#7C3AED"} strokeWidth={compact ? 1 : 1.5} />
-            <Label x={0} y={0} width={width} text={tag} size={compact ? 10 : 12} bold color={tag === "main" ? "#FFFFFF" : "#6D28D9"} align="center" font={font} lineHeight={tagH} />
+        {styles.map((style) => {
+          const node = <Group key={style.label} x={tagX} y={tagY}>
+            <Rect width={style.width} height={tagH} cornerRadius={tagH / 2} fill={style.fill} stroke={style.stroke} strokeWidth={compact ? 1 : 1.5} />
+            <Label x={0} y={0} width={style.width} text={style.label} size={compact ? 10 : 12} bold color={style.text} align="center" font={font} lineHeight={tagH} />
           </Group>;
-          tagX += width + 4;
+          tagX += style.width + 4;
           return node;
         })}
       </Group>;
@@ -182,8 +198,10 @@ function GitColumn({ layout, machine, state, selected, font }: { layout: WidgetL
   const box = layout[machine]!.git;
   const model = machineDiagram(state, machine);
   const graph = commitGraph(state, machine, commitRowLimit(layout, machine));
-  // Step 1 has no GitHub: tracking tags and the sync pill would only distract.
-  const rows = view === "local" ? graph.rows.map((row) => ({ ...row, tags: row.tags.filter((tag) => tag === "main") })) : graph.rows;
+  // Steps without GitHub hide tracking tags and the sync pill; only the Branch step names other branches and HEAD.
+  const branchStep = view === "branch";
+  const keep = (tag: string) => branchStep ? tag !== "origin/main" : tag === "main" || (viewHasRemote(view) && tag === "origin/main");
+  const rows = graph.rows.map((row) => ({ ...row, tags: row.tags.filter(keep), headTag: branchStep ? row.headTag : null }));
   const staged = TONE[model.staged.tone];
   const g = GIT_COLUMN;
   const shift = gitShift(view);
@@ -192,7 +210,8 @@ function GitColumn({ layout, machine, state, selected, font }: { layout: WidgetL
     <Group x={box.x} y={box.y}>
       <Rect width={box.w} height={box.h} cornerRadius={12} fill={C.gitCol} stroke={C.cardStroke} />
       <Label x={12} y={10} width={box.w - 24} text={machine === "A" ? "Git ของเครื่อง A" : "Git ของเครื่อง B"} size={compact ? 14 : 17} bold color={C.title} font={font} />
-      {view !== "local" && <Pill x={8} y={g.pill + 8} width={box.w - 16} line={compact ? { ...model.sync, text: shortSyncText(model.sync.text) } : model.sync} font={font} />}
+      {branchStep && <Pill x={8} y={g.pill + 8} width={box.w - 16} line={branchPill(state, machine)} font={font} />}
+      {viewHasRemote(view) && <Pill x={8} y={g.pill + 8} width={box.w - 16} line={compact ? { ...model.sync, text: shortSyncText(model.sync.text) } : model.sync} font={font} />}
       <Group x={8} y={g.stageY + 8 + shift}>
         <Rect width={box.w - 16} height={g.stageH} cornerRadius={10} fill={staged.fill} stroke={staged.stroke} strokeWidth={model.staged.tone === "ready" ? 2 : 1} />
         <Label x={10} y={8} width={box.w - 36} text={compact ? "Staging" : "Staging (สิ่งที่ Add แล้ว)"} size={14} bold color={C.title} font={font} />
@@ -201,7 +220,7 @@ function GitColumn({ layout, machine, state, selected, font }: { layout: WidgetL
       <Arrow points={[box.w / 2, g.commitArrowY + 10 + shift, box.w / 2, g.commitsY + 4 + shift]} stroke={C.arrow} fill={C.arrow} strokeWidth={2} pointerLength={7} pointerWidth={8} />
       <Label x={box.w / 2 + 8} y={g.commitArrowY + 12 + shift} width={box.w / 2 - 12} text="Commit" size={13} bold color={C.arrow} font={font} />
     </Group>
-    <CommitList box={list} rows={rows} hiddenCount={graph.hiddenCount} {...commitListStyle(layout, machine)} selected={selected} font={font} />
+    <CommitList box={list} rows={rows} hiddenCount={graph.hiddenCount} {...commitListStyle(layout, machine)} selected={selected} font={font} headHint={branchStep} />
   </Group>;
 }
 
@@ -368,11 +387,13 @@ const TITLES: Record<GitView, string> = {
   local: "Git ในเครื่องเดียว: แก้ไฟล์ → Add → Commit",
   remote: "Git: เครื่อง A → GitHub",
   full: "Git: เครื่อง A ↔ GitHub ↔ เครื่อง B",
+  branch: "Git: Branch (ทางแยก) บนเครื่อง A",
 };
 const FOOTERS: Record<GitView, string> = {
   local: "แบบจำลอง • main เท่านั้น • C1/C2 เป็นหมายเลขจำลอง • ซ้าย = ไฟล์ที่แก้อยู่ • ขวา = สิ่งที่ Git เก็บไว้",
   remote: "แบบจำลอง • main เท่านั้น • สีเดียวกัน = commit เดียวกัน • ↑↓ เทียบกับ GitHub ล่าสุดที่เครื่องนั้นรู้",
   full: "แบบจำลอง • main เท่านั้น • สีเดียวกัน = commit เดียวกัน • ↑↓ เทียบกับ GitHub ล่าสุดที่เครื่องนั้นรู้",
+  branch: "แบบจำลอง • หนึ่งแถว = หนึ่ง branch • HEAD = branch ที่คุณอยู่ • commit ใหม่ต่อท้าย branch ที่อยู่ • สีเดียวกัน = commit เดียวกัน",
 };
 
 /**

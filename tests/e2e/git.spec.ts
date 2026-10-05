@@ -266,3 +266,86 @@ test("GIT-07: with a widget on the slide the Git tab offers it first; a new widg
   expect(widgets).toHaveLength(2);
   expect(Math.abs(widgets[0].x - widgets[1].x)).toBeGreaterThanOrEqual(40);
 });
+
+test("GIT-10: Branch step — create, commit on a branch, switch (file changes), refused dirty switch, fast-forward and a real merge", async ({ page }) => {
+  await createProject(page, "Branch Git");
+  await page.getByRole("button", { name: "เพิ่มตัวจำลอง Git" }).first().click();
+  await panel(page).getByRole("combobox", { name: "ขั้นของบทเรียน" }).selectOption("branch");
+  await expect(panel(page).getByRole("combobox", { name: "ขั้นของบทเรียน" })).toHaveValue("branch");
+  const branchCard = panel(page).getByRole("heading", { name: "Branch (ทางแยก)" });
+  await expect(branchCard).toBeVisible();
+  await expect(panel(page).getByRole("button", { name: "Push" })).toHaveCount(0);
+
+  // No commit yet: branching is refused with the reason shown.
+  await expect(panel(page).getByRole("button", { name: "สร้าง branch", exact: true })).toHaveAttribute("aria-disabled", "true");
+  await expect(panel(page)).toContainText("ต้อง commit อย่างน้อยหนึ่งครั้งก่อนแตก branch");
+
+  await addAndCommit(page, "hello"); // C1 on main
+  const nameInput = panel(page).getByRole("textbox", { name: "สร้าง branch ใหม่ (และสลับไปอยู่ที่นั่น)" });
+  await expect(nameInput).toHaveValue("feature");
+  await expect(panel(page)).toContainText("git switch -c feature");
+  await panel(page).getByRole("button", { name: "สร้าง branch", exact: true }).click();
+  await expect(panel(page)).toContainText("สร้าง branch feature จาก C1");
+  await expect(panel(page)).toContainText("HEAD → feature");
+  expect((await gitNode(page)).state.machines.A).toMatchObject({ mainHead: "C1", head: "feature", branches: { feature: "C1" } });
+  await expect(nameInput).toHaveValue("feature-2");
+
+  // Commit on the branch: main stays at C1.
+  await boardFile(page).fill("print(\"feature\")\n");
+  await addAndCommit(page, "feature work"); // C2
+  await expect(panel(page)).toContainText("สร้าง C2 บน branch feature");
+  expect((await gitNode(page)).state.machines.A).toMatchObject({ mainHead: "C1", head: "feature", branches: { feature: "C2" } });
+
+  // Uncommitted work blocks switching; putting the file back makes it possible again.
+  await boardFile(page).fill("print(\"scribble\")\n");
+  await expect(panel(page).getByRole("button", { name: "สลับไป main" })).toHaveAttribute("aria-disabled", "true");
+  await expect(panel(page)).toContainText("Commit งานที่ค้างก่อนสลับ branch");
+  await boardFile(page).fill("print(\"feature\")\n");
+  await expect(panel(page).getByRole("button", { name: "สลับไป main" })).toHaveAttribute("aria-disabled", "false");
+
+  // Switch to main: the file is main's again. The graph names HEAD and both branches.
+  await panel(page).getByRole("button", { name: "สลับไป main" }).click();
+  await expect(boardFile(page)).toHaveValue("print(\"Hello World\")\n");
+  await expect(panel(page)).toContainText("สลับไป branch main");
+  await expect.poll(async () => (await boardTexts(page)).filter((text) => text === "HEAD → main" || text === "feature")).toEqual(expect.arrayContaining(["HEAD → main", "feature"]));
+
+  // Fast-forward: main had no work of its own.
+  await panel(page).getByRole("button", { name: "Merge feature เข้า main" }).click();
+  await expect(panel(page)).toContainText("Fast-forward");
+  await expect(boardFile(page)).toHaveValue("print(\"feature\")\n");
+  expect((await gitNode(page)).state.machines.A).toMatchObject({ mainHead: "C2", branches: { feature: "C2" } });
+  await expect(panel(page).getByRole("button", { name: "Merge feature เข้า main" })).toHaveAttribute("aria-disabled", "true");
+
+  // A real merge: both branches get a commit. Both changed the file, so the learner picks a side.
+  await panel(page).getByRole("button", { name: "สร้าง branch", exact: true }).click(); // feature-2 at C2
+  await boardFile(page).fill("print(\"second branch\")\n");
+  await addAndCommit(page, "second branch work"); // C3
+  await panel(page).getByRole("button", { name: "สลับไป main" }).click();
+  await boardFile(page).fill("print(\"main moved on\")\n");
+  await addAndCommit(page, "main work"); // C4
+  await expect(panel(page)).toContainText("ไฟล์ชนกัน");
+  await panel(page).getByRole("button", { name: "Merge: ใช้ไฟล์จาก feature-2" }).click();
+  await expect(panel(page)).toContainText("สร้าง C5 รวม feature-2 เข้า main");
+  const node = await gitNode(page);
+  expect(node.state.commits.C5).toMatchObject({ parentId: "C4", mergeParentId: "C3", snapshot: { content: "print(\"second branch\")\n" } });
+  await expect(boardFile(page)).toHaveValue("print(\"second branch\")\n");
+
+  // A merged branch can be deleted; its commits stay.
+  await panel(page).getByRole("button", { name: "ลบ branch feature", exact: true }).click();
+  await expect(panel(page)).toContainText("ลบ branch feature แล้ว");
+  const after = (await gitNode(page)).state.machines.A as unknown as { branches: Record<string, string>; knownCommitIds: string[] };
+  expect(after.branches).toEqual({ "feature-2": "C3" });
+  expect(after.knownCommitIds).toEqual(["C1", "C2", "C3", "C4", "C5"]);
+
+  // Reload keeps the branch state; Push is not offered in this step, and other steps ask to return to main first.
+  await page.reload();
+  await (await objectRows(page)).first().click();
+  await page.getByRole("tab", { name: "ตัวจำลอง", exact: true }).click();
+  await expect(panel(page).getByRole("combobox", { name: "ขั้นของบทเรียน" })).toHaveValue("branch");
+  await panel(page).getByRole("button", { name: "สลับไป feature-2" }).click();
+  await panel(page).getByRole("combobox", { name: "ขั้นของบทเรียน" }).selectOption("remote");
+  await expect(panel(page)).toContainText("อยู่ที่ branch feature-2");
+  await expect(panel(page).getByRole("button", { name: "Push" })).toHaveAttribute("aria-disabled", "true");
+  await panel(page).getByRole("button", { name: "สลับไป main" }).click();
+  await expect(panel(page).getByRole("button", { name: "Push" })).toHaveAttribute("aria-disabled", "false");
+});

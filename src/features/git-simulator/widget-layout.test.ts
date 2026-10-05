@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { gitBaseSize } from "../../domain/document/model";
-import { viewRepositories, widgetLayout, widgetWidth, WIDGET_H, type Box } from "./widget-layout";
+import { GIT_VIEWS, viewHasRemote, viewRepositories, widgetLayout, widgetWidth, WIDGET_H, type Box } from "./widget-layout";
 
 const inside = (box: Box, outer: Box) => box.x >= outer.x && box.y >= outer.y && box.x + box.w <= outer.x + outer.w && box.y + box.h <= outer.y + outer.h;
-const frameOf = (view: "local" | "remote" | "full"): Box => ({ x: 0, y: 0, w: widgetWidth(view), h: WIDGET_H });
+const frameOf = (view: "local" | "remote" | "full" | "branch"): Box => ({ x: 0, y: 0, w: widgetWidth(view), h: WIDGET_H });
 
 describe("Git widget layout per lesson step", () => {
-  it.each(["local", "remote", "full"] as const)("%s: every card and column stays inside the fixed frame without overlapping", (view) => {
+  it.each(["local", "remote", "full", "branch"] as const)("%s: every card and column stays inside the fixed frame without overlapping", (view) => {
     const layout = widgetLayout(view);
     const frame = frameOf(view);
     const machines = [layout.A, layout.B].filter((item) => item !== null);
@@ -29,6 +29,14 @@ describe("Git widget layout per lesson step", () => {
     expect(viewRepositories("local")).toEqual(["A"]);
     expect(viewRepositories("remote")).toEqual(["A", "remote"]);
     expect(viewRepositories("full")).toEqual(["A", "remote", "B"]);
+    expect(viewRepositories("branch")).toEqual(["A"]);
+    expect(widgetLayout("branch")).toMatchObject({ view: "branch", remote: null, B: null, left: null, right: null, compact: false });
+    expect(viewHasRemote("branch")).toBe(false);
+    expect(viewHasRemote("local")).toBe(false);
+    expect(viewHasRemote("remote") && viewHasRemote("full")).toBe(true);
+    expect(GIT_VIEWS.map((item) => item.id)).toEqual(["local", "remote", "full", "branch"]);
+    expect(GIT_VIEWS.at(-1)?.label).toBe("Branch (ทางแยก)");
+    expect(gitBaseSize("branch")).toEqual({ width: 1120, height: 680 });
     expect(widgetLayout("local")).toMatchObject({ remote: null, B: null, left: null, right: null, compact: false });
     expect(widgetLayout("remote").right).toBeNull();
     // The two-machine step is wider so each machine keeps the full-size layout (no compact columns).
@@ -49,7 +57,7 @@ describe("Git widget layout per lesson step", () => {
 describe("overlay geometry", () => {
   it("places the code area inside the file column and commit rows inside the commit list", async () => {
     const { fileCodeBox, fileEditorBox, commitListBox, commitRowBox, commitRowLimit, fileNameBox, codeText, remoteCodeBox, remoteCodeText, remoteFileBox } = await import("./widget-layout");
-    for (const view of ["local", "remote", "full"] as const) {
+    for (const view of ["local", "remote", "full", "branch"] as const) {
       const layout = widgetLayout(view);
       const editor = fileEditorBox(layout, "A")!;
       const code = fileCodeBox(layout, "A")!;
