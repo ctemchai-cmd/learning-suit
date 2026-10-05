@@ -146,7 +146,7 @@ function Legend({ box, compact, font }: { box: Box; compact: boolean; font: stri
   const columns: { icon: IconName; title: string; text: string }[] = [
     { icon: "key", title: "นิ้วจริง = กุญแจลับ", text: "id_ed25519 อยู่กับเรา ไม่ส่งให้ใคร" },
     { icon: "fingerprint", title: "ลายนิ้วมือ = กุญแจสาธารณะ", text: "id_ed25519.pub แจกได้ ลงทะเบียนที่ GitHub ครั้งเดียว" },
-    { icon: "shield", title: "เครื่องสแกน = GitHub", text: "เทียบลายเซ็นกับลายนิ้วมือที่ลงทะเบียนไว้ ตรงกันถึงเปิดประตู" },
+    { icon: "shield", title: "เครื่องสแกน = GitHub", text: "ขอแตะนิ้วใหม่ทุกครั้ง (เลขสุ่ม) แล้วเช็กกับลายนิ้วมือที่ลงทะเบียน" },
   ];
   return <Group listening={false}>
     <Rect x={box.x} y={box.y} width={box.w} height={box.h} cornerRadius={12} fill="#F8FAFC" stroke="#E2E8F0" strokeWidth={1.5} />
@@ -162,13 +162,13 @@ function Legend({ box, compact, font }: { box: Box; compact: boolean; font: stri
 
 /** What the thief holds: only a picture of our fingerprint. */
 function Thief({ box, state, mark, font }: { box: Box; state: SshState; mark?: MarkTone; font: string }) {
-  const lines = state.thief === "idle" ? ["ยังไม่ได้ทำอะไร"] : state.thief === "copied" ? ["ถือ .pub (ภาพลายนิ้วมือ)", "ไม่มีกุญแจลับ"] : ["ถือแค่ .pub: เข้าไม่ได้ ✗", "ไม่มีนิ้วจริงให้เซ็นโจทย์"];
+  const lines = state.thief === "idle" ? ["ยังไม่ได้ทำอะไร"] : state.thief === "copied" ? ["ถือ .pub (ภาพลายนิ้วมือ)", "ไม่มีกุญแจลับ"] : ["ถือแค่ .pub: เข้าไม่ได้ ✗", "ไม่มีนิ้วจริงไว้แตะสแกน"];
   return <Card box={box} title="คนแอบคัดลอก .pub" icon="user" mark={mark} fill={state.thief === "denied" ? "#FEF2F2" : "#FFFFFF"} stroke={state.thief === "denied" ? "#FCA5A5" : C.cardStroke} font={font}>
     {lines.map((line, index) => <Label key={index} x={box.x + 12} y={box.y + 34 + index * 18} width={box.w - 24} text={line} size={12} color={state.thief === "denied" ? C.bad : C.muted} font={font} />)}
   </Card>;
 }
 
-/** The travelling card: what a packet carries (a public key, a random challenge, a signature …). */
+/** The travelling card: what a packet carries (a public key, the random number to touch, the scan result …). */
 function Payload({ title, color, lines, font }: { title: string; color: string; lines: CarriedLine[]; font: string }) {
   const w = 250, rowH = 24, h = 40 + lines.length * (rowH + 4);
   return <Group x={-w / 2} y={-h / 2} listening={false}>

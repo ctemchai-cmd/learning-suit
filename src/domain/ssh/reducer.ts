@@ -112,11 +112,13 @@ function connect(state: SshState, machine: Machine, mode: "test" | "push"): SshT
       (s) => patch(s, machine, { out: DENIED_OUT(mode) }), [{ spot: "scanner", tone: "blocked" }, { spot: "keys", tone: "blocked" }]);
     return finish(state, flow, "failed", `เข้าไม่ได้: GitHub ไม่มีลายนิ้วมือของ${who} (ยังไม่ได้ลงทะเบียน หรือถูกลบไปแล้ว) ไปขั้น “ลงทะเบียนกับ GitHub”`);
   }
-  flow.step(hop("github", machine, "โจทย์สุ่ม", "request", [{ kind: "note", text: "โจทย์สุ่ม 7f3a9c…" }]), "เครื่องสแกนของ GitHub ขอให้แตะนิ้ว: ส่งโจทย์สุ่มมาให้เครื่องเรา");
-  flow.step(null, "เครื่องเราใช้กุญแจลับเซ็นโจทย์อยู่ในเครื่อง: นิ้วไม่ได้ถูกส่งไปไหน ส่งแค่ผลการสแกน", undefined, [{ spot: priv, tone: "read" }]);
-  flow.step(hop(machine, "scanner", "ลายเซ็น", "data", [{ kind: "code", text: "ลายเซ็น 9b1e42…" }, { kind: "pass", text: "ไม่มีกุญแจลับในก้อนนี้" }]),
-    "ส่งกลับแค่ลายเซ็นของโจทย์ ไม่ใช่กุญแจลับ");
-  flow.step(null, "ประตูเอาลายเซ็นไปเทียบกับกุญแจสาธารณะที่ลงทะเบียนไว้ ตรงกัน ✓ ประตูเปิด", undefined,
+  // The random number = “touch the scanner now”: a fresh one every time, so yesterday's scan result is worthless.
+  flow.step(hop("github", machine, "ขอแตะนิ้ว", "request", [{ kind: "note", text: "เลขสุ่ม 7f3a9c… (ใช้ได้ครั้งเดียว)" }]),
+    "ประตูขอให้แตะนิ้วตอนนี้: GitHub ส่งเลขสุ่มที่ใช้ได้ครั้งเดียวมา กันคนเอาผลสแกนเก่ามาเปิดซ้ำ");
+  flow.step(null, "เครื่องเรา “แตะนิ้ว” = ใช้กุญแจลับประทับลงบนเลขนั้นในเครื่อง ได้ผลสแกนของครั้งนี้ ตัวนิ้วไม่ออกไปไหน", undefined, [{ spot: priv, tone: "read" }]);
+  flow.step(hop(machine, "scanner", "ผลสแกน", "data", [{ kind: "code", text: "ผลสแกน (ลายเซ็น) 9b1e42…" }, { kind: "pass", text: "ไม่มีกุญแจลับในก้อนนี้" }]),
+    "ส่งกลับแค่ผลสแกนของเลขนี้ ไม่ใช่กุญแจลับ");
+  flow.step(null, "ประตูเช็กผลสแกนกับลายนิ้วมือที่ลงทะเบียนไว้ (.pub) ตรงกัน ✓ ประตูเปิด", undefined,
     [{ spot: "scanner", tone: "allowed" }, { spot: `key:${machine}`, tone: "allowed" }]);
   if (mode === "test") {
     flow.step(hop("scanner", machine, "Hi you!", "ok"), "GitHub: Hi you! You've successfully authenticated ✓ ประตูเปิดให้เราแล้ว",
@@ -125,7 +127,7 @@ function connect(state: SshState, machine: Machine, mode: "test" | "push"): SshT
   }
   flow.step(hop(machine, "repo", "โค้ด", "ok"), "ประตูเปิดแล้ว: โค้ดถูกส่งขึ้น repo ✓",
     (s) => ({ ...patch(s, machine, { out: ["To github.com:you/coffee-shop.git", "   main -> main"] }), pushes: Math.min(99, s.pushes + 1) }), [{ spot: "repo", tone: "new" }]);
-  return finish(state, flow, "success", `git push สำเร็จ: ประตูเปิดให้${who} เพราะลายเซ็นตรงกับกุญแจสาธารณะที่ลงทะเบียนไว้`);
+  return finish(state, flow, "success", `git push สำเร็จ: ประตูเปิดให้${who} เพราะผลสแกนตรงกับลายนิ้วมือ (.pub) ที่ลงทะเบียนไว้`);
 }
 
 // ---------------------------------------------------------------------------
@@ -138,11 +140,11 @@ function thiefTry(state: SshState): SshTransition {
   flow.step(hop("keys", "thief", ".pub", "data", PUBLIC_KEY_LINES), "มีคนคัดลอก .pub ของเรามา: กุญแจสาธารณะใครก็เห็นได้ นั่นคือแค่ภาพลายนิ้วมือ",
     (s) => ({ ...s, thief: "copied" }));
   flow.step(hop("thief", "scanner", "ขอเข้า", "request"), "เขาเอา .pub ไปแจ้ง GitHub ว่า “ฉันคือเจ้าของ”");
-  flow.step(hop("scanner", "thief", "โจทย์สุ่ม", "request", [{ kind: "note", text: "โจทย์สุ่ม 41c8d0…" }]), "เครื่องสแกนส่งโจทย์สุ่มมาให้เซ็นด้วยกุญแจลับ");
-  flow.step(null, "เขามีแต่ภาพลายนิ้วมือ ไม่มีนิ้วจริง จึงเซ็นโจทย์ไม่ได้", undefined, [{ spot: "thief", tone: "blocked" }]);
+  flow.step(hop("scanner", "thief", "ขอแตะนิ้ว", "request", [{ kind: "note", text: "เลขสุ่ม 41c8d0… (ใช้ได้ครั้งเดียว)" }]), "ประตูส่งเลขสุ่มมา ขอให้แตะนิ้วตอนนี้");
+  flow.step(null, "เขามีแต่ภาพลายนิ้วมือ (.pub) ไม่มีนิ้วจริง (กุญแจลับ) จึงทำผลสแกนให้ไม่ได้", undefined, [{ spot: "thief", tone: "blocked" }]);
   flow.step(hop("scanner", "thief", "Permission denied", "blocked"), "ประตูไม่เปิด ✗ ภาพถ่ายลายนิ้วมือสแกนไม่ผ่าน",
     (s) => ({ ...s, thief: "denied" }), [{ spot: "scanner", tone: "blocked" }]);
-  return finish(state, flow, "failed", "คนที่คัดลอก .pub ไปเข้าไม่ได้: มีแค่ลายนิ้วมือ ไม่มีกุญแจลับที่เซ็นโจทย์ได้");
+  return finish(state, flow, "failed", "คนที่คัดลอก .pub ไปเข้าไม่ได้: มีแค่ภาพลายนิ้วมือ ไม่มีนิ้วจริง (กุญแจลับ) ไว้แตะสแกน");
 }
 
 function setupB(state: SshState): SshTransition {

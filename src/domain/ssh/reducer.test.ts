@@ -60,9 +60,9 @@ describe("SSH-04 — step 4: connect", () => {
     expect(result.nextState.a.known).toBe(true);
     expect(result.nextState.a.out.join(" ")).toContain("Hi you!");
     expect(result.frames[4].marks).toContainEqual({ spot: "priv", tone: "read" });
-    expect(result.frames[4].caption).toContain("นิ้วไม่ได้ถูกส่งไป");
+    expect(result.frames[4].caption).toContain("ตัวนิ้วไม่ออกไปไหน");
     // The packet that carries the answer holds the signature only, never the private key.
-    const signature = result.frames.find((frame) => frame.hop?.label === "ลายเซ็น")!;
+    const signature = result.frames.find((frame) => frame.hop?.label === "ผลสแกน")!;
     expect(signature.hop!.detail!.map((line) => line.text).join(" ")).not.toContain("id_ed25519");
   });
 
