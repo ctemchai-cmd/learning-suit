@@ -1,4 +1,5 @@
-import type { Hop, Spot } from "@/domain/data/model";
+import type { FlowFrame, Hop, Spot } from "@/domain/data/model";
+import { partsOfFrames, type RevealPart } from "@/domain/document/reveal";
 import type { AiView } from "@/domain/ai/model";
 
 // Pure geometry of the AI widget (plan 07 §5), widget base coordinates 1120×680 like the other flow widgets.
@@ -38,7 +39,8 @@ export type Scene = {
   /** Step 5. */
   claudeMd?: Box;
   memoryDir?: Box;
-  pipes: { from: Pt; to: Pt; label?: string }[];
+  /** `part` = the reveal part that shows the pipe (the later of its two ends). */
+  pipes: { from: Pt; to: Pt; label?: string; part: string }[];
 };
 
 const center = (box: Box): Pt => ({ x: box.x + box.w / 2, y: box.y + box.h / 2 });
@@ -48,14 +50,14 @@ const left = (box: Box, y = box.y + box.h / 2): Pt => ({ x: box.x, y });
 function historyScene(): Scene {
   const chat = { x: 40, y: 76, w: 480, h: 528 };
   const model = { x: 680, y: 76, w: 400, h: 528 };
-  return { chat, model, pipes: [{ from: right(chat, 340), to: left(model, 340) }] };
+  return { chat, model, pipes: [{ from: right(chat, 340), to: left(model, 340), part: "model" }] };
 }
 
 function thinkingScene(): Scene {
   const chat = { x: 40, y: 76, w: 330, h: 528 };
   const model = { x: 440, y: 76, w: 640, h: 528 };
   const thoughts = { x: 466, y: 176, w: 588, h: 300 };
-  return { chat, model, thoughts, pipes: [{ from: right(chat, 340), to: left(model, 340) }] };
+  return { chat, model, thoughts, pipes: [{ from: right(chat, 340), to: left(model, 340), part: "model" }] };
 }
 
 function memoryScene(): Scene {
@@ -63,7 +65,7 @@ function memoryScene(): Scene {
   const chat = { x: 40, y: 120, w: 370, h: 474 };
   const memory = { x: 426, y: 120, w: 222, h: 474 };
   const model = { x: 720, y: 76, w: 376, h: 528 };
-  return { appFrame, chat, memory, model, pipes: [{ from: right(appFrame, 340), to: left(model, 340) }] };
+  return { appFrame, chat, memory, model, pipes: [{ from: right(appFrame, 340), to: left(model, 340), part: "model" }] };
 }
 
 function agentScene(): Scene {
@@ -77,7 +79,7 @@ function agentScene(): Scene {
   const permission = { x: 794, y: 538, w: 288, h: 56 };
   return {
     web, model, machine, cc, files, tests, permission,
-    pipes: [{ from: right(web, 340), to: left(model, 340) }, { from: right(model, 340), to: left(machine, 340) }],
+    pipes: [{ from: right(web, 340), to: left(model, 340), part: "model" }, { from: right(model, 340), to: left(machine, 340), part: "cc" }],
   };
 }
 
@@ -91,9 +93,9 @@ function ccMemoryScene(): Scene {
   return {
     machine, claudeMd, memoryDir, cc, model,
     pipes: [
-      { from: right(claudeMd, 221), to: left(cc, 221) },
-      { from: right(memoryDir, 461), to: left(cc, 461) },
-      { from: right(cc, 338), to: left(model, 338) },
+      { from: right(claudeMd, 221), to: left(cc, 221), part: "cc" },
+      { from: right(memoryDir, 461), to: left(cc, 461), part: "cc" },
+      { from: right(cc, 338), to: left(model, 338), part: "model" },
     ],
   };
 }
@@ -127,3 +129,31 @@ export function hopPath(view: AiView, move: Hop): Pt[] | null {
   const end = spotPoint(view, move.to);
   return start && end ? [start, end] : null;
 }
+
+// ---------------------------------------------------------------------------
+// Progressive reveal (plan 07 §2): the ordered parts of each step. The board draws a part only when it is shown;
+// positions never change. `mind` = what the model holds right now (received messages, window meter, what it knows) —
+// a part of its own in the chat steps; the pipe into the model comes with the model.
+// ---------------------------------------------------------------------------
+
+const part = (id: string, label: string): RevealPart => ({ id, label });
+const PARTS: Record<AiView, RevealPart[]> = {
+  history: [part("chat", "แอปแชท (ที่เราพิมพ์)"), part("model", "โมเดล AI"), part("mind", "สิ่งที่ AI ได้รับรอบนี้")],
+  thinking: [part("chat", "หน้าแชท (คำถาม)"), part("model", "โมเดล AI"), part("thoughts", "ความคิด (Chain of Thought)")],
+  memory: [part("chat", "แอปแชทและแชทห้องนี้"), part("memory", "Memory ของแอป"), part("model", "โมเดล AI"), part("mind", "สิ่งที่ AI ได้รับรอบนี้")],
+  agent: [part("web", "AI บนเว็บ (แชท)"), part("model", "AI ตัวเดียวกัน (บนคลาวด์)"), part("cc", "เครื่องเรา + Claude Code"), part("files", "ไฟล์ main.py"), part("tests", "เทสต์"), part("gate", "ถามก่อนแก้ไฟล์")],
+  ccMemory: [part("claudeMd", "ไฟล์ CLAUDE.md"), part("memoryDir", "ไฟล์ความจำ"), part("cc", "Claude Code (session)"), part("model", "โมเดล AI")],
+};
+export const aiParts = (view: AiView): RevealPart[] => PARTS[view];
+
+const SPOT_PARTS: Record<AiView, Record<string, string>> = {
+  history: { chat: "chat", model: "mind" },
+  thinking: { chat: "chat", model: "model", thoughts: "thoughts" },
+  memory: { chat: "chat", memory: "memory", model: "mind" },
+  agent: { web: "web", model: "model", cc: "cc", files: "files", tests: "tests", gate: "gate" },
+  ccMemory: { claudeMd: "claudeMd", memoryDir: "memoryDir", cc: "cc", model: "model" },
+};
+/** The part that draws a named place in a step (null = the step does not draw it). */
+export const aiPartOfSpot = (view: AiView, spot: Spot): string | null => SPOT_PARTS[view][spot] ?? null;
+/** Parts an action needs: those of the places its frames name. */
+export const aiPartsOfFrames = (view: AiView, frames: readonly FlowFrame<unknown>[]): string[] => partsOfFrames(frames, (spot) => aiPartOfSpot(view, spot));

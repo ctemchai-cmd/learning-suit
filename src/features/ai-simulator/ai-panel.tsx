@@ -8,9 +8,10 @@ import { AI_LIMITS, type AiAction, type AiState, type AiView } from "@/domain/ai
 import { CHAT_PRESETS, MEMORY_PRESETS, PUZZLES } from "@/domain/ai/chat";
 import { applyAiAction } from "@/domain/ai/reducer";
 import { useEditorStore } from "@/features/editor/store";
-import { Action, PanelHeader, PlaybackControls, ResetLink, ResultMessage, Section, Segmented, StepSelect } from "@/features/flow/flow-panel-parts";
+import { Action, PanelHeader, PlaybackControls, ResetLink, ResultMessage, RevealControls, Section, Segmented, StepSelect } from "@/features/flow/flow-panel-parts";
+import { revealForParts, revealOnStepChange, withReveal } from "@/domain/document/reveal";
 import { useFlowSession } from "@/features/flow/flow-session";
-import { AI_VIEWS } from "./ai-layout";
+import { AI_VIEWS, aiParts, aiPartsOfFrames } from "./ai-layout";
 
 /** The node as currently stored, so actions never start from a stale render. */
 function latestNode(slideId: string, nodeId: string): AiSimulatorNode | null {
@@ -43,10 +44,12 @@ export function AiPanel({ node, slideId, writable, transact }: {
     if (!writable || !useEditorStore.getState().flushPendingEdits()) return;
     const latest = latestNode(slideId, nodeId) ?? node;
     const transition = applyAiAction(latest.state, action);
-    if (transition.changed && !transact({
+    // Parts the animation needs are shown in the same step (no-op while the reveal mode is off).
+    const reveal = revealForParts(aiParts(latest.view), latest.reveal, aiPartsOfFrames(latest.view, transition.frames));
+    if ((transition.changed || reveal !== latest.reveal) && !transact({
       label: `AI (จำลอง): ${ACTION_LABEL[action.type]}`,
       affectedSlideId: slideId,
-      commands: [{ type: "nodes.replace", slideId, nodes: [{ ...latest, state: transition.nextState }] }],
+      commands: [{ type: "nodes.replace", slideId, nodes: [withReveal({ ...latest, state: transition.nextState }, reveal)] }],
     })) {
       flow.setResult(nodeId, { outcome: "rejected", message: "ทำไม่สำเร็จ: โปรเจกต์อ่านอย่างเดียวหรือข้อมูลไม่ผ่านการตรวจ" });
       return;
@@ -59,7 +62,7 @@ export function AiPanel({ node, slideId, writable, transact }: {
   const changeView = (next: AiView) => {
     if (next === view || !writable || !useEditorStore.getState().flushPendingEdits()) return;
     const latest = latestNode(slideId, nodeId) ?? node;
-    if (transact({ label: "AI (จำลอง): เปลี่ยนขั้นบทเรียน", affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes: [{ ...latest, view: next }] }] })) {
+    if (transact({ label: "AI (จำลอง): เปลี่ยนขั้นบทเรียน", affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes: [withReveal({ ...latest, view: next }, revealOnStepChange(latest.reveal))] }] })) {
       flow.stop(nodeId);
       flow.setResult(nodeId, undefined);
     }
@@ -69,6 +72,7 @@ export function AiPanel({ node, slideId, writable, transact }: {
   return <section className="space-y-4 p-4 text-sm" aria-label="ตัวจำลอง AI">
     <PanelHeader icon={<Bot size={16} />} color="bg-violet-600" title="AI ทำงานยังไง" />
     <StepSelect id={ids} value={view} steps={AI_VIEWS} disabled={!writable} onChange={changeView} />
+    <RevealControls node={node} parts={aiParts(view)} slideId={slideId} writable={writable} transact={transact} onHidden={() => flow.stop(nodeId)} />
     {view === "history" && <HistoryControls {...props} />}
     {view === "thinking" && <ThinkingControls {...props} />}
     {view === "memory" && <MemoryControls {...props} />}

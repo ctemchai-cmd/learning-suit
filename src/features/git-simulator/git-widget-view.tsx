@@ -11,9 +11,10 @@ import { currentBranch } from "@/domain/git/selectors";
 import { GIT_TRANSFER_DURATION_MS, type GitPreview, type GitTab, type GitTransferAnimation } from "./session-store";
 import { branchPill, commitGraph, laneMetrics, machineDiagram, remoteDiagram, requestDiagram, shortSyncText, type GraphRow, type Tone, type ZoneLine } from "./diagram-model";
 import { diffCounts, diffWindow, lineDiff } from "@/domain/git/diff";
+import { partFilter } from "@/domain/document/reveal";
 import { codeLines } from "./view-model";
 import {
-  COMMIT_LIST, remoteRequestBox, codeText, commitListBox, commitListStyle, commitRowLimit, fileCodeBox, fileEditorBox, fileNameBox, GIT_COLUMN, gitShift, remoteCodeBox,
+  COMMIT_LIST, gitMachineParts, gitParts, gitTransferPart, remoteRequestBox, codeText, commitListBox, commitListStyle, commitRowLimit, fileCodeBox, fileEditorBox, fileNameBox, GIT_COLUMN, gitShift, remoteCodeBox,
   remoteCodeText, remoteFileBox, REMOTE_COLUMN, viewHasRemote, widgetLayout, widgetWidth, WIDGET_H,
   type Box, type MachineLayout, type WidgetLayout,
 } from "./widget-layout";
@@ -200,7 +201,11 @@ function CommitList({ box, rows, hiddenCount, twoLine, rowH, selected, font, hea
 }
 
 /** RIGHT: the Git side of a machine (staging area → Commit → commits). */
-function GitColumn({ layout, machine, state, selected, font, host }: { layout: WidgetLayout; machine: MachineId; state: GitSimulationState; selected: string | null; font: string; host?: HostId }) {
+function GitColumn({ layout, machine, state, selected, font, host, showStage = true, showCommits = true }: {
+  layout: WidgetLayout; machine: MachineId; state: GitSimulationState; selected: string | null; font: string; host?: HostId;
+  /** Reveal parts: the column with its Staging box, and the commit list. */
+  showStage?: boolean; showCommits?: boolean;
+}) {
   const { view, compact } = layout;
   const box = layout[machine]!.git;
   const model = machineDiagram(state, machine, host);
@@ -215,7 +220,7 @@ function GitColumn({ layout, machine, state, selected, font, host }: { layout: W
   const shift = gitShift(view);
   const list = commitListBox(layout, machine)!;
   return <Group listening={false}>
-    <Group x={box.x} y={box.y}>
+    {showStage && <Group x={box.x} y={box.y}>
       <Rect width={box.w} height={box.h} cornerRadius={12} fill={C.gitCol} stroke={C.cardStroke} />
       <Label x={12} y={10} width={box.w - 24} text={machine === "A" ? "Git ของเครื่อง A" : "Git ของเครื่อง B"} size={compact ? 14 : 17} bold color={C.title} font={font} />
       {branchStep && (view === "branch" || currentBranch(state.machines[machine]) !== "main") && <Pill x={8} y={g.pill + 8} width={box.w - 16} line={branchPill(state, machine, view === "review")} font={font} />}
@@ -227,8 +232,8 @@ function GitColumn({ layout, machine, state, selected, font, host }: { layout: W
       </Group>
       <Arrow points={[box.w / 2, g.commitArrowY + 10 + shift, box.w / 2, g.commitsY + 4 + shift]} stroke={C.arrow} fill={C.arrow} strokeWidth={2} pointerLength={7} pointerWidth={8} />
       <Label x={box.w / 2 + 8} y={g.commitArrowY + 12 + shift} width={box.w / 2 - 12} text="Commit" size={13} bold color={C.arrow} font={font} />
-    </Group>
-    <CommitList box={list} rows={rows} hiddenCount={graph.hiddenCount} {...commitListStyle(layout, machine)} selected={selected} font={font} headHint={view === "branch"} />
+    </Group>}
+    {showCommits && <CommitList box={list} rows={rows} hiddenCount={graph.hiddenCount} {...commitListStyle(layout, machine)} selected={selected} font={font} headHint={view === "branch"} />}
   </Group>;
 }
 
@@ -238,22 +243,27 @@ function CardFrame({ box, active, fill }: { box: Box; active: boolean; fill: str
     shadowColor="#0F172A" shadowOpacity={0.06} shadowBlur={12} shadowOffsetY={2} listening={false} />;
 }
 
-function MachineCard({ layout, machine, state, active, preview, font, host }: {
-  layout: WidgetLayout; machine: MachineId; state: GitSimulationState; active: boolean; preview: GitPreview | null; font: string; host?: HostId;
+function MachineCard({ layout, machine, state, active, preview, font, host, shows }: {
+  layout: WidgetLayout; machine: MachineId; state: GitSimulationState; active: boolean; preview: GitPreview | null; font: string; host?: HostId; shows: (partId: string) => boolean;
 }) {
+  const parts = gitMachineParts(layout.view, machine);
   const repo = state.machines[machine];
   const { card, file, git, stageGap } = layout[machine] as MachineLayout;
   const stageY = git.y + GIT_COLUMN.stageY + 8 + gitShift(layout.view) + GIT_COLUMN.stageH / 2;
   const selected = preview?.repository === machine ? preview.commitId : null;
+  const showFile = shows(parts.file), showStage = shows(parts.stage);
+  if (!showFile) return null;
   return <Group>
     <CardFrame box={card} active={active} fill={C.card} />
     <Label x={card.x + 18} y={card.y + 14} width={card.w - 36} text={machine === "A" ? "เครื่อง A" : "เครื่อง B"} size={22} bold color={C.title} font={font} />
     {repo.initialized ? <>
       <FileColumn layout={layout} machine={machine} state={state} previewCommit={selected} font={font} host={host} />
-      <Arrow points={[stageGap.x1 + 4, stageY, stageGap.x2 - 4, stageY]} stroke={C.arrow} fill={C.arrow} strokeWidth={2.5} pointerLength={9} pointerWidth={9} listening={false} />
-      <Label x={stageGap.x1 - 6} y={stageY - 24} width={stageGap.x2 - stageGap.x1 + 12} text="Add" size={13} bold color={C.arrow} align="center" font={font} />
-      <GitColumn layout={layout} machine={machine} state={state} selected={selected} font={font} host={host} />
-    </> : <Group x={file.x} y={file.y} listening={false}>
+      {showStage && <>
+        <Arrow points={[stageGap.x1 + 4, stageY, stageGap.x2 - 4, stageY]} stroke={C.arrow} fill={C.arrow} strokeWidth={2.5} pointerLength={9} pointerWidth={9} listening={false} />
+        <Label x={stageGap.x1 - 6} y={stageY - 24} width={stageGap.x2 - stageGap.x1 + 12} text="Add" size={13} bold color={C.arrow} align="center" font={font} />
+      </>}
+      <GitColumn layout={layout} machine={machine} state={state} selected={selected} font={font} host={host} showStage={showStage} showCommits={shows(parts.commits)} />
+    </> : showStage && <Group x={file.x} y={file.y} listening={false}>
       <Rect width={git.x + git.w - file.x} height={file.h} cornerRadius={12} stroke="#CBD5E1" strokeWidth={2} dash={[8, 6]} />
       <Label x={0} y={file.h / 2 - 40} width={git.x + git.w - file.x} text="ยังไม่ได้ Clone" size={22} bold color={C.muted} align="center" font={font} />
       <Text x={16} y={file.h / 2} width={git.x + git.w - file.x - 32} text={`ยังไม่มีไฟล์และ Git บนเครื่องนี้\nกด Clone เพื่อคัดลอกจาก ${hostOf(host).name}`} fontSize={15} fontFamily={font}
@@ -263,7 +273,7 @@ function MachineCard({ layout, machine, state, active, preview, font, host }: {
 }
 
 /** GitHub: no working file, only commits. Its file box shows the pushed file of `main` (or of the clicked commit). */
-function RemoteCard({ layout, state, active, preview, font, host }: { layout: WidgetLayout; state: GitSimulationState; active: boolean; preview: GitPreview | null; font: string; host?: HostId }) {
+function RemoteCard({ layout, state, active, preview, font, host, showRequest }: { layout: WidgetLayout; state: GitSimulationState; active: boolean; preview: GitPreview | null; font: string; host?: HostId; showRequest: boolean }) {
   const box = layout.remote!;
   const compact = layout.compact;
   const model = remoteDiagram(state);
@@ -290,7 +300,7 @@ function RemoteCard({ layout, state, active, preview, font, host }: { layout: Wi
     <Label x={box.x + 16} y={box.y + 14} width={box.w - 32} text={hostOf(host).name} size={22} bold color={C.title} font={font} />
     <Label x={inner.x + 2} y={colY + REMOTE_COLUMN.subtitleY} width={inner.w - 4} text={compact ? "เก็บ commit ที่ Push ขึ้นมา" : "เก็บ commit ที่ Push ขึ้นมา (แก้ไฟล์ตรงนี้ไม่ได้)"} size={compact ? 11 : 13} color={C.muted} font={font} />
     <Pill x={inner.x} y={colY + REMOTE_COLUMN.pillY} width={inner.w} line={model.sync} font={font} />
-    {layout.view === "review" && <RequestPanel box={remoteRequestBox(layout)!} state={state} host={host} font={font} />}
+    {layout.view === "review" && showRequest && <RequestPanel box={remoteRequestBox(layout)!} state={state} host={host} font={font} />}
     {file ? <Group listening={false}>
       <Rect x={frame.x} y={frame.y} width={frame.w} height={frame.h} cornerRadius={10} fill={EDITOR.bg} stroke={shown ? C.previewStroke : undefined} strokeWidth={shown ? 2.5 : 0} />
       <Rect x={frame.x} y={frame.y} width={frame.w} height={tabH} cornerRadius={[10, 10, 0, 0]} fill={EDITOR.bar} />
@@ -447,16 +457,19 @@ export function GitWidgetView({ node, activeTab, transfer, preview = null, fontF
   const hostName = hostOf(node.host).name;
   const layout = useMemo(() => widgetLayout(view), [view]);
   const width = widgetWidth(view);
+  // Progressive reveal: hidden parts are not drawn at all; nothing moves when they appear.
+  const shows = partFilter(gitParts(view, node.host), node.reveal);
+  const transferShown = transfer ? shows(gitTransferPart(view, transfer.from, transfer.to) ?? "") : false;
   // A preview of a commit the repository no longer knows (e.g. after Undo) falls back to the working file.
   const validPreview = preview && (preview.repository === "remote" ? state.remote.knownCommitIds : state.machines[preview.repository].knownCommitIds).includes(preview.commitId) ? preview : null;
   return <Group scaleX={scale} scaleY={scale} clipX={0} clipY={0} clipWidth={width} clipHeight={WIDGET_H}>
     <Rect x={1} y={1} width={width - 2} height={WIDGET_H - 2} cornerRadius={18} fill={C.frame} stroke={C.frameStroke} strokeWidth={2} />
     <Label x={24} y={18} width={width - 48} text={titleOf(view, hostName, node.host)} size={24} bold color={C.title} font={fontFamily} />
-    <ConnectorArrows layout={layout} bCloned={state.machines.B.initialized} font={fontFamily} />
-    <MachineCard layout={layout} machine="A" state={state} active={activeTab === "A" && gitHasMachineB(view)} preview={validPreview} font={fontFamily} host={node.host} />
-    {layout.remote && <RemoteCard layout={layout} state={state} active={false} preview={validPreview} font={fontFamily} host={node.host} />}
-    {layout.B && <MachineCard layout={layout} machine="B" state={state} active={activeTab === "B"} preview={validPreview} font={fontFamily} host={node.host} />}
+    <ConnectorArrows layout={{ ...layout, left: shows("remote") ? layout.left : null, right: shows("b.file") ? layout.right : null }} bCloned={state.machines.B.initialized} font={fontFamily} />
+    <MachineCard layout={layout} machine="A" state={state} active={activeTab === "A" && gitHasMachineB(view)} preview={validPreview} font={fontFamily} host={node.host} shows={shows} />
+    {layout.remote && shows("remote") && <RemoteCard layout={layout} state={state} active={false} preview={validPreview} font={fontFamily} host={node.host} showRequest={shows("request")} />}
+    {layout.B && <MachineCard layout={layout} machine="B" state={state} active={activeTab === "B"} preview={validPreview} font={fontFamily} host={node.host} shows={shows} />}
     <Label x={24} y={WIDGET_H - 34} width={width - 48} size={13} color={C.muted} font={fontFamily} text={footerOf(view, hostName, node.host)} />
-    {transfer && <TransferDot key={transfer.key} transfer={transfer} view={view} font={fontFamily} />}
+    {transfer && transferShown && <TransferDot key={transfer.key} transfer={transfer} view={view} font={fontFamily} />}
   </Group>;
 }

@@ -8,9 +8,10 @@ import type { DataAction, DataState, DataView, PhoneId, StorageMode } from "@/do
 import { PHONE_USER } from "@/domain/data/model";
 import { applyDataAction, customerName } from "@/domain/data/reducer";
 import { useEditorStore } from "@/features/editor/store";
-import { Action, Field, PanelHeader, PlaybackControls, ResetLink, ResultMessage, Section, Segmented, Select, StepSelect } from "@/features/flow/flow-panel-parts";
+import { Action, Field, PanelHeader, PlaybackControls, ResetLink, ResultMessage, RevealControls, Section, Segmented, Select, StepSelect } from "@/features/flow/flow-panel-parts";
+import { revealForParts, revealOnStepChange, withReveal } from "@/domain/document/reveal";
 import { useFlowSession } from "@/features/flow/flow-session";
-import { DATA_VIEWS } from "./data-layout";
+import { DATA_VIEWS, dataParts, dataPartsOfFrames } from "./data-layout";
 
 /** The node as currently stored, so actions never start from a stale render. */
 function latestNode(slideId: string, nodeId: string): DataSimulatorNode | null {
@@ -47,10 +48,12 @@ export function DataPanel({ node, slideId, writable, transact }: {
     if (!writable || !useEditorStore.getState().flushPendingEdits()) return;
     const latest = latestNode(slideId, nodeId) ?? node;
     const transition = applyDataAction(latest.state, action);
-    if (transition.changed && !transact({
+    // Parts the animation needs are shown in the same step (no-op while the reveal mode is off).
+    const reveal = revealForParts(dataParts(latest.view), latest.reveal, dataPartsOfFrames(latest.view, transition.frames));
+    if ((transition.changed || reveal !== latest.reveal) && !transact({
       label: `ข้อมูล (จำลอง): ${ACTION_LABEL[action.type] ?? action.type}`,
       affectedSlideId: slideId,
-      commands: [{ type: "nodes.replace", slideId, nodes: [{ ...latest, state: transition.nextState }] }],
+      commands: [{ type: "nodes.replace", slideId, nodes: [withReveal({ ...latest, state: transition.nextState }, reveal)] }],
     })) {
       flow.setResult(nodeId, { outcome: "rejected", message: "ทำไม่สำเร็จ: โปรเจกต์อ่านอย่างเดียวหรือข้อมูลไม่ผ่านการตรวจ" });
       return;
@@ -65,7 +68,7 @@ export function DataPanel({ node, slideId, writable, transact }: {
     const latest = latestNode(slideId, nodeId) ?? node;
     // Phone screens show the answer of the last action; a new step starts with empty screens.
     const state = { ...latest.state, phones: { A: { title: "", lines: [] }, B: { title: "", lines: [] } } };
-    if (transact({ label: "ข้อมูล (จำลอง): เปลี่ยนขั้นบทเรียน", affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes: [{ ...latest, view: next, state }] }] })) {
+    if (transact({ label: "ข้อมูล (จำลอง): เปลี่ยนขั้นบทเรียน", affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes: [withReveal({ ...latest, view: next, state }, revealOnStepChange(latest.reveal))] }] })) {
       flow.stop(nodeId);
       flow.setResult(nodeId, undefined);
     }
@@ -74,6 +77,7 @@ export function DataPanel({ node, slideId, writable, transact }: {
   return <section className="space-y-4 p-4 text-sm" aria-label="ตัวจำลองข้อมูล">
     <PanelHeader icon={<Database size={16} />} color="bg-violet-700" title="การเก็บข้อมูล" />
     <StepSelect id={ids} value={view} steps={DATA_VIEWS} disabled={!writable} onChange={changeView} />
+    <RevealControls node={node} parts={dataParts(view)} slideId={slideId} writable={writable} transact={transact} onHidden={() => flow.stop(nodeId)} />
     {view === "where" && <WhereControls state={state} writable={writable} run={run} />}
     {view === "table" && <TableControls state={state} writable={writable} run={run} />}
     {view === "relation" && <RelationControls state={state} writable={writable} run={run} />}

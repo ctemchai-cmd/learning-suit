@@ -1,4 +1,5 @@
-import type { Hop, Spot } from "@/domain/data/model";
+import type { FlowFrame, Hop, Spot } from "@/domain/data/model";
+import { partsOfFrames, type RevealPart } from "@/domain/document/reveal";
 import { hostOf, type HostId } from "@/domain/hosting";
 import { normalizeSshView, type Machine, type SshView } from "@/domain/ssh/model";
 
@@ -146,4 +147,39 @@ export function hopPath(view: string, move: Hop): Pt[] | null {
   const middle = from === "scanner" || to === "scanner" ? [] : [scene.scanner];
   const path = [...toward(start, from), ...middle, ...toward(end, to).reverse()];
   return path.filter((point, index) => index === 0 || Math.hypot(point.x - path[index - 1].x, point.y - path[index - 1].y) > 0.5);
+}
+
+// ---------------------------------------------------------------------------
+// Progressive reveal (plan 07 §2): the ordered parts of each step. The board draws a part only when it is shown;
+// positions never change. Part ids: a / b = laptop, ssh = ~/.ssh folder (setup step), host = GitHub/GitLab card and repo
+// (the keys list too in the last step), gate = the scanner and every pipe, keys = SSH keys list (setup step), thief = the copier.
+// ---------------------------------------------------------------------------
+
+export const sshParts = (view: string, host?: HostId): RevealPart[] => {
+  const name = hostOf(host).name;
+  return normalizeSshView(view) === "others"
+    ? [{ id: "a", label: "เครื่อง A" }, { id: "b", label: "เครื่อง B" }, { id: "host", label: name }, { id: "gate", label: "ด่านสแกนนิ้ว" }, { id: "thief", label: "กล่องคนแอบคัดลอก .pub" }]
+    : [{ id: "a", label: "เครื่อง A (ของเรา)" }, { id: "ssh", label: "โฟลเดอร์ ~/.ssh" }, { id: "host", label: `${name} และ repo` }, { id: "gate", label: "ด่านสแกนนิ้ว" }, { id: "keys", label: "รายการ SSH Keys" }];
+};
+
+/** The part that draws a named place in a step (null = the step does not draw it). */
+export function sshPartOfSpot(view: string, spot: Spot): string | null {
+  const others = normalizeSshView(view) === "others";
+  if (spot === "scanner") return "gate";
+  if (spot === "github" || spot === "repo") return "host";
+  if (spot === "keys" || spot === "key:a" || spot === "key:b") return others ? "host" : "keys";
+  if (spot === "thief") return others ? "thief" : null;
+  if (spot === "a") return "a";
+  if (spot === "b") return others ? "b" : null;
+  const file = fileOf(spot);
+  if (!file) return null;
+  if (file.machine === "b") return others ? "b" : null;
+  return others ? "a" : "ssh";
+}
+
+/** Parts an action needs: those of the places its frames name, plus the gate when a packet passes the scanner. */
+export function sshPartsOfFrames(view: string, frames: readonly FlowFrame<unknown>[]): string[] {
+  const scanner = sceneOf(view).scanner;
+  return partsOfFrames(frames, (spot) => sshPartOfSpot(view, spot), (move) =>
+    hopPath(view, move)?.some((point) => point.x === scanner.x && point.y === scanner.y) ? ["gate"] : []);
 }

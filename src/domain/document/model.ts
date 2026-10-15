@@ -145,6 +145,8 @@ export type GitSimulatorNode = NodeBase & {
   type: "git-simulator";
   rotation: 0;
   scale: number;
+  /** Progressive reveal (plan 07 §2): how many of the step's parts are shown; missing = mode off, everything shown. */
+  reveal?: number;
   view?: GitView;
   /** GitHub or GitLab names on the board and in messages. Missing = GitHub. */
   host?: HostId;
@@ -166,6 +168,8 @@ export type DataSimulatorNode = NodeBase & {
   type: "data-simulator";
   rotation: 0;
   scale: number;
+  /** Progressive reveal (plan 07 §2): how many of the step's parts are shown; missing = mode off, everything shown. */
+  reveal?: number;
   view: DataView;
   state: DataState;
 };
@@ -176,6 +180,8 @@ export type DeploySimulatorNode = NodeBase & {
   type: "deploy-simulator";
   rotation: 0;
   scale: number;
+  /** Progressive reveal (plan 07 §2): how many of the step's parts are shown; missing = mode off, everything shown. */
+  reveal?: number;
   view: DeployView;
   state: DeployState;
 };
@@ -185,6 +191,8 @@ export type AiSimulatorNode = NodeBase & {
   type: "ai-simulator";
   rotation: 0;
   scale: number;
+  /** Progressive reveal (plan 07 §2): how many of the step's parts are shown; missing = mode off, everything shown. */
+  reveal?: number;
   view: AiView;
   state: AiState;
 };
@@ -194,6 +202,8 @@ export type SshSimulatorNode = NodeBase & {
   type: "ssh-simulator";
   rotation: 0;
   scale: number;
+  /** Progressive reveal (plan 07 §2): how many of the step's parts are shown; missing = mode off, everything shown. */
+  reveal?: number;
   view: SshView;
   /** Which site the lesson names; missing = GitHub (documents made before the switch). */
   host?: HostId;

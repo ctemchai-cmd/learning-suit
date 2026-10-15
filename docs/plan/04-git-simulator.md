@@ -315,6 +315,10 @@ draft ของไฟล์เก็บเป็น `pendingEdit` ชนิด `
 
 Commit message เป็น session input ไม่บันทึกลงโปรเจกต์จน Commit; สำเร็จแล้วล้าง input, reject แล้วคงไว้ ส่วน working edit บันทึกเป็น Drawing info ของ node ไม่ใช่ภาพ
 
+### ค่อยๆ แสดงทีละส่วน (progressive reveal, เพิ่ม 2026-10-15)
+
+ใช้กลไกกลางของ plan 07 §2 (`reveal?: number` บน node, `RevealControls` ในแผง) part ของแต่ละขั้นอยู่ใน `gitParts(view, host)` (`widget-layout.ts`): `local` = ไฟล์ → Git ของ A; `remote` = + GitHub พร้อมลูกศรส่ง/รับ; `full` = ไฟล์ A → Git A → GitHub → ไฟล์ B → Git B; `review` = เหมือน `full` + การ์ด Merge/Pull Request เป็น part สุดท้าย; `branch` = ไฟล์ → Staging → Commits ลูกศรอยู่กับ part ที่อยู่หลัง (ลูกศรขวาของ GitHub ไป B มากับ part ไฟล์ B) ที่ซ่อนอยู่ไม่วาดและกล่องแก้ไฟล์/ปุ่มวง commit บนกระดานของ part นั้นไม่แสดง `gitActionParts(view, action)` บอกว่า action แตะ part ไหน (เช่น Push → Git ของเครื่องนั้น + GitHub) ปุ่มจึงเผย part ที่ต้องใช้ใน transaction เดียวกัน
+
 ### ผลลัพธ์และ animation
 
 แสดงข้อความผล action ใต้ปุ่ม ใช้ `aria-live="polite"` ไม่เปิด modal เมื่อ reject ปกติ ความสำเร็จใช้ข้อความเฉพาะ เช่น “สร้าง C2 บนเครื่อง B แล้ว” และ “ส่ง C2 ขึ้น GitHub แล้ว” พร้อมคำอธิบายว่าเครื่องอื่นรับข้อมูลเมื่อ Clone/Pull ไม่สรุปจาก tracking ของ B ว่า A รู้/ไม่รู้ commit ใดอยู่จริง

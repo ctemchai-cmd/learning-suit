@@ -7,10 +7,11 @@ import type { SshSimulatorNode } from "@/domain/document/model";
 import { KEYGEN_COMMAND, normalizeSshView, type SshAction, type SshState, type SshView } from "@/domain/ssh/model";
 import { applySshAction, hasKeys } from "@/domain/ssh/reducer";
 import { useEditorStore } from "@/features/editor/store";
-import { Action, PanelHeader, PlaybackControls, ResetLink, ResultMessage, Section, Segmented, StepSelect } from "@/features/flow/flow-panel-parts";
+import { Action, PanelHeader, PlaybackControls, ResetLink, ResultMessage, RevealControls, Section, Segmented, StepSelect } from "@/features/flow/flow-panel-parts";
 import { useFlowSession } from "@/features/flow/flow-session";
 import { hostOf, type Host, type HostId } from "@/domain/hosting";
-import { sshViews } from "./ssh-layout";
+import { revealForParts, revealOnStepChange, withReveal } from "@/domain/document/reveal";
+import { sshParts, sshPartsOfFrames, sshViews } from "./ssh-layout";
 
 /** The node as currently stored, so actions never start from a stale render. */
 function latestNode(slideId: string, nodeId: string): SshSimulatorNode | null {
@@ -41,10 +42,12 @@ export function SshPanel({ node, slideId, writable, transact }: {
     if (!writable || !useEditorStore.getState().flushPendingEdits()) return;
     const latest = latestNode(slideId, nodeId) ?? node;
     const transition = applySshAction(latest.state, action, latest.view, latest.host);
-    if (transition.changed && !transact({
+    // Parts the animation needs are shown in the same step (no-op while the reveal mode is off).
+    const reveal = revealForParts(sshParts(latest.view, latest.host), latest.reveal, sshPartsOfFrames(latest.view, transition.frames));
+    if ((transition.changed || reveal !== latest.reveal) && !transact({
       label: `SSH (จำลอง): ${action.type === "revoke" ? `ลบกุญแจออกจาก ${hostOf(latest.host).name}` : ACTION_LABEL[action.type]}`,
       affectedSlideId: slideId,
-      commands: [{ type: "nodes.replace", slideId, nodes: [{ ...latest, state: transition.nextState }] }],
+      commands: [{ type: "nodes.replace", slideId, nodes: [withReveal({ ...latest, state: transition.nextState }, reveal)] }],
     })) {
       flow.setResult(nodeId, { outcome: "rejected", message: "ทำไม่สำเร็จ: โปรเจกต์อ่านอย่างเดียวหรือข้อมูลไม่ผ่านการตรวจ" });
       return;
@@ -59,7 +62,7 @@ export function SshPanel({ node, slideId, writable, transact }: {
     const latest = latestNode(slideId, nodeId) ?? node;
     // Terminals show the answer of the last action; a new step starts with clean screens.
     const cleared: SshState = { ...latest.state, a: { ...latest.state.a, cmd: "", out: [] }, b: { ...latest.state.b, cmd: "", out: [] }, thief: "idle" };
-    if (transact({ label: "SSH (จำลอง): เปลี่ยนขั้นบทเรียน", affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes: [{ ...latest, view: next, state: cleared }] }] })) {
+    if (transact({ label: "SSH (จำลอง): เปลี่ยนขั้นบทเรียน", affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes: [withReveal({ ...latest, view: next, state: cleared }, revealOnStepChange(latest.reveal))] }] })) {
       flow.stop(nodeId);
       flow.setResult(nodeId, undefined);
     }
@@ -82,6 +85,7 @@ export function SshPanel({ node, slideId, writable, transact }: {
     <Segmented label="เว็บที่เก็บโค้ด" value={node.host ?? "github"} disabled={!writable} onChange={changeHost}
       options={[{ value: "github", label: "GitHub" }, { value: "gitlab", label: "GitLab" }]} />
     <StepSelect id={ids} value={view} steps={sshViews(node.host)} disabled={!writable} onChange={changeView} />
+    <RevealControls node={node} parts={sshParts(view, node.host)} slideId={slideId} writable={writable} transact={transact} onHidden={() => flow.stop(nodeId)} />
     {view === "setup" && <SetupControls state={node.state} {...props} />}
     {view === "others" && <OthersControls {...props} />}
     <PlaybackControls nodeId={nodeId} />

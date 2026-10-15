@@ -1,4 +1,6 @@
 import { gitBaseSize, type GitView } from "../../domain/document/model";
+import type { RevealPart } from "../../domain/document/reveal";
+import type { GitAction, MachineId, RepositoryId } from "../../domain/git/model";
 import { hostOf, type HostId } from "../../domain/hosting";
 
 // Pure geometry of the Git widget per lesson step (plan 04 §5). Steps 1–2 draw in a 1120×680 base frame;
@@ -201,4 +203,73 @@ export function commitRowBox(layout: WidgetLayout, repository: "A" | "B" | "remo
   if (!list) return null;
   const { rowH } = commitListStyle(layout, repository);
   return { x: list.x, y: list.y + COMMIT_LIST.top + index * rowH, w: list.w, h: rowH };
+}
+
+// ---------------------------------------------------------------------------
+// Progressive reveal (plan 07 §2): the ordered parts of each step. The board draws a part only when it is shown;
+// positions never change. Ids: `a.file` / `b.file` = a machine's card with its file box, `a.git` / `b.git` = its Git column
+// (Staging + Commits; the Add arrow comes with it), `remote` = the GitHub card and the arrows between A and it,
+// `request` = the Merge Request card (review lesson). Arrows between two parts come with the later one (the right-hand
+// arrows with `b.file`). The Branch step splits A's Git column in `a.stage` and `a.commits`.
+// ---------------------------------------------------------------------------
+
+export function gitParts(view: GitView, hostId?: HostId): RevealPart[] {
+  const host = hostOf(hostId);
+  switch (view) {
+    case "local": return [{ id: "a.file", label: "ไฟล์ที่แก้อยู่" }, { id: "a.git", label: "Git ของเครื่อง A (Staging + Commits)" }];
+    case "remote": return [{ id: "a.file", label: "เครื่อง A: ไฟล์ที่แก้อยู่" }, { id: "a.git", label: "Git ของเครื่อง A" }, { id: "remote", label: `${host.name} และลูกศรส่ง/รับ` }];
+    case "branch": return [{ id: "a.file", label: "ไฟล์ที่แก้อยู่" }, { id: "a.stage", label: "Staging" }, { id: "a.commits", label: "Commits (ทางแยกของ branch)" }];
+    case "full":
+    case "review": return [
+      { id: "a.file", label: "เครื่อง A: ไฟล์" }, { id: "a.git", label: "Git ของเครื่อง A" }, { id: "remote", label: `${host.name} และลูกศรส่ง/รับ` },
+      { id: "b.file", label: "เครื่อง B: ไฟล์" }, { id: "b.git", label: "Git ของเครื่อง B" },
+      ...(view === "review" ? [{ id: "request", label: `การ์ด ${host.mergeRequest}` }] : []),
+    ];
+  }
+}
+
+/** Part ids of one machine's three drawn areas (Staging and Commits are one part, `x.git`, except in the Branch step). */
+export function gitMachineParts(view: GitView, machine: MachineId): { file: string; stage: string; commits: string } {
+  const id = machine === "A" ? "a" : "b";
+  return view === "branch" ? { file: `${id}.file`, stage: `${id}.stage`, commits: `${id}.commits` } : { file: `${id}.file`, stage: `${id}.git`, commits: `${id}.git` };
+}
+
+/** The part holding a repository's commit list (what the commit buttons on the board sit on). */
+export const gitCommitsPart = (view: GitView, repository: RepositoryId): string => repository === "remote" ? "remote" : gitMachineParts(view, repository).commits;
+
+/** The part an arrow between two repositories comes with (the later of the two), or null if the step has no such arrow. */
+export function gitTransferPart(view: GitView, from: RepositoryId, to: RepositoryId): string | null {
+  const layout = widgetLayout(view);
+  if (layout.left && ((from === "A" && to === "remote") || (from === "remote" && to === "A"))) return "remote";
+  if (layout.right && ((from === "B" && to === "remote") || (from === "remote" && to === "B"))) return "b.file";
+  return null;
+}
+
+/**
+ * Parts an action touches in a step, so pressing it reveals what it changes (ids the step lacks are ignored; revealing is in order,
+ * so earlier parts follow along): editing → the file; Add → the file and Staging; Commit → Staging and Commits; Push/Pull/Clone and Merge
+ * Request actions → the machine's commits and the GitHub card (Pull and Clone also the working file); merge/branch actions → the file,
+ * Staging and Commits; Reset demo → nothing.
+ */
+export function gitActionParts(view: GitView, action: GitAction): string[] {
+  if (action.type === "reset") return [];
+  const { file, stage, commits } = gitMachineParts(view, action.machine);
+  switch (action.type) {
+    case "edit":
+    case "mergeTake": return [file];
+    case "stage": return [file, stage];
+    case "commit": return [stage, commits];
+    case "push": return [commits, "remote"];
+    case "clone": return ["remote", file, commits];
+    case "pull": return [file, commits, "remote"];
+    case "mrOpen":
+    case "mrApprove":
+    case "mrMerge": return [commits, "remote", "request"];
+    case "mergeAbort": return [file, stage];
+    case "branchDelete": return [commits];
+    case "resetToRemote":
+    case "branchCreate":
+    case "branchSwitch":
+    case "branchMerge": return [file, stage, commits, ...(action.type === "resetToRemote" ? ["remote"] : [])];
+  }
 }

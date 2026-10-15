@@ -1,4 +1,5 @@
-import type { Hop, Spot } from "@/domain/data/model";
+import type { FlowFrame, Hop, Spot } from "@/domain/data/model";
+import { partsOfFrames, type RevealPart } from "@/domain/document/reveal";
 import type { DeployState, DeployView } from "@/domain/deploy/model";
 
 // Pure geometry of the deploy widget (plan 07 §4), widget base coordinates 1120×680.
@@ -40,8 +41,8 @@ export type Scene = {
   supabase?: Box;
   rls?: Pt;
   orders?: Box;
-  /** Pipes drawn between places (always visible). */
-  pipes: { from: Pt; to: Pt; label?: string }[];
+  /** Pipes drawn between places (always visible); `part` = the reveal part that shows the pipe (the later of its two ends). */
+  pipes: { from: Pt; to: Pt; label?: string; part: string }[];
 };
 
 const phone = (x: number, y: number, w: number, h: number) => ({ frame: { x, y, w, h }, screen: { x: x + 12, y: y + 36, w: w - 24, h: h - 52 } });
@@ -56,9 +57,9 @@ function localScene(): Scene {
   return {
     laptop, code, server, browser, friend, localhostGate: gate,
     pipes: [
-      { from: right(code, 300), to: left(server, 300) },
-      { from: right(server, 300), to: left(browser, 300) },
-      { from: left(friend.frame, 330), to: gate },
+      { from: right(code, 300), to: left(server, 300), part: "server" },
+      { from: right(server, 300), to: left(browser, 300), part: "browser" },
+      { from: left(friend.frame, 330), to: gate, part: "friend" },
     ],
   };
 }
@@ -73,10 +74,10 @@ function localEnvScene(): Scene {
   return {
     laptop, code, envfile, server, browser, supabase,
     pipes: [
-      { from: right(code, 215), to: left(server, 262) },
-      { from: right(envfile, 386), to: left(server, 330) },
-      { from: right(server, 250), to: left(browser, 230) },
-      { from: right(server, 320), to: left(supabase, 380) },
+      { from: right(code, 215), to: left(server, 262), part: "server" },
+      { from: right(envfile, 386), to: left(server, 330), part: "envfile" },
+      { from: right(server, 250), to: left(browser, 230), part: "browser" },
+      { from: right(server, 320), to: left(supabase, 380), part: "db" },
     ],
   };
 }
@@ -93,10 +94,10 @@ function vercelScene(): Scene {
     build: { x: 711, y: 150 },
     deployments: { x: 576, y: 214, w: 270, h: 360 },
     pipes: [
-      { from: right(laptop, 210), to: left(github, 210), label: "ส่งโค้ด" },
-      { from: right(github, 210), to: left(vercel, 210) },
-      { from: right(vercel, 154), to: left(url, 154) },
-      { from: { x: url.x + url.w / 2, y: url.y + url.h }, to: { x: url.x + url.w / 2, y: friend.frame.y } },
+      { from: right(laptop, 210), to: left(github, 210), label: "ส่งโค้ด", part: "github" },
+      { from: right(github, 210), to: left(vercel, 210), part: "vercel" },
+      { from: right(vercel, 154), to: left(url, 154), part: "url" },
+      { from: { x: url.x + url.w / 2, y: url.y + url.h }, to: { x: url.x + url.w / 2, y: friend.frame.y }, part: "friend" },
     ],
   };
 }
@@ -119,13 +120,14 @@ function envScene(): Scene {
     build: { x: 718, y: 140 },
     gitignore: { x: 333, y: 170 },
     pipes: [
-      { from: right(laptop, 170), to: { x: 333, y: 170 } },
-      { from: { x: 333, y: 170 }, to: left(github, 170) },
-      { from: right(github, 170), to: left(vercel, 170) },
-      { from: right(vercel, 154), to: left(url, 154) },
-      { from: { x: url.x + url.w / 2, y: url.y + url.h }, to: { x: url.x + url.w / 2, y: friend.frame.y } },
-      { from: { x: server.x + server.w / 2, y: laptop.y + laptop.h }, to: { x: supabase.x + 40, y: supabase.y + 20 } },
-      { from: left(vercel, 500), to: right(supabase, 500) },
+      { from: right(laptop, 170), to: { x: 333, y: 170 }, part: "github" },
+      { from: { x: 333, y: 170 }, to: left(github, 170), part: "github" },
+      { from: right(github, 170), to: left(vercel, 170), part: "vercel" },
+      { from: right(vercel, 154), to: left(url, 154), part: "web" },
+      { from: { x: url.x + url.w / 2, y: url.y + url.h }, to: { x: url.x + url.w / 2, y: friend.frame.y }, part: "web" },
+      { from: { x: server.x + server.w / 2, y: laptop.y + laptop.h }, to: { x: supabase.x + 40, y: supabase.y + 20 }, part: "db" },
+      // Vercel reads the database with its own key: the pipe comes with the Environment Variables box it starts from.
+      { from: left(vercel, 500), to: right(supabase, 500), part: "vercelEnv" },
     ],
   };
 }
@@ -145,12 +147,12 @@ function overallScene(): Scene {
     rls: { x: 370, y: 490 },
     orders: { x: 440, y: 430, w: 350, h: 160 },
     pipes: [
-      { from: right(laptop, 164), to: left(github, 164), label: "ส่งโค้ด" },
-      { from: right(github, 164), to: left(vercel, 164) },
-      { from: right(vercel, 144), to: left(url, 144) },
-      { from: { x: url.x + url.w / 2, y: url.y + url.h }, to: { x: url.x + url.w / 2, y: friend.frame.y } },
-      { from: { x: vercel.x + 40, y: vercel.y + vercel.h }, to: { x: 370, y: 490 } },
-      { from: { x: 370, y: 490 }, to: left({ x: 440, y: 430, w: 350, h: 160 }, 490) },
+      { from: right(laptop, 164), to: left(github, 164), label: "ส่งโค้ด", part: "github" },
+      { from: right(github, 164), to: left(vercel, 164), part: "vercel" },
+      { from: right(vercel, 144), to: left(url, 144), part: "url" },
+      { from: { x: url.x + url.w / 2, y: url.y + url.h }, to: { x: url.x + url.w / 2, y: friend.frame.y }, part: "friend" },
+      { from: { x: vercel.x + 40, y: vercel.y + vercel.h }, to: { x: 370, y: 490 }, part: "db" },
+      { from: { x: 370, y: 490 }, to: left({ x: 440, y: 430, w: 350, h: 160 }, 490), part: "db" },
     ],
   };
 }
@@ -208,4 +210,43 @@ export function hopPath(view: DeployView, before: DeployState, after: DeployStat
     if (move.from === "friend") via.push(urlBottom, url); else via.push(url, urlBottom);
   }
   return [start, ...via, end];
+}
+
+// ---------------------------------------------------------------------------
+// Progressive reveal (plan 07 §2): the ordered parts of each step. The board draws a piece only when its part is shown;
+// positions never change. `PIECES` maps every drawn piece (the spot names plus `laptop`) to its part in each step; a pipe
+// comes with the later of its two ends (`Scene.pipes[].part`).
+// ---------------------------------------------------------------------------
+
+const part = (id: string, label: string): RevealPart => ({ id, label });
+const PARTS: Record<DeployView, RevealPart[]> = {
+  local: [part("code", "เครื่องเรา: โค้ด"), part("server", "เซิร์ฟเวอร์ในเครื่อง"), part("browser", "เบราว์เซอร์ (localhost)"), part("friend", "มือถือเพื่อน และด่าน “นอกเครื่องเรา”")],
+  localEnv: [part("code", "เครื่องเรา: โค้ด"), part("server", "เซิร์ฟเวอร์ในเครื่อง"), part("envfile", "ไฟล์ .env.local (กุญแจ)"), part("db", "ฐานข้อมูล (Supabase)"), part("browser", "เบราว์เซอร์")],
+  vercel: [part("code", "เครื่องเรา: โค้ด"), part("github", "GitHub"), part("vercel", "Vercel และ Build"), part("deployments", "รายการ Deployments"), part("url", "เว็บจริง (URL)"), part("friend", "มือถือเพื่อน")],
+  env: [part("laptop", "เครื่องเรา (โค้ด + .env.local)"), part("db", "ฐานข้อมูล (Supabase)"), part("github", "GitHub และ .gitignore"), part("vercel", "Vercel: Build + Deployments"), part("vercelEnv", "Environment Variables บน Vercel"), part("web", "เว็บจริงและมือถือเพื่อน")],
+  overall: [part("code", "เครื่องเรา: โค้ด"), part("github", "GitHub"), part("vercel", "Vercel: Build + Deployments"), part("db", "ฐานข้อมูล และกฎสิทธิ์"), part("url", "เว็บจริง (URL)"), part("friend", "มือถือเพื่อน")],
+};
+export const deployParts = (view: DeployView): RevealPart[] => PARTS[view];
+
+const PIECES: Record<DeployView, Record<string, string>> = {
+  local: { laptop: "code", code: "code", server: "server", browser: "browser", friend: "friend", localhostGate: "friend" },
+  localEnv: { laptop: "code", code: "code", server: "server", envfile: "envfile", supabase: "db", browser: "browser" },
+  vercel: { laptop: "code", code: "code", github: "github", vercel: "vercel", build: "vercel", deployments: "deployments", url: "url", friend: "friend" },
+  env: { laptop: "laptop", code: "laptop", server: "laptop", browser: "laptop", envfile: "laptop", supabase: "db", gitignore: "github", github: "github", vercel: "vercel", build: "vercel", deployments: "vercel", vercelEnv: "vercelEnv", url: "web", friend: "web" },
+  overall: { laptop: "code", code: "code", github: "github", vercel: "vercel", build: "vercel", deployments: "vercel", supabase: "db", orders: "db", rls: "db", url: "url", friend: "friend" },
+};
+/** The part that draws a piece of a step (null = the step does not draw it). `piece` is a spot name or `laptop`. */
+export function deployPartOfPiece(view: DeployView, piece: string): string | null {
+  return PIECES[view][piece] ?? null;
+}
+/** The part that draws a named place; `deploy:N` rows live in the deployments list. */
+export const deployPartOfSpot = (view: DeployView, spot: Spot): string | null => deployPartOfPiece(view, spot.startsWith("deploy:") ? "deployments" : spot);
+
+/** Parts an action needs: those of the places its frames name, plus the URL box when a packet to/from the phone passes it. */
+export function deployPartsOfFrames(view: DeployView, frames: readonly FlowFrame<unknown>[]): string[] {
+  return partsOfFrames(frames, (spot) => deployPartOfSpot(view, spot), (move) => {
+    const viaUrl = (move.from === "friend" && move.to !== "url") || (move.to === "friend" && move.from !== "url");
+    const url = viaUrl ? deployPartOfPiece(view, "url") : null;
+    return url ? [url] : [];
+  });
 }

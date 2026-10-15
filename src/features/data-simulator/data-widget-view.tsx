@@ -6,11 +6,12 @@ import type { DataSimulatorNode } from "@/domain/document/model";
 import type { DataState, DataView, Mark, MarkTone, PhoneId } from "@/domain/data/model";
 import { PHONE_USER } from "@/domain/data/model";
 import { customerName, menuName, STORAGE_LABEL } from "@/domain/data/reducer";
+import { partFilter } from "@/domain/document/reveal";
 import { AppSpinner, CaptionBar, Gate, IconLabel, Label, MARK_STYLE, Packet, Pipe, type Pt } from "@/features/flow/flow-bits";
 import { waitingAt, type FlowPlay, type Waiting } from "@/features/flow/flow-session";
 import { useFlowPlayback } from "@/features/flow/use-flow-playback";
 import {
-  ACCESS, CAPTION_BOX, DATA_H, DATA_VIEWS, DATA_W, hopPath, pipesOf, RELATION, TABLE, tableRowY, WHERE,
+  ACCESS, CAPTION_BOX, DATA_H, DATA_VIEWS, DATA_W, dataParts, dataPartsOfFrames, hopPath, pipesOf, RELATION, TABLE, tableRowY, WHERE,
   type Box, type TableBox,
 } from "./data-layout";
 
@@ -180,7 +181,9 @@ function tableKey(table: TableBox): string {
 // Steps
 // ---------------------------------------------------------------------------
 
-function WhereStep({ state, marks, waiting, font }: { state: DataState; marks: Marks; waiting: (spot: string) => Waiting | null; font: string }) {
+type Shows = (partId: string) => boolean;
+
+function WhereStep({ state, marks, waiting, font, shows }: { state: DataState; marks: Marks; waiting: (spot: string) => Waiting | null; font: string; shows: Shows }) {
   const { storage } = state;
   const phone = (id: PhoneId) => {
     const p = WHERE[id];
@@ -188,7 +191,10 @@ function WhereStep({ state, marks, waiting, font }: { state: DataState; marks: M
     const lineH = 26;
     const max = Math.max(1, Math.floor((p.screen.h - 12) / lineH));
     const lines = storage.screen[id];
+    // Reveal parts: phone A shows its memory and its own storage as parts of their own; phone B is one part.
+    const own = `phone${id}`, memory = id === "A" ? "memA" : own, device = id === "A" ? "devA" : own;
     return <Group key={id}>
+      {shows(own) && <>
       <Rect x={p.frame.x} y={p.frame.y} width={p.frame.w} height={p.frame.h} cornerRadius={30} fill={C.phone} />
       <Rect x={p.frame.x + p.frame.w / 2 - 34} y={p.frame.y + 10} width={68} height={8} cornerRadius={4} fill="#334155" />
       <Label x={p.frame.x} y={p.frame.y + 21} width={p.frame.w} text={`เครื่อง ${id}`} size={11} color="#94A3B8" align="center" font={font} />
@@ -203,15 +209,17 @@ function WhereStep({ state, marks, waiting, font }: { state: DataState; marks: M
           <Rect x={p.screen.x + 8} y={p.screen.y + 6 + index * lineH} width={p.screen.w - 16} height={lineH - 4} cornerRadius={6} fill="#FFFFFF" stroke="#E2E8F0" />
           <IconLabel x={p.screen.x + 16} y={p.screen.y + 6 + index * lineH} width={p.screen.w - 32} icon="coffee" text={line} size={13} color={C.text} iconColor="#92400E" font={font} lineHeight={lineH - 4} />
         </Group>)}
-      <Zone box={p.memory} title="ความจำของแอป" sub="อยู่ในแอป: หายเมื่อรีเฟรชหรือปิดแอป" items={storage.memory[id]} active={id === "A" && storage.mode === "app"} mark={markOf(marks, `mem${id}`)} font={font} />
       {busy && <AppSpinner box={p.screen} kind={busy} font={font} />}
-      <Zone box={p.device} title={`เก็บในเครื่อง ${id}`} sub="นอกแอป: อยู่ต่อหลังรีเฟรช แต่มีแค่เครื่องนี้" items={storage.device[id]} active={id === "A" && storage.mode === "device"} mark={markOf(marks, `dev${id}`)} font={font} />
+      </>}
+      {shows(memory) && <Zone box={p.memory} title="ความจำของแอป" sub="อยู่ในแอป: หายเมื่อรีเฟรชหรือปิดแอป" items={storage.memory[id]} active={id === "A" && storage.mode === "app"} mark={markOf(marks, `mem${id}`)} font={font} />}
+      {shows(device) && <Zone box={p.device} title={`เก็บในเครื่อง ${id}`} sub="นอกแอป: อยู่ต่อหลังรีเฟรช แต่มีแค่เครื่องนี้" items={storage.device[id]} active={id === "A" && storage.mode === "device"} mark={markOf(marks, `dev${id}`)} font={font} />}
     </Group>;
   };
   const cloud = WHERE.cloud;
   const cloudActive = storage.mode === "cloud";
   return <Group listening={false}>
     {phone("A")}{phone("B")}
+    {shows("cloud") && <>
     <Cylinder box={cloud} title="ฐานข้อมูล (Cloud)" mark={markOf(marks, "cloud")} font={font}>
       <Tag x={cloud.x + cloud.w / 2 - 52} y={cloud.y + 92} text="Supabase" width={104} font={font} />
       {cloudActive && <Group x={cloud.x + cloud.w / 2 - 50} y={cloud.y + 122}>
@@ -230,29 +238,30 @@ function WhereStep({ state, marks, waiting, font }: { state: DataState; marks: M
       <Label x={12} y={10} width={cloud.w + 16} text="แอปของ A ตอนนี้" size={12} color={C.muted} align="center" font={font} />
       <Label x={12} y={30} width={cloud.w + 16} text={STORAGE_LABEL[storage.mode]} size={20} bold color="#1D4ED8" align="center" font={font} />
     </Group>
+    </>}
   </Group>;
 }
 
-function TableStep({ state, marks, gateTone, waiting, font }: { state: DataState; marks: Marks; gateTone: "idle" | "ok" | "blocked"; waiting: (spot: string) => Waiting | null; font: string }) {
+function TableStep({ state, marks, gateTone, waiting, font, shows }: { state: DataState; marks: Marks; gateTone: "idle" | "ok" | "blocked"; waiting: (spot: string) => Waiting | null; font: string; shows: Shows }) {
   const note = marks.get("gate")?.note;
   return <Group listening={false}>
-    <Phone frame={TABLE.phone.frame} screen={TABLE.phone.screen} title={state.phones.A.title || "เครื่อง A · แอปร้านกาแฟ"} lines={state.phones.A.lines} empty="ผลจากฐานข้อมูลจะขึ้นที่นี่" waiting={waiting("phoneA")} font={font} />
-    <Gate at={TABLE.gate} label="ตรวจชนิดข้อมูล" sub={gateTone === "blocked" && note ? "✗ ไม่ผ่าน" : undefined} tone={gateTone} font={font} />
-    <Card box={TABLE.db} title="ฐานข้อมูล · ตาราง “เมนู”" fill={C.db} stroke={C.dbStroke} font={font}>
+    {shows("phone") && <Phone frame={TABLE.phone.frame} screen={TABLE.phone.screen} title={state.phones.A.title || "เครื่อง A · แอปร้านกาแฟ"} lines={state.phones.A.lines} empty="ผลจากฐานข้อมูลจะขึ้นที่นี่" waiting={waiting("phoneA")} font={font} />}
+    {shows("gate") && <Gate at={TABLE.gate} label="ตรวจชนิดข้อมูล" sub={gateTone === "blocked" && note ? "✗ ไม่ผ่าน" : undefined} tone={gateTone} font={font} />}
+    {shows("db") && <Card box={TABLE.db} title="ฐานข้อมูล · ตาราง “เมนู”" fill={C.db} stroke={C.dbStroke} font={font}>
       <Tag x={TABLE.db.x + TABLE.db.w - 196} y={TABLE.db.y + 12} text="Supabase: Table Editor" width={180} font={font} />
-    </Card>
-    <TableGrid table={TABLE.menu} rows={state.menu} marks={marks} spotPrefix="" font={font}
+    </Card>}
+    {shows("menu") && <TableGrid table={TABLE.menu} rows={state.menu} marks={marks} spotPrefix="" font={font}
       cell={(row, key) => {
         const item = state.menu.find((entry) => entry.id === row.id)!;
         if (key === "id") return { text: String(item.id), color: C.muted, bold: true };
         if (key === "name") return { text: item.name };
         if (key === "price") return { text: `${item.price}` };
         return { text: item.available ? "ใช่" : "ไม่ใช่", color: item.available ? "#15803D" : "#B91C1C" };
-      }} />
+      }} />}
   </Group>;
 }
 
-function RelationStep({ state, marks, font }: { state: DataState; marks: Marks; font: string }) {
+function RelationStep({ state, marks, font, shows }: { state: DataState; marks: Marks; font: string; shows: Shows }) {
   const nameOf = (id: number) => customerName(state, id);
   const customerCell = (row: { id: number }, key: string): Cell => {
     const customer = state.customers.find((entry) => entry.id === row.id)!;
@@ -263,16 +272,14 @@ function RelationStep({ state, marks, font }: { state: DataState; marks: Marks; 
   const linkOrders = RELATION.linkOrders, linkCustomers = RELATION.linkCustomers;
   const customerIndex = new Map(state.customers.map((customer, index) => [customer.id, index]));
   return <Group listening={false}>
-    <Group x={RELATION.app.x} y={RELATION.app.y}>
+    {shows("app") && <Group x={RELATION.app.x} y={RELATION.app.y}>
       <Rect width={RELATION.app.w} height={RELATION.app.h} cornerRadius={29} fill={C.phone} />
       <IconLabel x={0} y={0} width={RELATION.app.w} icon="phone" text="แอปร้านกาแฟ" size={16} bold color="#FFFFFF" align="center" font={font} lineHeight={RELATION.app.h} />
-    </Group>
+    </Group>}
+    {shows("copy") && <>
     <Card box={RELATION.copy} title="แบบ ก๊อปชื่อ" sub="เก็บชื่อลูกค้าซ้ำไว้ในทุกออเดอร์" font={font} />
-    <Card box={RELATION.link} title="แบบ อ้างด้วย ID" sub="ออเดอร์เก็บแค่เลขลูกค้า แล้วตามเส้นไปดูชื่อ" font={font} />
     <Label x={RELATION.copyCustomers.box.x} y={RELATION.copyCustomers.box.y - 22} width={180} text="ลูกค้า" size={13} bold color={C.title} font={font} />
     <Label x={RELATION.copyOrders.box.x} y={RELATION.copyOrders.box.y - 22} width={300} text="ออเดอร์" size={13} bold color={C.title} font={font} />
-    <Label x={linkOrders.box.x} y={linkOrders.box.y - 22} width={280} text="ออเดอร์" size={13} bold color={C.title} font={font} />
-    <Label x={linkCustomers.box.x} y={linkCustomers.box.y - 22} width={180} text="ลูกค้า" size={13} bold color={C.title} font={font} />
     <TableGrid table={RELATION.copyCustomers} rows={state.customers} marks={marks} spotPrefix="copy:" cell={customerCell} font={font} />
     <TableGrid table={RELATION.copyOrders} rows={state.orders} marks={marks} spotPrefix="copy:" font={font} cell={(row, key) => {
       const order = orderOf(row);
@@ -283,43 +290,49 @@ function RelationStep({ state, marks, font }: { state: DataState; marks: Marks; 
       }
       return { text: menuName(state, order.menuId) };
     }} />
+    </>}
+    {shows("link") && <>
+    <Card box={RELATION.link} title="แบบ อ้างด้วย ID" sub="ออเดอร์เก็บแค่เลขลูกค้า แล้วตามเส้นไปดูชื่อ" font={font} />
+    <Label x={linkOrders.box.x} y={linkOrders.box.y - 22} width={280} text="ออเดอร์" size={13} bold color={C.title} font={font} />
+    <Label x={linkCustomers.box.x} y={linkCustomers.box.y - 22} width={180} text="ลูกค้า" size={13} bold color={C.title} font={font} />
+    </>}
     {/* Link lines: every order points at its customer row. */}
-    {state.orders.slice(0, linkOrders.maxRows).map((order, index) => {
+    {shows("refs") && state.orders.slice(0, linkOrders.maxRows).map((order, index) => {
       const target = customerIndex.get(order.customerId);
       if (target === undefined || target >= linkCustomers.maxRows) return null;
       const from = { x: linkOrders.columns[1].x + linkOrders.columns[1].w - 6, y: tableRowY(linkOrders, index) };
       const to = { x: linkCustomers.box.x + 4, y: tableRowY(linkCustomers, target) };
       return <Line key={order.id} points={[from.x, from.y, from.x + 30, from.y, to.x - 30, to.y, to.x, to.y]} bezier stroke={linkColor(order.customerId)} strokeWidth={2} opacity={0.75} />;
     })}
-    <TableGrid table={linkOrders} rows={state.orders} marks={marks} spotPrefix="link:" font={font} cell={(row, key) => {
+    {shows("link") && <TableGrid table={linkOrders} rows={state.orders} marks={marks} spotPrefix="link:" font={font} cell={(row, key) => {
       const order = orderOf(row);
       if (key === "id") return { text: `#${order.id}`, color: C.muted, bold: true };
       if (key === "customerId") return { text: `→ #${order.customerId}`, color: linkColor(order.customerId), bold: true };
       return { text: menuName(state, order.menuId) };
-    }} />
-    <TableGrid table={linkCustomers} rows={state.customers} marks={marks} spotPrefix="link:" cell={customerCell} font={font} />
-    <Gate at={RELATION.linkGate} tone={markOf(marks, "link:gate") === "blocked" ? "blocked" : markOf(marks, "link:gate") === "allowed" ? "ok" : "idle"} font={font} />
+    }} />}
+    {shows("link") && <TableGrid table={linkCustomers} rows={state.customers} marks={marks} spotPrefix="link:" cell={customerCell} font={font} />}
+    {shows("refs") && <Gate at={RELATION.linkGate} tone={markOf(marks, "link:gate") === "blocked" ? "blocked" : markOf(marks, "link:gate") === "allowed" ? "ok" : "idle"} font={font} />}
   </Group>;
 }
 
-function AccessStep({ state, marks, waiting, font }: { state: DataState; marks: Marks; waiting: (spot: string) => Waiting | null; font: string }) {
+function AccessStep({ state, marks, waiting, font, shows }: { state: DataState; marks: Marks; waiting: (spot: string) => Waiting | null; font: string; shows: Shows }) {
   const gateMark = markOf(marks, "gate");
   const gateTone = gateMark === "leak" ? "leak" : gateMark === "allowed" ? "ok" : state.rulesOn ? "idle" : "off";
   const phoneTitle = (id: PhoneId) => `เครื่อง ${id} · ${customerName(state, PHONE_USER[id])}`;
   const ownerLabel = (customerId: number) => customerId === PHONE_USER.A ? `${customerName(state, customerId)} (A)` : customerId === PHONE_USER.B ? `${customerName(state, customerId)} (B)` : customerName(state, customerId);
   return <Group listening={false}>
-    {(["A", "B"] as const).map((id) => <Phone key={id} frame={ACCESS[id].frame} screen={ACCESS[id].screen} title={phoneTitle(id)}
+    {(["A", "B"] as const).filter((id) => shows(`phone${id}`)).map((id) => <Phone key={id} frame={ACCESS[id].frame} screen={ACCESS[id].screen} title={phoneTitle(id)}
       lines={state.phones[id].lines} empty="กดให้เครื่องนี้ขอดูข้อมูล" waiting={waiting(`phone${id}`)} font={font} />)}
-    <Gate at={ACCESS.gate} label={state.rulesOn ? "กฎสิทธิ์: เปิด" : "กฎสิทธิ์: ปิด"} sub="Supabase: RLS Policy" tone={gateTone} font={font} />
-    <Card box={ACCESS.db} title="ฐานข้อมูล" fill={C.db} stroke={C.dbStroke} font={font} />
-    <TableGrid table={ACCESS.menu} rows={state.menu} marks={marks} spotPrefix="" title="เมนู" font={font}
+    {shows("gate") && <Gate at={ACCESS.gate} label={state.rulesOn ? "กฎสิทธิ์: เปิด" : "กฎสิทธิ์: ปิด"} sub="Supabase: RLS Policy" tone={gateTone} font={font} />}
+    {shows("db") && <Card box={ACCESS.db} title="ฐานข้อมูล" fill={C.db} stroke={C.dbStroke} font={font} />}
+    {shows("menu") && <TableGrid table={ACCESS.menu} rows={state.menu} marks={marks} spotPrefix="" title="เมนู" font={font}
       badge={<Group x={ACCESS.menu.box.x + 60} y={ACCESS.menu.box.y}><Rect width={120} height={20} cornerRadius={10} fill="#DCFCE7" />
         <Label x={0} y={0} width={120} text="สาธารณะ ทุกคนเห็น" size={11} bold color="#166534" align="center" font={font} lineHeight={20} /></Group>}
       cell={(row, key) => {
         const item = state.menu.find((entry) => entry.id === row.id)!;
         return key === "id" ? { text: String(item.id), color: C.muted, bold: true } : key === "name" ? { text: item.name } : { text: `${item.price} บาท` };
-      }} />
-    <TableGrid table={ACCESS.orders} rows={state.orders} marks={marks} spotPrefix="" title="ออเดอร์" font={font}
+      }} />}
+    {shows("orders") && <TableGrid table={ACCESS.orders} rows={state.orders} marks={marks} spotPrefix="" title="ออเดอร์" font={font}
       badge={<Group x={ACCESS.orders.box.x + 70} y={ACCESS.orders.box.y}><Rect width={170} height={20} cornerRadius={10} fill={state.rulesOn ? "#DBEAFE" : "#FEE2E2"} />
         <Label x={0} y={0} width={170} text={state.rulesOn ? "เห็นเฉพาะเจ้าของ" : "ไม่มีกฎ: ใครก็เห็น"} size={11} bold color={state.rulesOn ? "#1E40AF" : "#991B1B"} align="center" font={font} lineHeight={20} /></Group>}
       cell={(row, key) => {
@@ -328,7 +341,7 @@ function AccessStep({ state, marks, waiting, font }: { state: DataState; marks: 
         if (key === "owner") return { text: ownerLabel(order.customerId), color: OWNER_COLOR[order.customerId] ?? C.muted, bold: true };
         if (key === "menu") return { text: menuName(state, order.menuId) };
         return { text: `×${order.qty}` };
-      }} />
+      }} />}
   </Group>;
 }
 
@@ -336,8 +349,11 @@ function AccessStep({ state, marks, waiting, font }: { state: DataState; marks: 
  * Canvas rendering of a data-storage simulator node. `play` (editor only) animates the last action;
  * export passes null and gets the stored state.
  */
-export function DataWidgetView({ node, play, fontFamily }: { node: DataSimulatorNode; play: FlowPlay | null; fontFamily: string }): JSX.Element {
+export function DataWidgetView({ node, play: playing, fontFamily }: { node: DataSimulatorNode; play: FlowPlay | null; fontFamily: string }): JSX.Element {
   const view = node.view;
+  // Progressive reveal: hidden parts are not drawn (an animation needing hidden parts is not drawn either).
+  const shows = partFilter(dataParts(view), node.reveal);
+  const play = playing && dataPartsOfFrames(view, playing.frames).every(shows) ? playing : null;
   const flow = useFlowPlayback<DataState, Pt>(node.id, play, node.state, (before, after, move) => hopPath(view, before, after, move));
   const { marks, moving, path } = flow;
   const shown = { state: flow.state };
@@ -352,12 +368,12 @@ export function DataWidgetView({ node, play, fontFamily }: { node: DataSimulator
   return <Group scaleX={node.scale} scaleY={node.scale} clipX={0} clipY={0} clipWidth={DATA_W} clipHeight={DATA_H}>
     <Rect x={1} y={1} width={DATA_W - 2} height={DATA_H - 2} cornerRadius={18} fill={C.frame} stroke={C.frameStroke} strokeWidth={2} />
     <Label x={24} y={18} width={DATA_W - 48} text={`การเก็บข้อมูล: ${title.label}`} size={24} bold color={C.title} font={fontFamily} />
-    {pipesOf(view).map((pipe, index) => <Pipe key={index} from={pipe.from} to={pipe.to} label={pipe.label}
+    {pipesOf(view).map((pipe, index) => shows(pipe.part) && <Pipe key={index} from={pipe.from} to={pipe.to} label={pipe.label}
       active={moving && onPath(pipe.from) && onPath(pipe.to) ? moving.tone : null} font={fontFamily} />)}
-    {view === "where" && <WhereStep state={shown.state} marks={marks} waiting={waiting} font={fontFamily} />}
-    {view === "table" && <TableStep state={shown.state} marks={marks} gateTone={gateTone} waiting={waiting} font={fontFamily} />}
-    {view === "relation" && <RelationStep state={shown.state} marks={marks} font={fontFamily} />}
-    {view === "access" && <AccessStep state={shown.state} marks={marks} waiting={waiting} font={fontFamily} />}
+    {view === "where" && <WhereStep state={shown.state} marks={marks} waiting={waiting} font={fontFamily} shows={shows} />}
+    {view === "table" && <TableStep state={shown.state} marks={marks} gateTone={gateTone} waiting={waiting} font={fontFamily} shows={shows} />}
+    {view === "relation" && <RelationStep state={shown.state} marks={marks} font={fontFamily} shows={shows} />}
+    {view === "access" && <AccessStep state={shown.state} marks={marks} waiting={waiting} font={fontFamily} shows={shows} />}
     <CaptionBar box={CAPTION_BOX} text={flow.frame ? flow.frame.caption : IDLE[view]} step={flow.step} font={fontFamily} />
     {moving && path && <Packet key={flow.runKey} runKey={flow.runKey} path={path} label={moving.label} tone={moving.tone}
       duration={flow.travel} font={fontFamily} onLanded={flow.onLanded} />}

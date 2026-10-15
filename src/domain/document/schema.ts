@@ -4,6 +4,7 @@ import { DEPLOY_LIMITS } from "../deploy/model";
 import { AI_LIMITS } from "../ai/model";
 import { LEGACY_SSH_VIEWS, SSH_LIMITS } from "../ssh/model";
 import { LIMITS } from "./limits";
+import { REVEAL_MAX } from "./reveal";
 import { CODE_LANGUAGES, STENCIL_FRAMES, STENCIL_ICONS, type ProjectContent } from "./model";
 
 const codePoints = (value: string) => [...value].length;
@@ -14,6 +15,8 @@ const coordinate = z.number().finite().min(-LIMITS.coordinate).max(LIMITS.coordi
 const size = z.number().finite().min(1).max(LIMITS.coordinate);
 const point = z.strictObject({ x: coordinate, y: coordinate });
 const title = z.string().refine((v) => v === v.trim() && codePoints(v) >= 1 && codePoints(v) <= LIMITS.titleCodePoints, "Name must be trimmed and 1–120 characters");
+// Progressive reveal of a teaching widget (plan 07 §2): parts shown so far; missing = mode off.
+const reveal = z.number().int().min(0).max(REVEAL_MAX).optional();
 const base = {
   id: uuid,
   x: coordinate,
@@ -155,7 +158,7 @@ const gitState = z.strictObject({
 });
 const gitSimulator = z.strictObject({
   ...base, type: z.literal("git-simulator"), rotation: z.literal(0),
-  scale: z.number().finite().min(0.5).max(4), view: z.enum(["local", "remote", "full", "branch", "review"]).optional(),
+  scale: z.number().finite().min(0.5).max(4), reveal, view: z.enum(["local", "remote", "full", "branch", "review"]).optional(),
   // Where the class keeps its code; missing = GitHub (documents made before the switch).
   host: z.enum(["github", "gitlab"]).optional(), state: gitState,
 });
@@ -194,7 +197,7 @@ const dataState = z.strictObject({
 });
 const dataSimulator = z.strictObject({
   ...base, type: z.literal("data-simulator"), rotation: z.literal(0),
-  scale: z.number().finite().min(0.5).max(4), view: z.enum(["where", "table", "relation", "access"]), state: dataState,
+  scale: z.number().finite().min(0.5).max(4), reveal, view: z.enum(["where", "table", "relation", "access"]), state: dataState,
 });
 
 // Deploy simulator (plan 07 §4).
@@ -221,7 +224,7 @@ const deployState = z.strictObject({
 });
 const deploySimulator = z.strictObject({
   ...base, type: z.literal("deploy-simulator"), rotation: z.literal(0),
-  scale: z.number().finite().min(0.5).max(4), view: z.enum(["local", "localEnv", "vercel", "env", "overall"]), state: deployState,
+  scale: z.number().finite().min(0.5).max(4), reveal, view: z.enum(["local", "localEnv", "vercel", "env", "overall"]), state: deployState,
 });
 
 // AI simulator (plan 07 §5). Scripted: the stored state is what the board shows, nothing else.
@@ -253,7 +256,7 @@ const aiState = z.strictObject({
 });
 const aiSimulator = z.strictObject({
   ...base, type: z.literal("ai-simulator"), rotation: z.literal(0),
-  scale: z.number().finite().min(0.5).max(4), view: z.enum(["history", "thinking", "memory", "agent", "ccMemory"]), state: aiState,
+  scale: z.number().finite().min(0.5).max(4), reveal, view: z.enum(["history", "thinking", "memory", "agent", "ccMemory"]), state: aiState,
 });
 
 // SSH simulator (plan 07 §4c).
@@ -283,7 +286,7 @@ const sshState = z.strictObject({
 });
 const sshSimulator = z.strictObject({
   ...base, type: z.literal("ssh-simulator"), rotation: z.literal(0),
-  scale: z.number().finite().min(0.5).max(4), view: sshView, host: z.enum(["github", "gitlab"]).optional(), state: sshState,
+  scale: z.number().finite().min(0.5).max(4), reveal, view: sshView, host: z.enum(["github", "gitlab"]).optional(), state: sshState,
 });
 
 export const canvasNodeSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, arrow, pen, highlighter, text, image, stencil, table, code, gitSimulator, dataSimulator, deploySimulator, aiSimulator, sshSimulator]);

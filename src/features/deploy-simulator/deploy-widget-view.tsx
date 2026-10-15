@@ -10,7 +10,8 @@ import { AppSpinner, CaptionBar, Gate, Icon, IconLabel, Label, MARK_STYLE, Packe
 import type { IconName } from "@/features/flow/icon-paths";
 import { waitingAt, type FlowPlay, type Waiting } from "@/features/flow/flow-session";
 import { useFlowPlayback } from "@/features/flow/use-flow-playback";
-import { CAPTION_BOX, DEPLOY_H, DEPLOY_VIEWS, DEPLOY_W, deploymentRows, hopPath, sceneOf, type Box } from "./deploy-layout";
+import { partFilter } from "@/domain/document/reveal";
+import { CAPTION_BOX, DEPLOY_H, DEPLOY_VIEWS, DEPLOY_W, deployParts, deployPartOfPiece, deployPartsOfFrames, deploymentRows, hopPath, sceneOf, type Box } from "./deploy-layout";
 
 // Canvas rendering of the deploy simulator (plan 07 §4). Draw inside a Group already translated to node.x/node.y.
 // Deterministic for export: without a play it draws the stored state only.
@@ -154,9 +155,13 @@ function Cylinder({ box, title, lines, mark, font }: { box: Box; title: string; 
 }
 
 /** Canvas rendering of a deploy simulator node. `play` (editor only) animates the last action. */
-export function DeployWidgetView({ node, play, fontFamily: font }: { node: DeploySimulatorNode; play: FlowPlay | null; fontFamily: string }): JSX.Element {
+export function DeployWidgetView({ node, play: playing, fontFamily: font }: { node: DeploySimulatorNode; play: FlowPlay | null; fontFamily: string }): JSX.Element {
   const view = node.view;
   const scene = sceneOf(view);
+  // Progressive reveal: a piece is drawn only when its part is shown (an animation needing hidden parts is not drawn).
+  const shows = partFilter(deployParts(view), node.reveal);
+  const show = (piece: string) => shows(deployPartOfPiece(view, piece) ?? "");
+  const play = playing && deployPartsOfFrames(view, playing.frames).every(shows) ? playing : null;
   const flow = useFlowPlayback<DeployState, Pt>(node.id, play, node.state, (before, after, move) => hopPath(view, before, after, move));
   const { state, marks } = flow;
   const onPath = (point: Pt) => Boolean(flow.path?.some((item) => Math.abs(item.x - point.x) < 1 && Math.abs(item.y - point.y) < 1));
@@ -166,15 +171,15 @@ export function DeployWidgetView({ node, play, fontFamily: font }: { node: Deplo
   return <Group scaleX={node.scale} scaleY={node.scale} clipX={0} clipY={0} clipWidth={DEPLOY_W} clipHeight={DEPLOY_H}>
     <Rect x={1} y={1} width={DEPLOY_W - 2} height={DEPLOY_H - 2} cornerRadius={18} fill={C.frame} stroke={C.frameStroke} strokeWidth={2} />
     <Label x={24} y={18} width={DEPLOY_W - 48} text={`การ Deploy: ${title.label}`} size={24} bold color={C.title} font={font} />
-    <Laptop box={scene.laptop} font={font} />
-    {scene.pipes.map((pipe, index) => <Pipe key={index} from={pipe.from} to={pipe.to} label={pipe.label}
+    {show("laptop") && <Laptop box={scene.laptop} font={font} />}
+    {scene.pipes.map((pipe, index) => shows(pipe.part) && <Pipe key={index} from={pipe.from} to={pipe.to} label={pipe.label}
       active={flow.moving && onPath(pipe.from) && onPath(pipe.to) ? flow.moving.tone : null} font={font} />)}
-    <CodeCard box={scene.code} state={state} view={view} mark={toneOf(marks, "code")} font={font} />
-    {scene.server && <Card box={scene.server} title={scene.server.w < 140 ? "เซิร์ฟเวอร์" : "เซิร์ฟเวอร์ในเครื่อง"} mark={toneOf(marks, "server")} font={font}>
+    {show("code") && <CodeCard box={scene.code} state={state} view={view} mark={toneOf(marks, "code")} font={font} />}
+    {scene.server && show("server") && <Card box={scene.server} title={scene.server.w < 140 ? "เซิร์ฟเวอร์" : "เซิร์ฟเวอร์ในเครื่อง"} mark={toneOf(marks, "server")} font={font}>
       <Label x={scene.server.x + 12} y={scene.server.y + scene.server.h - 30} width={scene.server.w - 24} text={state.local.running ? "● เปิดอยู่" : "○ ปิดอยู่"} size={13} bold color={state.local.running ? C.ok : C.muted} font={font} />
     </Card>}
-    {scene.browser && <BrowserCard box={scene.browser} state={state} mark={toneOf(marks, "browser")} waiting={waitingAt(play, "browser")} font={font} />}
-    {scene.envfile && <Card box={scene.envfile} title=".env.local" mark={toneOf(marks, "envfile")} fill={state.keys.local ? "#FFFBEB" : "#F8FAFC"} stroke={state.keys.local ? "#FCD34D" : "#CBD5E1"} font={font}>
+    {scene.browser && show("browser") && <BrowserCard box={scene.browser} state={state} mark={toneOf(marks, "browser")} waiting={waitingAt(play, "browser")} font={font} />}
+    {scene.envfile && show("envfile") && <Card box={scene.envfile} title=".env.local" mark={toneOf(marks, "envfile")} fill={state.keys.local ? "#FFFBEB" : "#F8FAFC"} stroke={state.keys.local ? "#FCD34D" : "#CBD5E1"} font={font}>
       {state.keys.local
         ? <IconLabel x={scene.envfile.x + 12} y={scene.envfile.y + (scene.envfile.h > 100 ? 48 : 34)} width={scene.envfile.w - 24} icon="key" text="กุญแจฐานข้อมูล"
           size={scene.envfile.h > 100 ? 15 : 11} bold={scene.envfile.h > 100} color="#92400E" font={font} />
@@ -182,28 +187,28 @@ export function DeployWidgetView({ node, play, fontFamily: font }: { node: Deplo
           size={scene.envfile.h > 100 ? 15 : 11} bold={scene.envfile.h > 100} color={C.bad} font={font} />}
       {scene.envfile.h > 100 && <Label x={scene.envfile.x + 12} y={scene.envfile.y + 76} width={scene.envfile.w - 24} text="ไฟล์ลับ: อยู่แค่ในเครื่อง" size={11} color={C.muted} font={font} />}
     </Card>}
-    {scene.localhostGate && <Gate at={scene.localhostGate} label="นอกเครื่องเรา" tone={gate("localhostGate")} font={font} />}
-    {scene.gitignore && <Gate at={scene.gitignore} label=".gitignore" tone={toneOf(marks, "gitignore") === "blocked" ? "ok" : "idle"} font={font} />}
+    {scene.localhostGate && show("localhostGate") && <Gate at={scene.localhostGate} label="นอกเครื่องเรา" tone={gate("localhostGate")} font={font} />}
+    {scene.gitignore && show("gitignore") && <Gate at={scene.gitignore} label=".gitignore" tone={toneOf(marks, "gitignore") === "blocked" ? "ok" : "idle"} font={font} />}
 
-    {scene.github && <Card box={scene.github} title="GitHub" mark={toneOf(marks, "github")} fill={C.github} font={font}>
+    {scene.github && show("github") && <Card box={scene.github} title="GitHub" mark={toneOf(marks, "github")} fill={C.github} font={font}>
       <Label x={scene.github.x + 12} y={scene.github.y + 40} width={scene.github.w - 24} text={state.github.rev !== null ? `รุ่น ${state.github.rev}: ${state.github.title}` : "ยังว่าง"} size={13} bold color={C.text} font={font} />
       {state.github.broken && <Label x={scene.github.x + 12} y={scene.github.y + 62} width={scene.github.w - 24} text="✗ มีข้อผิดพลาด" size={11} bold color={C.bad} font={font} />}
     </Card>}
-    {scene.vercel && <Card box={scene.vercel} title="▲ Vercel" fill={C.vercel} stroke="#374151" dark font={font} />}
-    {scene.build && <Gate at={scene.build} label="Build" labelColor="#CBD5E1" tone={gate("build")} font={font} />}
-    {scene.deployments && <Deployments view={view} state={state} marks={marks} font={font} />}
-    {scene.vercelEnv && <Card box={scene.vercelEnv} title="Environment Variables" mark={toneOf(marks, "vercelEnv")} fill="#1F2937" stroke="#4B5563" dark font={font}>
+    {scene.vercel && show("vercel") && <Card box={scene.vercel} title="▲ Vercel" fill={C.vercel} stroke="#374151" dark font={font} />}
+    {scene.build && show("build") && <Gate at={scene.build} label="Build" labelColor="#CBD5E1" tone={gate("build")} font={font} />}
+    {scene.deployments && show("deployments") && <Deployments view={view} state={state} marks={marks} font={font} />}
+    {scene.vercelEnv && show("vercelEnv") && <Card box={scene.vercelEnv} title="Environment Variables" mark={toneOf(marks, "vercelEnv")} fill="#1F2937" stroke="#4B5563" dark font={font}>
       {state.keys.vercel
         ? <IconLabel x={scene.vercelEnv.x + 12} y={scene.vercelEnv.y + 50} width={scene.vercelEnv.w - 24} icon="key" text="มีกุญแจฐานข้อมูล" size={15} bold color="#86EFAC" font={font} />
         : <Label x={scene.vercelEnv.x + 12} y={scene.vercelEnv.y + 50} width={scene.vercelEnv.w - 24} text="ยังไม่มีกุญแจ" size={15} bold color="#FCA5A5" font={font} />}
     </Card>}
-    {scene.url && <Card box={scene.url} title="เว็บจริง" icon="globe" mark={toneOf(marks, "url")} fill="#EFF6FF" stroke="#93C5FD" font={font}>
+    {scene.url && show("url") && <Card box={scene.url} title="เว็บจริง" icon="globe" mark={toneOf(marks, "url")} fill="#EFF6FF" stroke="#93C5FD" font={font}>
       <Label x={scene.url.x + 12} y={scene.url.y + 36} width={scene.url.w - 24} text={SITE_URL} size={12} bold color="#1D4ED8" font={font} />
       <Label x={scene.url.x + 12} y={scene.url.y + 60} width={scene.url.w - 24} text={live ? `${live.title} · รุ่น ${live.rev} (D${live.id})` : "ยังไม่มีเว็บ"} size={12} color={live ? C.text : C.muted} font={font} />
     </Card>}
 
-    {scene.supabase && view !== "overall" && <Cylinder box={scene.supabase} title="ฐานข้อมูล (Supabase)" lines={state.orders} mark={toneOf(marks, "supabase")} font={font} />}
-    {view === "overall" && scene.supabase && <Card box={scene.supabase} title="ฐานข้อมูล (Supabase)" mark={toneOf(marks, "supabase")} fill="#ECFDF5" stroke={C.dbStroke} font={font}>
+    {scene.supabase && show("supabase") && view !== "overall" && <Cylinder box={scene.supabase} title="ฐานข้อมูล (Supabase)" lines={state.orders} mark={toneOf(marks, "supabase")} font={font} />}
+    {view === "overall" && scene.supabase && show("supabase") && <Card box={scene.supabase} title="ฐานข้อมูล (Supabase)" mark={toneOf(marks, "supabase")} fill="#ECFDF5" stroke={C.dbStroke} font={font}>
       <Card box={scene.orders!} title="ตารางออเดอร์" mark={toneOf(marks, "orders")} font={font}>
         {state.orders.length === 0
           ? <Label x={scene.orders!.x + 12} y={scene.orders!.y + 40} width={scene.orders!.w - 24} text="ยังไม่มีออเดอร์" size={12} color={C.muted} font={font} />
@@ -211,9 +216,9 @@ export function DeployWidgetView({ node, play, fontFamily: font }: { node: Deplo
             text={`#${Math.max(0, state.orders.length - 4) + index + 1} ${line}`} size={14} color={C.text} font={font} />)}
       </Card>
     </Card>}
-    {scene.rls && <Gate at={scene.rls} label="กฎสิทธิ์" sub="RLS" tone={gate("rls")} font={font} />}
+    {scene.rls && show("rls") && <Gate at={scene.rls} label="กฎสิทธิ์" sub="RLS" tone={gate("rls")} font={font} />}
 
-    {scene.friend && <FriendPhone frame={scene.friend.frame} screen={scene.friend.screen} state={state} mark={toneOf(marks, "friend")} waiting={waitingAt(play, "friend")} font={font} />}
+    {scene.friend && show("friend") && <FriendPhone frame={scene.friend.frame} screen={scene.friend.screen} state={state} mark={toneOf(marks, "friend")} waiting={waitingAt(play, "friend")} font={font} />}
     <CaptionBar box={CAPTION_BOX} text={flow.frame ? flow.frame.caption : IDLE[view]} step={flow.step} font={font} />
     {flow.moving && flow.path && <Packet key={flow.runKey} runKey={flow.runKey} path={flow.path} label={flow.moving.label} tone={flow.moving.tone}
       duration={flow.travel} font={font} onLanded={flow.onLanded} />}

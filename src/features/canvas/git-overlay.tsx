@@ -4,6 +4,7 @@ import { useRef, type CSSProperties, type KeyboardEvent } from "react";
 import { gitHasMachineB, gitViewOf, type GitSimulatorNode } from "@/domain/document/model";
 import type { Camera } from "@/domain/document/session";
 import { worldToScreen } from "@/domain/document/camera";
+import { partFilter } from "@/domain/document/reveal";
 import type { MachineId, RepositoryId } from "@/domain/git/model";
 import { repositoryLabel } from "@/domain/git/messages";
 import { conflictLineRoles, hasConflictMarkers } from "@/domain/git/merge3";
@@ -17,7 +18,7 @@ import { useGitSessionStore } from "@/features/git-simulator/session-store";
 import { draftErrorMessage } from "@/features/git-simulator/view-model";
 import { CONFLICT_FILL, EDITOR } from "@/features/git-simulator/git-widget-view";
 import {
-  codeText, commitRowBox, commitRowLimit, fileCodeBox, fileEditorBox, fileNameBox, machineOf, remoteCodeBox, remoteCodeText, viewRepositories,
+  codeText, commitRowBox, commitRowLimit, fileCodeBox, fileEditorBox, fileNameBox, gitCommitsPart, gitMachineParts, gitParts, machineOf, remoteCodeBox, remoteCodeText, viewRepositories,
   widgetLayout, widgetWidth, WIDGET_H,
   type Box, type WidgetLayout,
 } from "@/features/git-simulator/widget-layout";
@@ -177,7 +178,9 @@ export function GitCanvasOverlay({ node, slideId, camera, writable }: { node: Gi
   const preview = useGitSessionStore((state) => state.preview[node.id]);
   const setPreview = useGitSessionStore((state) => state.setPreview);
   const origin = worldToScreen({ x: node.x, y: node.y }, camera);
-  const machines = (["A", "B"] as const).filter((machine) => machineOf(layout, machine) && node.state.machines[machine].initialized);
+  // Progressive reveal: controls sit only on parts that are drawn.
+  const shows = partFilter(gitParts(view, node.host), node.reveal);
+  const machines = (["A", "B"] as const).filter((machine) => machineOf(layout, machine) && node.state.machines[machine].initialized && shows(gitMachineParts(view, machine).file));
 
   const togglePreview = (repository: RepositoryId, commitId: string) => {
     // The board draft becomes the working file first, so "back to the file" shows the latest edit.
@@ -194,8 +197,8 @@ export function GitCanvasOverlay({ node, slideId, camera, writable }: { node: Gi
         className="pointer-events-auto cursor-pointer rounded-lg hover:bg-blue-500/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
         style={at(fileEditorBox(layout, machine)!)} onClick={() => setPreview(node.id, undefined)} />
       : writable ? <FileEditor key={machine} node={node} slideId={slideId} machine={machine} layout={layout} /> : null)}
-    {layout.remote && <RemoteFileViewer node={node} layout={layout} />}
-    {viewRepositories(view).flatMap((repository) => commitGraph(node.state, repository, commitRowLimit(layout, repository)).rows.map((row, index) => {
+    {layout.remote && shows("remote") && <RemoteFileViewer node={node} layout={layout} />}
+    {viewRepositories(view).filter((repository) => shows(gitCommitsPart(view, repository))).flatMap((repository) => commitGraph(node.state, repository, commitRowLimit(layout, repository)).rows.map((row, index) => {
       const selected = preview?.repository === repository && preview.commitId === row.id;
       const label = `${selected ? "เลิกดู" : "ดู"}โค้ดของ ${row.id} (${repositoryLabel(repository, node.host)})`;
       return <button key={`${repository}-${row.id}`} type="button" aria-label={label} title={label} aria-pressed={selected}

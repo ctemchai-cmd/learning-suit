@@ -17,7 +17,9 @@ import { MAIN_BRANCH, currentBranch, currentRequest, mergeBase, requestInfo, sug
 import { findGitNode, gitDraftFor } from "./git-draft";
 import { messageKey, nextTransferKey, useGitSessionStore } from "./session-store";
 import { READ_ONLY_REASON, getActionAvailability, getBranchAvailability, getRequestAvailability, nextBranchStep, nextGitStep, nextReviewStep, projectState, type Availability, type BranchAvailability, type BranchRow } from "./view-model";
-import { gitViewList, viewHasRemote } from "./widget-layout";
+import { RevealControls } from "@/features/flow/flow-panel-parts";
+import { revealForParts, revealOnStepChange, withReveal } from "@/domain/document/reveal";
+import { gitActionParts, gitParts, gitViewList, viewHasRemote } from "./widget-layout";
 
 const ACTION_NAMES: Record<GitAction["type"], string> = {
   edit: "แก้ไฟล์", stage: "Add", commit: "Commit", push: "Push", clone: "Clone", pull: "Pull",
@@ -90,10 +92,12 @@ export function GitPanel({ node, slideId, writable, transact }: {
     if (!useEditorStore.getState().flushPendingEdits()) return;
     const latest = findGitNode(slideId, nodeId) ?? node;
     const transition = applyGitAction(latest.state, action);
+    // What the action changes is shown in the same step (no-op while the reveal mode is off).
+    const reveal = transition.changed ? revealForParts(gitParts(gitViewOf(latest), latest.host), latest.reveal, gitActionParts(gitViewOf(latest), action)) : latest.reveal;
     if (transition.changed && !transact({
       label: transactionLabel(action, node.host),
       affectedSlideId: slideId,
-      commands: [{ type: "nodes.replace", slideId, nodes: [{ ...latest, state: transition.nextState }] }],
+      commands: [{ type: "nodes.replace", slideId, nodes: [withReveal({ ...latest, state: transition.nextState }, reveal)] }],
     })) {
       setResult(nodeId, { code: transition.code, outcome: "rejected", message: `${ACTION_NAMES[action.type]} ไม่สำเร็จ: โปรเจกต์อ่านอย่างเดียวหรือข้อมูลไม่ผ่านการตรวจ` });
       return;
@@ -114,7 +118,8 @@ export function GitPanel({ node, slideId, writable, transact }: {
   const changeView = (next: GitView) => {
     if (next === view || !writable || !useEditorStore.getState().flushPendingEdits()) return;
     const latest = findGitNode(slideId, nodeId) ?? node;
-    const changed = { ...latest, view: next };
+    // A new lesson step starts hidden again when the reveal mode is on.
+    const changed = withReveal({ ...latest, view: next }, revealOnStepChange(latest.reveal));
     if (transact({ label: "Git (จำลอง): เปลี่ยนขั้นบทเรียน", affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes: [changed] }] })) keepOnScreen(changed);
   };
 
@@ -173,6 +178,8 @@ export function GitPanel({ node, slideId, writable, transact }: {
       </div>
       <p id={`${ids}-view-description`} className="text-[11px] leading-snug text-slate-500">{views.find((item) => item.id === view)?.description}</p>
     </div>
+
+    <RevealControls node={node} parts={gitParts(view, node.host)} slideId={slideId} writable={writable} transact={transact} />
 
     <div className="space-y-2">
       {gitHasMachineB(view) && <div role="group" aria-label="ใช้งานเครื่อง" className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">

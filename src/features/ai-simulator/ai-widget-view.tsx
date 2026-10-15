@@ -12,7 +12,8 @@ import { CaptionBar, Icon, IconLabel, Label, MARK_STYLE, Packet, Pipe, TONE_COLO
 import type { IconName } from "@/features/flow/icon-paths";
 import { waitingAt, type FlowPlay } from "@/features/flow/flow-session";
 import { useFlowPlayback } from "@/features/flow/use-flow-playback";
-import { AI_H, AI_VIEWS, AI_W, CAPTION_BOX, hopPath, sceneOf, type Box } from "./ai-layout";
+import { partFilter } from "@/domain/document/reveal";
+import { AI_H, AI_VIEWS, AI_W, CAPTION_BOX, aiParts, aiPartsOfFrames, hopPath, sceneOf, type Box } from "./ai-layout";
 
 // Canvas rendering of the AI simulator (plan 07 §5). Draw inside a Group already translated to node.x/node.y.
 // Deterministic for export: without a play it draws the stored state only. Nothing here talks to an AI.
@@ -159,11 +160,13 @@ function EmptyMind({ x, y, w, h, font }: { x: number; y: number; w: number; h: n
 const receivedTitle = (reading: boolean, count: number) => (reading ? `ได้รับรอบนี้ (${count} ชิ้น)` : "ได้รับรอบนี้");
 
 /** The model: holds what it was sent only while answering, then is empty again. */
-function ModelMind({ box, reading, received, facts, used, total, note, mark, font }: {
-  box: Box; reading: boolean; received: Row[]; facts: Facts; used: number; total?: number; note: string; mark?: MarkTone; font: string;
+function ModelMind({ box, reading, received, facts, used, total, note, mark, font, shows }: {
+  box: Box; reading: boolean; received: Row[]; facts: Facts; used: number; total?: number; note: string; mark?: MarkTone; font: string; shows: Shows;
 }) {
+  if (!shows("model")) return null;
   const shown = received.slice(-7);
   return <ModelCard box={box} sub="ไม่มีความจำของตัวเอง" mark={mark} font={font}>
+    {shows("mind") && <>
     <IconLabel x={box.x + 16} y={box.y + 64} width={box.w - 32} icon="inbox" text={receivedTitle(reading, received.length)} size={14} bold color={C.title} iconColor={C.violet} font={font} />
     <Rect x={box.x + 16} y={box.y + 90} width={box.w - 32} height={226} cornerRadius={12} fill="#FFFFFF" stroke="#DDD6FE" dash={reading ? undefined : [6, 5]} />
     {reading
@@ -174,6 +177,7 @@ function ModelMind({ box, reading, received, facts, used, total, note, mark, fon
     {reading
       ? <FactsList x={box.x + 16} y={box.y + (total !== undefined ? 414 : 360)} w={box.w - 32} facts={facts} empty="ไม่รู้อะไรเกี่ยวกับคุณเลย" font={font} />
       : <Label x={box.x + 16} y={box.y + (total !== undefined ? 414 : 360)} width={box.w - 32} text="ไม่รู้อะไรเลย (ไม่ได้ถืออะไรไว้)" size={13} color={C.muted} font={font} />}
+    </>}
     <Para x={box.x + 16} y={box.y + box.h - 66} width={box.w - 32} height={54} text={note} size={12} color={C.muted} font={font} />
   </ModelCard>;
 }
@@ -204,28 +208,29 @@ function ModelCard({ box, sub, mark, font, children }: { box: Box; sub: string; 
 // Steps
 // ---------------------------------------------------------------------------
 
-type StepProps = { state: AiState; marks: Marks; play: FlowPlay | null; font: string };
+type Shows = (partId: string) => boolean;
+type StepProps = { state: AiState; marks: Marks; play: FlowPlay | null; font: string; shows: Shows };
 
-function HistoryStep({ state, marks, play, font }: StepProps) {
+function HistoryStep({ state, marks, play, font, shows }: StepProps) {
   const scene = sceneOf("history");
   const { messages, shown, reading } = state.history;
   const window = contextWindow(messages);
   return <>
-    <ChatScreen box={scene.chat!} title="แอปแชท" icon="chat" sub="ที่เราพิมพ์คุยกับ AI · แอปเก็บประวัติแชทไว้เอง" messages={messages.slice(0, shown)}
-      typing={Boolean(waitingAt(play, "chat"))} mark={toneOf(marks, "chat")} font={font} />
-    <ModelMind box={scene.model} reading={Boolean(reading)} received={rowsOf(window)} facts={factsFrom(window)} used={window.length} total={AI_LIMITS.window}
+    {shows("chat") && <ChatScreen box={scene.chat!} title="แอปแชท" icon="chat" sub="ที่เราพิมพ์คุยกับ AI · แอปเก็บประวัติแชทไว้เอง" messages={messages.slice(0, shown)}
+      typing={Boolean(waitingAt(play, "chat"))} mark={toneOf(marks, "chat")} font={font} />}
+    <ModelMind shows={shows} box={scene.model} reading={Boolean(reading)} received={rowsOf(window)} facts={factsFrom(window)} used={window.length} total={AI_LIMITS.window}
       note="AI จำแชทได้เพราะแอปส่งทั้งบทสนทนามาให้อ่านใหม่ทุกครั้ง ถ้ายาวเกินที่รับได้ ข้อความเก่าจะไม่ถูกส่ง" mark={toneOf(marks, "model")} font={font} />
   </>;
 }
 
-function ThinkingStep({ state, marks, play, font }: StepProps) {
+function ThinkingStep({ state, marks, play, font, shows }: StepProps) {
   const scene = sceneOf("thinking");
   const { on, puzzle, thoughts, answer, correct, seconds } = state.thinking;
   const question = puzzle ? puzzleOf(puzzle) : null;
   const chat = scene.chat!, model = scene.model, box = scene.thoughts!;
   const typing = Boolean(waitingAt(play, "chat"));
   return <>
-    <ChatScreen box={chat} title="หน้าแชท" icon="chat" messages={[]} typing={false} mark={toneOf(marks, "chat")} font={font}>
+    {shows("chat") && <ChatScreen box={chat} title="หน้าแชท" icon="chat" messages={[]} typing={false} mark={toneOf(marks, "chat")} font={font}>
       {question ? <>
         {/* The whole question: a trick question only works if it can be read in full. */}
         <Rect x={chat.x + 40} y={chat.y + 58} width={chat.w - 52} height={112} cornerRadius={14} fill={C.user} />
@@ -236,13 +241,14 @@ function ThinkingStep({ state, marks, play, font }: StepProps) {
             color={answer ? (correct ? C.ok : C.bad) : C.muted} font={font} lineHeight={46} />
         </>}
       </> : <Label x={chat.x + 14} y={chat.y + 60} width={chat.w - 28} text="เลือกโจทย์จากแผงด้านขวา" size={13} color={C.muted} align="center" font={font} />}
-    </ChatScreen>
-    <ModelCard box={model} sub="ความคิดคือข้อความที่ AI เขียนแล้วอ่านต่อเอง ก่อนให้คำตอบ" mark={toneOf(marks, "model")} font={font}>
+    </ChatScreen>}
+    {shows("model") && <ModelCard box={model} sub="ความคิดคือข้อความที่ AI เขียนแล้วอ่านต่อเอง ก่อนให้คำตอบ" mark={toneOf(marks, "model")} font={font}>
       <Group x={model.x + model.w - 196} y={model.y + 14}>
         <Rect width={180} height={30} cornerRadius={15} fill={on ? "#16A34A" : "#94A3B8"} />
         <Label x={0} y={0} width={180} text={on ? "คิดก่อนตอบ: เปิด" : "คิดก่อนตอบ: ปิด"} size={13} bold color="#FFFFFF" align="center" font={font} lineHeight={30} />
       </Group>
-    </ModelCard>
+    </ModelCard>}
+    {shows("thoughts") && <>
     <Card box={box} title="ความคิด (Chain of Thought)" icon="thought" iconColor={C.violet} mark={toneOf(marks, "thoughts")} fill="#FFFFFF" stroke="#DDD6FE" font={font}>
       {thoughts.length === 0
         ? <Label x={box.x + 16} y={box.y + 60} width={box.w - 32} text={on ? "ยังไม่มีคำถาม" : "ปิดอยู่: AI ตอบทันทีโดยไม่เขียนความคิด"} size={14} color={C.muted} font={font} />
@@ -257,6 +263,7 @@ function ThinkingStep({ state, marks, play, font }: StepProps) {
       size={14} bold={Boolean(answer)} color={answer ? (correct ? C.ok : C.bad) : C.muted} font={font} />
     {answer && <Label x={model.x + 26} y={box.y + box.h + 44} width={model.w - 52}
       text={correct ? `คำตอบ: ${answer} ✓ ถูกต้อง` : `คำตอบ: ${answer} ✗ ผิด (ที่ถูกคือ ${question!.answer})`} size={18} bold color={correct ? C.ok : C.bad} font={font} />}
+    </>}
   </>;
 }
 
@@ -267,14 +274,16 @@ function memoryRows(state: AiState): Row[] {
   return [...memory, ...rowsOf(messages)];
 }
 
-function MemoryStep({ state, marks, play, font }: StepProps) {
+function MemoryStep({ state, marks, play, font, shows }: StepProps) {
   const scene = sceneOf("memory");
   const { on, items, messages, shown, chat, reading } = state.memory;
   const memory = scene.memory!, frame = scene.appFrame!;
   return <>
+    {shows("chat") && <>
     <Card box={frame} title="แอปแชท" icon="chat" sub="ที่เราพิมพ์คุยกับ AI · มีแชทหลายห้อง และมี Memory ของแอปเอง" fill={C.app} font={font} />
     <ChatScreen box={scene.chat!} title={`แชท #${chat}`} messages={messages.slice(0, shown)} typing={Boolean(waitingAt(play, "chat"))} mark={toneOf(marks, "chat")} font={font} />
-    <Card box={memory} title="Memory ของแอป" icon="folder" iconColor="#B45309" sub="เก็บที่แอป ไม่ได้อยู่ในตัว AI" mark={toneOf(marks, "memory")} fill={on ? "#FFFBEB" : "#F8FAFC"} stroke={on ? "#FCD34D" : "#CBD5E1"} font={font}>
+    </>}
+    {shows("memory") && <Card box={memory} title="Memory ของแอป" icon="folder" iconColor="#B45309" sub="เก็บที่แอป ไม่ได้อยู่ในตัว AI" mark={toneOf(marks, "memory")} fill={on ? "#FFFBEB" : "#F8FAFC"} stroke={on ? "#FCD34D" : "#CBD5E1"} font={font}>
       <Group x={memory.x + 14} y={memory.y + 58}>
         <Rect width={memory.w - 28} height={26} cornerRadius={13} fill={on ? "#16A34A" : "#94A3B8"} />
         <Label x={0} y={0} width={memory.w - 28} text={on ? "เปิด: จดและแนบไปทุกแชท" : "ปิด: ไม่จด ไม่แนบ"} size={12} bold color="#FFFFFF" align="center" font={font} lineHeight={26} />
@@ -284,8 +293,8 @@ function MemoryStep({ state, marks, play, font }: StepProps) {
         : items.map((item, index) => <IconLabel key={item.key} x={memory.x + 14} y={memory.y + 100 + index * 30} width={memory.w - 28} icon="pin" text={`${FACT_LABEL[item.key]}: ${item.value}`} size={14} bold color="#92400E" font={font} />)}
       <Para x={memory.x + 14} y={memory.y + memory.h - 110} width={memory.w - 28} height={96}
         text="เปิดแชทใหม่ ข้อความเก่าไม่ถูกส่ง แต่แอปแนบความจำนี้ไปด้วยเสมอ" size={12} color={C.muted} font={font} />
-    </Card>
-    <ModelMind box={scene.model} reading={Boolean(reading)} received={memoryRows(state)} facts={factsFrom(messages, on ? items : [])} used={0}
+    </Card>}
+    <ModelMind shows={shows} box={scene.model} reading={Boolean(reading)} received={memoryRows(state)} facts={factsFrom(messages, on ? items : [])} used={0}
       note="AI “จำเราได้” ข้ามแชท เพราะแอปแนบความจำมาให้อ่าน ไม่ใช่เพราะตัว AI เรียนรู้เพิ่ม" mark={toneOf(marks, "model")} font={font} />
   </>;
 }
@@ -301,7 +310,7 @@ function logLine(raw: string): { icon: IconName | null; text: string; color: str
   return { icon, text, color };
 }
 
-function AgentStep({ state, marks, play, font }: StepProps) {
+function AgentStep({ state, marks, play, font, shows }: StepProps) {
   const scene = sceneOf("agent");
   const { code, tests, web, log } = state.agent;
   const webBox = scene.web!, model = scene.model, machine = scene.machine!, cc = scene.cc!, files = scene.files!, testBox = scene.tests!, gate = scene.permission!;
@@ -309,7 +318,7 @@ function AgentStep({ state, marks, play, font }: StepProps) {
   const gateMark = toneOf(marks, "gate");
   return <>
     {/* Left: the web chat — it can only talk. */}
-    <ChatScreen box={webBox} title="AI บนเว็บ (แชท)" icon="globe" sub="คุยได้ แต่แตะเครื่องเราไม่ได้" messages={webMessages} typing={Boolean(waitingAt(play, "web"))} mark={toneOf(marks, "web")} font={font}>
+    {shows("web") && <ChatScreen box={webBox} title="AI บนเว็บ (แชท)" icon="globe" sub="คุยได้ แต่แตะเครื่องเราไม่ได้" messages={webMessages} typing={Boolean(waitingAt(play, "web"))} mark={toneOf(marks, "web")} font={font}>
       <Bubbles area={{ x: webBox.x + 12, y: webBox.y + 76, w: webBox.w - 24, h: 200 }} messages={webMessages} typing={Boolean(waitingAt(play, "web"))} font={font} />
       {webMessages.length === 0 && <Label x={webBox.x + 14} y={webBox.y + 96} width={webBox.w - 28} text="ยังไม่ได้ถาม" size={13} color={C.muted} align="center" font={font} />}
       <Rect x={webBox.x + 12} y={webBox.y + webBox.h - 150} width={webBox.w - 24} height={136} cornerRadius={12} fill="#FFF7ED" stroke="#FDBA74" />
@@ -318,19 +327,20 @@ function AgentStep({ state, marks, play, font }: StepProps) {
         : <Label x={webBox.x + 26} y={webBox.y + webBox.h - 138} width={webBox.w - 52} text="บนเว็บ AI…" size={14} bold color="#9A3412" font={font} />}
       {(web.answer ? ["เปิดไฟล์ในเครื่อง", "แก้โค้ดเอง", "รันเทสต์เอง"] : ["มองไม่เห็นไฟล์ในเครื่องเรา", "ต้องก๊อปโค้ดไปวางเอง", "ให้ได้แค่คำแนะนำ"]).map((line, index) =>
         <Label key={index} x={webBox.x + 30} y={webBox.y + webBox.h - 108 + index * 28} width={webBox.w - 60} text={`• ${line}`} size={14} color="#9A3412" font={font} />)}
-    </ChatScreen>
+    </ChatScreen>}
 
     {/* Middle: the same AI serves both — it only sees what is sent to it. */}
-    <ModelCard box={model} sub="ตัวเดียวกันทั้งสองฝั่ง · อยู่บนคลาวด์" mark={toneOf(marks, "model")} font={font}>
+    {shows("model") && <ModelCard box={model} sub="ตัวเดียวกันทั้งสองฝั่ง · อยู่บนคลาวด์" mark={toneOf(marks, "model")} font={font}>
       {([["eyeOff", "มองไม่เห็นเครื่องเรา"], ["inbox", "รู้แค่สิ่งที่ถูกส่งมา"], ["wrench", "ใน Claude Code “ขอใช้เครื่องมือ” ได้"]] as const).map(([icon, line], index) =>
         <IconLabel key={index} x={model.x + 18} y={model.y + 76 + index * 34} width={model.w - 36} icon={icon} text={line} size={15} bold={index === 2} color={index === 2 ? C.violet : C.text} iconColor={C.violet} font={font} />)}
       <Rect x={model.x + 18} y={model.y + 196} width={model.w - 36} height={164} cornerRadius={12} fill="#FFFFFF" stroke="#DDD6FE" />
       <IconLabel x={model.x + 30} y={model.y + 206} width={model.w - 60} icon="repeat" text="วงจรของ Claude Code" size={14} bold color={C.violet} font={font} />
       {["1. AI ขอใช้เครื่องมือ", "2. Claude Code ทำในเครื่องเรา", "3. ส่งผลกลับให้ AI", "4. วนจนเสร็จ แล้วตอบ"].map((line, index) =>
         <Label key={index} x={model.x + 30} y={model.y + 236 + index * 28} width={model.w - 60} text={line} size={14} color={C.text} font={font} />)}
-    </ModelCard>
+    </ModelCard>}
 
     {/* Right: our machine — Claude Code acts here, and asks before editing. */}
+    {shows("cc") && <>
     <Card box={machine} title="เครื่องเรา" icon="laptop" sub="Claude Code ลงมือทำให้ในเครื่องนี้" fill="#F8FAFC" font={font} />
     <Card box={cc} title="Claude Code" icon="terminal" iconColor="#86EFAC" mark={toneOf(marks, "cc")} fill={C.terminal} stroke="#334155" dark font={font}>
       {log.length === 0
@@ -343,18 +353,19 @@ function AgentStep({ state, marks, play, font }: StepProps) {
             : <Label key={index} x={cc.x + 14} y={y} width={cc.w - 28} text={text} size={14} color={color} font={font} />;
         })}
     </Card>
-    <Card box={files} title="main.py" icon="file" mark={toneOf(marks, "files")} font={font}>
+    </>}
+    {shows("files") && <Card box={files} title="main.py" icon="file" mark={toneOf(marks, "files")} font={font}>
       <Label x={files.x + 14} y={files.y + 38} width={files.w - 28} text="def add(a, b):" size={15} color={C.text} font={font} />
       <Label x={files.x + 14} y={files.y + 62} width={files.w - 28} text={code === "bug" ? "    return a - b   ← บั๊ก" : "    return a + b   ✓"} size={15} bold color={code === "bug" ? C.bad : C.ok} font={font} />
-    </Card>
-    <Card box={testBox} mark={toneOf(marks, "tests")} font={font}>
+    </Card>}
+    {shows("tests") && <Card box={testBox} mark={toneOf(marks, "tests")} font={font}>
       <IconLabel x={testBox.x + 14} y={testBox.y} width={testBox.w - 28} icon="flask" text={`เทสต์: ${tests === "unknown" ? "ยังไม่ได้รัน" : tests === "fail" ? "✗ ไม่ผ่าน" : "✓ ผ่าน"}`} size={15} bold
         color={tests === "pass" ? C.ok : tests === "fail" ? C.bad : C.muted} font={font} lineHeight={testBox.h} />
-    </Card>
-    <Card box={gate} mark={gateMark} fill="#F5F3FF" stroke="#C4B5FD" font={font}>
+    </Card>}
+    {shows("gate") && <Card box={gate} mark={gateMark} fill="#F5F3FF" stroke="#C4B5FD" font={font}>
       <IconLabel x={gate.x + 14} y={gate.y} width={gate.w - 28} icon={gateMark === "allowed" ? "shield" : "lock"}
         text={gateMark === "allowed" ? "คุณกดอนุญาตแล้ว ✓" : gateMark === "read" ? "ขอแก้ไฟล์… อนุญาตไหม?" : "ถามเราก่อนแก้ไฟล์เสมอ"} size={14} bold color={gateMark === "allowed" ? C.ok : C.violet} font={font} lineHeight={gate.h} />
-    </Card>
+    </Card>}
   </>;
 }
 
@@ -374,25 +385,27 @@ function ContextBar({ x, y, w, rules, memories, chat, total, font }: { x: number
   </Group>;
 }
 
-function CcMemoryStep({ state, marks, font }: StepProps) {
+function CcMemoryStep({ state, marks, font, shows }: StepProps) {
   const scene = sceneOf("ccMemory");
   const { rules, memories, session, context, chat, summarized, reading } = state.cc;
   const md = scene.claudeMd!, dir = scene.memoryDir!, cc = scene.cc!, model = scene.model;
   const received = ccContextLines(state).map(rowOfLine);
   return <>
     {/* Left: files on our disk — they stay when the session ends. */}
+    {shows("claudeMd") && <>
     <Card box={scene.machine!} title="ไฟล์ในเครื่องเรา" icon="disk" sub="อยู่ถาวร ปิด session ก็ไม่หาย" fill="#F8FAFC" font={font} />
     <Card box={md} title="CLAUDE.md" icon="file" iconColor="#2563EB" sub="คำสั่งโปรเจกต์ · เราเขียนเอง" mark={toneOf(marks, "claudeMd")} fill="#EFF6FF" stroke="#93C5FD" font={font}>
       {rules.map((rule, index) => <Label key={index} x={md.x + 14} y={md.y + 64 + index * 28} width={md.w - 28} text={`• ${rule}`} size={14} color="#1E3A8A" font={font} />)}
     </Card>
-    <Card box={dir} title="ไฟล์ความจำ" icon="pin" iconColor="#B45309" sub="Claude จดเองข้าม session · เปิดอ่าน/ลบได้" mark={toneOf(marks, "memoryDir")} fill="#FFFBEB" stroke="#FCD34D" font={font}>
+    </>}
+    {shows("memoryDir") && <Card box={dir} title="ไฟล์ความจำ" icon="pin" iconColor="#B45309" sub="Claude จดเองข้าม session · เปิดอ่าน/ลบได้" mark={toneOf(marks, "memoryDir")} fill="#FFFBEB" stroke="#FCD34D" font={font}>
       {memories.length === 0
         ? <Label x={dir.x + 14} y={dir.y + 70} width={dir.w - 28} text="ยังไม่มี" size={14} color={C.muted} font={font} />
         : memories.map((memory, index) => <Label key={index} x={dir.x + 14} y={dir.y + 64 + index * 28} width={dir.w - 28} text={`• ${memory}`} size={15} bold color="#92400E" font={font} />)}
-    </Card>
+    </Card>}
 
     {/* Middle: the session — temporary; everything in it is sent with every message. */}
-    <Card box={cc} title={session ? `Claude Code · session #${session}` : "Claude Code"} icon="terminal" iconColor="#86EFAC" sub="บทสนทนาชั่วคราว ปิด session แล้วหาย" mark={toneOf(marks, "cc")} fill={C.terminal} stroke="#334155" dark font={font}>
+    {shows("cc") && <Card box={cc} title={session ? `Claude Code · session #${session}` : "Claude Code"} icon="terminal" iconColor="#86EFAC" sub="บทสนทนาชั่วคราว ปิด session แล้วหาย" mark={toneOf(marks, "cc")} fill={C.terminal} stroke="#334155" dark font={font}>
       {session === 0
         ? <Label x={cc.x + 16} y={cc.y + 70} width={cc.w - 32} text="ยังไม่ได้เปิด session" size={15} color="#94A3B8" font={font} />
         : <>
@@ -406,10 +419,10 @@ function CcMemoryStep({ state, marks, font }: StepProps) {
         </>}
       <ContextBar x={cc.x + 16} y={cc.y + cc.h - 84} w={cc.w - 32} rules={session ? rules.length : 0} memories={session ? memories.length : 0}
         chat={session ? context - rules.length - memories.length : 0} total={AI_LIMITS.ccContext} font={font} />
-    </Card>
+    </Card>}
 
     {/* Right: the AI holds what it was sent only while answering. */}
-    <ModelCard box={model} sub="ไม่มีความจำของตัวเอง" mark={toneOf(marks, "model")} font={font}>
+    {shows("model") && <ModelCard box={model} sub="ไม่มีความจำของตัวเอง" mark={toneOf(marks, "model")} font={font}>
       <IconLabel x={model.x + 16} y={model.y + 64} width={model.w - 32} icon="inbox" text={receivedTitle(Boolean(reading), received.length)} size={14} bold color={C.title} iconColor={C.violet} font={font} />
       <Rect x={model.x + 16} y={model.y + 90} width={model.w - 32} height={336} cornerRadius={12} fill="#FFFFFF" stroke="#DDD6FE" dash={reading ? undefined : [6, 5]} />
       {reading
@@ -417,7 +430,7 @@ function CcMemoryStep({ state, marks, font }: StepProps) {
         : <EmptyMind x={model.x + 26} y={model.y + 100} w={model.w - 52} h={316} font={font} />}
       <Para x={model.x + 16} y={model.y + model.h - 96} width={model.w - 32} height={84}
         text="Claude “จำ” ข้าม session ได้ เพราะ Claude Code ส่งไฟล์ CLAUDE.md กับไฟล์ความจำไปด้วยทุกข้อความ" size={13} color={C.muted} font={font} />
-    </ModelCard>
+    </ModelCard>}
   </>;
 }
 
@@ -426,9 +439,12 @@ const STEPS: Record<AiView, (props: StepProps) => JSX.Element> = {
 };
 
 /** Canvas rendering of an AI simulator node. `play` (editor only) animates the last action. */
-export function AiWidgetView({ node, play, fontFamily: font }: { node: AiSimulatorNode; play: FlowPlay | null; fontFamily: string }): JSX.Element {
+export function AiWidgetView({ node, play: playing, fontFamily: font }: { node: AiSimulatorNode; play: FlowPlay | null; fontFamily: string }): JSX.Element {
   const view = node.view;
   const scene = sceneOf(view);
+  // Progressive reveal: hidden parts are not drawn (an animation needing hidden parts is not drawn either).
+  const shows = partFilter(aiParts(view), node.reveal);
+  const play = playing && aiPartsOfFrames(view, playing.frames).every(shows) ? playing : null;
   const flow = useFlowPlayback<AiState, Pt>(node.id, play, node.state, (_before, _after, move) => hopPath(view, move));
   const onPath = (point: Pt) => Boolean(flow.path?.some((item) => Math.abs(item.x - point.x) < 1 && Math.abs(item.y - point.y) < 1));
   const title = AI_VIEWS.find((item) => item.id === view)!;
@@ -457,9 +473,9 @@ export function AiWidgetView({ node, play, fontFamily: font }: { node: AiSimulat
       <Rect width={220} height={28} cornerRadius={14} fill="#F5F3FF" stroke="#C4B5FD" />
       <Label x={0} y={0} width={220} text="จำลอง · ไม่ได้เรียก AI จริง" size={12} bold color={C.violet} align="center" font={font} lineHeight={28} />
     </Group>
-    {scene.pipes.map((pipe, index) => <Pipe key={index} from={pipe.from} to={pipe.to} label={pipe.label}
+    {scene.pipes.map((pipe, index) => shows(pipe.part) && <Pipe key={index} from={pipe.from} to={pipe.to} label={pipe.label}
       active={flow.moving && onPath(pipe.from) && onPath(pipe.to) ? flow.moving.tone : null} font={font} />)}
-    <Step state={flow.state} marks={flow.marks} play={play} font={font} />
+    <Step state={flow.state} marks={flow.marks} play={play} font={font} shows={shows} />
     <CaptionBar box={CAPTION_BOX} text={flow.frame ? flow.frame.caption : IDLE[view]} step={flow.step} font={font} />
     {flow.moving && flow.path && <Packet key={flow.runKey} runKey={flow.runKey} path={flow.path} label={flow.moving.label} tone={flow.moving.tone}
       duration={flow.travel} font={font} onLanded={flow.onLanded} body={body} />}

@@ -1,4 +1,5 @@
-import type { DataState, DataView, Hop, Spot } from "@/domain/data/model";
+import type { DataState, DataView, FlowFrame, Hop, Spot } from "@/domain/data/model";
+import { partsOfFrames, type RevealPart } from "@/domain/document/reveal";
 import { DATA_BASE_SIZE } from "@/domain/document/model";
 
 // Pure geometry of the data-storage widget (plan 07 §3), in widget base coordinates (1120×680).
@@ -205,20 +206,72 @@ export function hopPath(view: DataView, before: DataState, after: DataState, mov
   return [start, ...waypoints(view, zoneOf(view, move.from), zoneOf(view, move.to)), end];
 }
 
-/** Pipes to draw for a step (always visible, highlighted while something travels on them). */
-export function pipesOf(view: DataView): { from: Pt; to: Pt; label?: string }[] {
+/** Pipes to draw for a step (always visible, highlighted while something travels on them); `part` = the reveal part that shows it (the later of its ends). */
+export function pipesOf(view: DataView): { from: Pt; to: Pt; label?: string; part: string }[] {
   if (view === "where") return [
-    { from: WHERE.pipeA[0], to: WHERE.pipeA[1], label: "อินเทอร์เน็ต" },
-    { from: WHERE.pipeB[0], to: WHERE.pipeB[1], label: "อินเทอร์เน็ต" },
+    { from: WHERE.pipeA[0], to: WHERE.pipeA[1], label: "อินเทอร์เน็ต", part: "cloud" },
+    { from: WHERE.pipeB[0], to: WHERE.pipeB[1], label: "อินเทอร์เน็ต", part: "phoneB" },
   ];
   if (view === "table") return [
-    { from: { x: TABLE.phone.frame.x + TABLE.phone.frame.w, y: TABLE.gate.y }, to: TABLE.gate },
-    { from: TABLE.gate, to: { x: TABLE.db.x, y: TABLE.gate.y } },
+    { from: { x: TABLE.phone.frame.x + TABLE.phone.frame.w, y: TABLE.gate.y }, to: TABLE.gate, part: "gate" },
+    { from: TABLE.gate, to: { x: TABLE.db.x, y: TABLE.gate.y }, part: "db" },
   ];
   if (view === "access") return [
-    { from: { x: ACCESS.A.frame.x + ACCESS.A.frame.w, y: ACCESS.A.frame.y + ACCESS.A.frame.h / 2 }, to: ACCESS.gate },
-    { from: { x: ACCESS.B.frame.x + ACCESS.B.frame.w, y: ACCESS.B.frame.y + ACCESS.B.frame.h / 2 }, to: ACCESS.gate },
-    { from: ACCESS.gate, to: { x: ACCESS.db.x, y: ACCESS.gate.y } },
+    { from: { x: ACCESS.A.frame.x + ACCESS.A.frame.w, y: ACCESS.A.frame.y + ACCESS.A.frame.h / 2 }, to: ACCESS.gate, part: "gate" },
+    { from: { x: ACCESS.B.frame.x + ACCESS.B.frame.w, y: ACCESS.B.frame.y + ACCESS.B.frame.h / 2 }, to: ACCESS.gate, part: "gate" },
+    { from: ACCESS.gate, to: { x: ACCESS.db.x, y: ACCESS.gate.y }, part: "db" },
   ];
   return [];
+}
+
+// ---------------------------------------------------------------------------
+// Progressive reveal (plan 07 §2): the ordered parts of each step. The board draws a part only when it is shown;
+// positions never change. Pipes come with the later of their two ends (`pipesOf(...).part`).
+// ---------------------------------------------------------------------------
+
+const part = (id: string, label: string): RevealPart => ({ id, label });
+const PARTS: Record<DataView, RevealPart[]> = {
+  where: [part("phoneA", "มือถือ A: แอปร้านกาแฟ"), part("memA", "ความจำของแอป (หายเมื่อรีเฟรช)"), part("devA", "ที่เก็บในเครื่อง A (อยู่ต่อหลังรีเฟรช)"), part("cloud", "ฐานข้อมูล (Cloud)"), part("phoneB", "มือถือ B")],
+  table: [part("phone", "แอปบนมือถือ A"), part("gate", "ด่านตรวจชนิดข้อมูล"), part("db", "ฐานข้อมูล"), part("menu", "ตาราง “เมนู”: แถวและคอลัมน์")],
+  relation: [part("app", "แอปร้านกาแฟ"), part("copy", "แบบก๊อปชื่อ"), part("link", "แบบอ้างด้วย ID"), part("refs", "เส้นอ้างอิงและด่านตรวจ")],
+  access: [part("phoneA", "มือถือลูกค้า A"), part("phoneB", "มือถือลูกค้า B"), part("gate", "ด่านกฎสิทธิ์ (RLS)"), part("db", "ฐานข้อมูล"), part("menu", "ตาราง “เมนู” (สาธารณะ)"), part("orders", "ตาราง “ออเดอร์” (ส่วนตัว)")],
+};
+export const dataParts = (view: DataView): RevealPart[] => PARTS[view];
+
+/** The part that draws a named place in a step (null = the step does not draw it). */
+export function dataPartOfSpot(view: DataView, spot: Spot): string | null {
+  if (view === "where") {
+    if (spot === "phoneA") return "phoneA";
+    if (spot === "memA" || spot === "vanishA") return "memA";
+    if (spot === "devA") return "devA";
+    if (spot === "cloud") return "cloud";
+    return ["phoneB", "memB", "devB", "vanishB"].includes(spot) ? "phoneB" : null;
+  }
+  const [kind, table] = spot.split(":");
+  if (view === "table") {
+    if (spot === "phoneA") return "phone";
+    if (spot === "gate") return "gate";
+    if (spot === "db") return "db";
+    return (kind === "row" || kind === "cell") && table === "menu" ? "menu" : null;
+  }
+  if (view === "relation") {
+    if (spot === "phoneA") return "app";
+    if (spot === "link:gate") return "refs";
+    if (kind === "copy" && table !== undefined) return "copy";
+    return kind === "link" && table !== undefined ? "link" : null;
+  }
+  if (spot === "phoneA" || spot === "phoneB" || spot === "gate") return spot === "gate" ? "gate" : spot;
+  if (spot === "table:menu") return "menu";
+  if (spot === "table:orders" || (kind === "row" && table === "orders")) return "orders";
+  return null;
+}
+
+/** Parts an action needs: those of the places its frames name, plus the gate / the cloud a packet passes on its way. */
+export function dataPartsOfFrames(view: DataView, frames: readonly FlowFrame<unknown>[]): string[] {
+  return partsOfFrames(frames, (spot) => dataPartOfSpot(view, spot), (move) => {
+    const from = zoneOf(view, move.from), to = zoneOf(view, move.to);
+    if (from === to) return [];
+    if (view === "where") return from !== "cloud" && to !== "cloud" ? ["cloud"] : [];
+    return view === "table" || view === "access" ? ["gate"] : [];
+  });
 }

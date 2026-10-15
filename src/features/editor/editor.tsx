@@ -51,6 +51,19 @@ import { expandToGroups, groupNodes, isGrouped, ungroupNodes } from "@/domain/do
 import { copyNodes } from "@/domain/document/copy";
 import { createClassBox, createGridTable, insertColumn, insertRow, removeColumn, removeRow, tableCellAt, tableLayout, toggleDivider } from "@/domain/document/table";
 
+import { pickRevealTarget, widgetRevealParts } from "./widget-reveal";
+import { revealNext, revealTransaction } from "@/domain/document/reveal";
+
+/** Teaching mode “next”: reveals the next part of a widget on the active slide (selected first, else top-most). false = nothing left to reveal. */
+function revealNextOnActiveSlide(): boolean {
+  const state = useEditorStore.getState();
+  if (!state.writable) return false;
+  const slide = state.history?.content.document.slides.find((item) => item.id === state.activeSlideId);
+  const target = slide && pickRevealTarget(slide.nodes, state.selectedIds);
+  if (!slide || !target || !state.flushPendingEdits()) return false;
+  return state.transact(revealTransaction(slide.id, target, revealNext(widgetRevealParts(target), target.reveal), "แสดงส่วนถัดไป"));
+}
+
 export type CloudUi = {
   useCloudVersion: () => Promise<void>;
   keepLocalCopy: () => Promise<void>;
@@ -286,6 +299,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
   const slide = slides.find((item) => item.id === activeSlideId) ?? slides[0];
   const selected = slide?.nodes.filter((node) => selectedIds.includes(node.id) && !node.locked) ?? [];
   const activeIndex = slide ? slides.findIndex((item) => item.id === slide.id) : -1;
+  const canRevealMore = Boolean(writable && slide && pickRevealTarget(slide.nodes, selectedIds));
   const selectedWidget = selected.length === 1 && isWidgetNode(selected[0]) ? selected[0] : null;
   const editingText = pendingEdit?.kind === "text" || pendingEdit?.kind === "code";
   // A retryable Cloud error usually clears on the automatic retry: show the banner only if it lasts (the header says it at once).
@@ -589,6 +603,8 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
         const index = all.findIndex((item) => item.id === current?.id);
         const next = all[index + (event.key === "PageDown" ? 1 : -1)];
         event.preventDefault();
+        // Presenting: PageDown first shows the next part of a widget that reveals part by part.
+        if (event.key === "PageDown" && state.teachingMode && revealNextOnActiveSlide()) return;
         if (next) state.switchSlide(next.id);
         return;
       }
@@ -772,7 +788,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
         {teachingMode && slide && <div className="flex items-center gap-1" aria-label="เปลี่ยนสไลด์">
           <button className="app-button icon-button" aria-label="สไลด์ก่อนหน้า" title="สไลด์ก่อนหน้า (PageUp)" disabled={activeIndex <= 0} onClick={() => switchSlide(slides[activeIndex - 1].id)}><ChevronLeft size={18} /></button>
           <span className="min-w-16 text-center text-sm">{activeIndex + 1}/{slides.length}</span>
-          <button className="app-button icon-button" aria-label="สไลด์ถัดไป" title="สไลด์ถัดไป (PageDown)" disabled={activeIndex >= slides.length - 1} onClick={() => switchSlide(slides[activeIndex + 1].id)}><ChevronRight size={18} /></button>
+          <button className="app-button icon-button" aria-label="สไลด์ถัดไป" title={canRevealMore ? "แสดงส่วนถัดไป (PageDown)" : "สไลด์ถัดไป (PageDown)"} disabled={activeIndex >= slides.length - 1 && !canRevealMore} onClick={() => { if (!revealNextOnActiveSlide() && activeIndex < slides.length - 1) switchSlide(slides[activeIndex + 1].id); }}><ChevronRight size={18} /></button>
         </div>}
         <button className="app-button icon-button" aria-label="เลิกทำ" title={live ? "เลิกทำเฉพาะของฉัน (⌘Z)" : "เลิกทำ (⌘Z)"} disabled={!writable || !(live ? live.canUndo : history?.past.length)} onClick={undo}><Undo2 size={18} /></button>
         <button className="app-button icon-button" aria-label="ทำซ้ำ" title={live ? "ทำซ้ำเฉพาะของฉัน (⌘⇧Z)" : "ทำซ้ำ (⌘⇧Z)"} disabled={!writable || !(live ? live.canRedo : history?.future.length)} onClick={redo}><Redo2 size={18} /></button>

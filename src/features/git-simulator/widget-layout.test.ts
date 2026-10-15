@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { gitBaseSize } from "../../domain/document/model";
-import { remoteRequestBox, GIT_VIEWS, gitViewList, viewHasRemote, viewRepositories, widgetLayout, widgetWidth, WIDGET_H, type Box } from "./widget-layout";
+import { gitBaseSize, type GitView } from "../../domain/document/model";
+import { revealForParts } from "../../domain/document/reveal";
+import type { GitAction } from "../../domain/git/model";
+import { gitActionParts, gitCommitsPart, gitMachineParts, gitParts, gitTransferPart, remoteRequestBox, GIT_VIEWS, gitViewList, viewHasRemote, viewRepositories, widgetLayout, widgetWidth, WIDGET_H, type Box } from "./widget-layout";
 
 const inside = (box: Box, outer: Box) => box.x >= outer.x && box.y >= outer.y && box.x + box.w <= outer.x + outer.w && box.y + box.h <= outer.y + outer.h;
 const frameOf = (view: "local" | "remote" | "full" | "branch"): Box => ({ x: 0, y: 0, w: widgetWidth(view), h: WIDGET_H });
@@ -109,5 +111,87 @@ describe("overlay geometry", () => {
     expect(remoteRequestBox(widgetLayout("full"))).toBeNull();
     expect(fileCodeBox(widgetLayout("local"), "B")).toBeNull();
     expect(commitListBox(widgetLayout("local"), "remote")).toBeNull();
+  });
+});
+
+describe("reveal parts (plan 07 §2)", () => {
+  const VIEWS: GitView[] = ["local", "remote", "full", "branch", "review"];
+  const ids = (view: GitView) => gitParts(view).map((part) => part.id);
+
+  it("each step lists its ordered parts", () => {
+    expect(ids("local")).toEqual(["a.file", "a.git"]);
+    expect(ids("remote")).toEqual(["a.file", "a.git", "remote"]);
+    expect(ids("full")).toEqual(["a.file", "a.git", "remote", "b.file", "b.git"]);
+    expect(ids("review")).toEqual(["a.file", "a.git", "remote", "b.file", "b.git", "request"]);
+    expect(ids("branch")).toEqual(["a.file", "a.stage", "a.commits"]);
+  });
+  it.each(VIEWS)("%s: 2–6 parts with unique ids and Thai labels; the host name is used", (view) => {
+    const parts = gitParts(view, "gitlab");
+    expect(parts.length).toBeGreaterThanOrEqual(2);
+    expect(parts.length).toBeLessThanOrEqual(6);
+    expect(new Set(parts.map((part) => part.id)).size).toBe(parts.length);
+    for (const part of parts) expect(part.label).toMatch(/\S/);
+    if (view !== "local" && view !== "branch") expect(parts.some((part) => part.label.includes("GitLab"))).toBe(true);
+    if (view === "review") expect(parts.at(-1)?.label).toBe("การ์ด Merge Request");
+    if (view === "full") expect(parts.some((part) => part.label.includes("GitHub"))).toBe(false);
+  });
+  it("every repository drawn in a step has its commit list in a listed part; machines have file and git parts", () => {
+    for (const view of VIEWS) {
+      for (const repository of viewRepositories(view)) expect(ids(view), `${view} ${repository}`).toContain(gitCommitsPart(view, repository));
+      for (const machine of ["A", "B"] as const) {
+        if (!widgetLayout(view)[machine]) continue;
+        const parts = gitMachineParts(view, machine);
+        expect(ids(view)).toEqual(expect.arrayContaining([parts.file, parts.stage, parts.commits]));
+        expect(ids(view).indexOf(parts.file)).toBeLessThan(ids(view).indexOf(parts.stage));
+      }
+    }
+  });
+  it("arrows come with the later of their two parts", () => {
+    expect(gitTransferPart("remote", "A", "remote")).toBe("remote");
+    expect(gitTransferPart("full", "remote", "A")).toBe("remote");
+    expect(gitTransferPart("full", "B", "remote")).toBe("b.file");
+    expect(gitTransferPart("review", "remote", "B")).toBe("b.file");
+    expect(gitTransferPart("local", "A", "remote")).toBeNull();
+    expect(gitTransferPart("remote", "B", "remote")).toBeNull();
+  });
+
+  // Typed over every action: adding an action type without a sample here is a compile error.
+  const SAMPLES: Record<GitAction["type"], GitAction> = {
+    edit: { type: "edit", machine: "A", file: { name: "a.txt", content: "x" } }, stage: { type: "stage", machine: "A" }, commit: { type: "commit", machine: "A", message: "m" },
+    push: { type: "push", machine: "A" }, clone: { type: "clone", machine: "B" }, pull: { type: "pull", machine: "A" },
+    mrOpen: { type: "mrOpen", machine: "A" }, mrApprove: { type: "mrApprove", machine: "B", id: 1 }, mrMerge: { type: "mrMerge", machine: "A", id: 1 },
+    mergeTake: { type: "mergeTake", machine: "A", side: "ours" }, mergeAbort: { type: "mergeAbort", machine: "A" }, resetToRemote: { type: "resetToRemote", machine: "A" },
+    branchCreate: { type: "branchCreate", machine: "A", name: "x" }, branchSwitch: { type: "branchSwitch", machine: "A", name: "x" },
+    branchMerge: { type: "branchMerge", machine: "A", name: "x" }, branchDelete: { type: "branchDelete", machine: "A", name: "x" }, reset: { type: "reset" },
+  };
+  it("every action maps to parts; ids outside the step are ignored when revealing; reset needs none", () => {
+    expect(Object.keys(SAMPLES).length).toBeGreaterThanOrEqual(17);
+    for (const [type, action] of Object.entries(SAMPLES)) {
+      expect(action.type).toBe(type);
+      if (type !== "reset") expect(gitActionParts("full", action).length, type).toBeGreaterThan(0);
+      for (const view of VIEWS) expect(revealForParts(gitParts(view), 0, gitActionParts(view, action)), `${view} ${type}`).toBeLessThanOrEqual(gitParts(view).length);
+    }
+    expect(gitActionParts("full", SAMPLES.reset)).toEqual([]);
+  });
+  it("what each action reveals (counts are in part order)", () => {
+    const need = (view: GitView, action: GitAction) => revealForParts(gitParts(view), 0, gitActionParts(view, action));
+    expect(need("local", SAMPLES.edit)).toBe(1);
+    expect(need("local", SAMPLES.stage)).toBe(2);
+    expect(need("local", SAMPLES.commit)).toBe(2);
+    expect(need("remote", SAMPLES.push)).toBe(3);
+    expect(need("remote", SAMPLES.pull)).toBe(3);
+    expect(need("full", SAMPLES.push)).toBe(3);
+    expect(need("full", SAMPLES.clone)).toBe(5);
+    expect(need("full", { type: "push", machine: "B" })).toBe(5);
+    expect(need("full", SAMPLES.reset)).toBe(0);
+    expect(need("branch", SAMPLES.stage)).toBe(2);
+    expect(need("branch", SAMPLES.commit)).toBe(3);
+    expect(need("branch", SAMPLES.branchCreate)).toBe(3);
+    expect(need("review", SAMPLES.mrOpen)).toBe(6);
+    expect(need("review", SAMPLES.push)).toBe(3);
+  });
+  it("planted omission: an action that forgot the remote would not show the GitHub card", () => {
+    const forgetful = revealForParts(gitParts("remote"), 0, ["a.git"]);
+    expect(forgetful).toBeLessThan(revealForParts(gitParts("remote"), 0, gitActionParts("remote", SAMPLES.push))!);
   });
 });

@@ -7,9 +7,10 @@ import type { DeploySimulatorNode } from "@/domain/document/model";
 import type { DeployAction, DeployState, DeployView } from "@/domain/deploy/model";
 import { applyDeployAction, deploymentOf } from "@/domain/deploy/reducer";
 import { useEditorStore } from "@/features/editor/store";
-import { Action, PanelHeader, PlaybackControls, ResetLink, ResultMessage, Section, Segmented, StepSelect } from "@/features/flow/flow-panel-parts";
+import { Action, PanelHeader, PlaybackControls, ResetLink, ResultMessage, RevealControls, Section, Segmented, StepSelect } from "@/features/flow/flow-panel-parts";
+import { revealForParts, revealOnStepChange, withReveal } from "@/domain/document/reveal";
 import { useFlowSession } from "@/features/flow/flow-session";
-import { DEPLOY_VIEWS } from "./deploy-layout";
+import { DEPLOY_VIEWS, deployParts, deployPartsOfFrames } from "./deploy-layout";
 
 /** The node as currently stored, so actions never start from a stale render. */
 function latestNode(slideId: string, nodeId: string): DeploySimulatorNode | null {
@@ -44,10 +45,12 @@ export function DeployPanel({ node, slideId, writable, transact }: {
     if (!writable || !useEditorStore.getState().flushPendingEdits()) return;
     const latest = latestNode(slideId, nodeId) ?? node;
     const transition = applyDeployAction(latest.state, action, latest.view);
-    if (transition.changed && !transact({
+    // Parts the animation needs are shown in the same step (no-op while the reveal mode is off).
+    const reveal = revealForParts(deployParts(latest.view), latest.reveal, deployPartsOfFrames(latest.view, transition.frames));
+    if ((transition.changed || reveal !== latest.reveal) && !transact({
       label: `Deploy (จำลอง): ${ACTION_LABEL[action.type]}`,
       affectedSlideId: slideId,
-      commands: [{ type: "nodes.replace", slideId, nodes: [{ ...latest, state: transition.nextState }] }],
+      commands: [{ type: "nodes.replace", slideId, nodes: [withReveal({ ...latest, state: transition.nextState }, reveal)] }],
     })) {
       flow.setResult(nodeId, { outcome: "rejected", message: "ทำไม่สำเร็จ: โปรเจกต์อ่านอย่างเดียวหรือข้อมูลไม่ผ่านการตรวจ" });
       return;
@@ -62,7 +65,7 @@ export function DeployPanel({ node, slideId, writable, transact }: {
     const latest = latestNode(slideId, nodeId) ?? node;
     // Screens show the answer of the last action; a new step starts with empty screens.
     const cleared: DeployState = { ...latest.state, friend: { title: "", lines: [], tone: "empty" }, laptop: { lines: [] } };
-    if (transact({ label: "Deploy (จำลอง): เปลี่ยนขั้นบทเรียน", affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes: [{ ...latest, view: next, state: cleared }] }] })) {
+    if (transact({ label: "Deploy (จำลอง): เปลี่ยนขั้นบทเรียน", affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes: [withReveal({ ...latest, view: next, state: cleared }, revealOnStepChange(latest.reveal))] }] })) {
       flow.stop(nodeId);
       flow.setResult(nodeId, undefined);
     }
@@ -72,6 +75,7 @@ export function DeployPanel({ node, slideId, writable, transact }: {
   return <section className="space-y-4 p-4 text-sm" aria-label="ตัวจำลอง Deploy">
     <PanelHeader icon={<Rocket size={16} />} color="bg-slate-900" title="การ Deploy" />
     <StepSelect id={ids} value={view} steps={DEPLOY_VIEWS} disabled={!writable} onChange={changeView} />
+    <RevealControls node={node} parts={deployParts(view)} slideId={slideId} writable={writable} transact={transact} onHidden={() => flow.stop(nodeId)} />
     {view === "local" && <LocalControls {...props} />}
     {view === "localEnv" && <LocalEnvControls {...props} />}
     {view === "vercel" && <VercelControls {...props} />}

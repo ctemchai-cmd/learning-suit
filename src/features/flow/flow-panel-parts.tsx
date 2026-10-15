@@ -1,7 +1,11 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { ChevronDown, ChevronRight, CircleCheck, CircleX, Info, RotateCcw, SkipForward, Snail, TriangleAlert } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleCheck, CircleX, Eye, EyeOff, Info, RotateCcw, SkipForward, Snail, TriangleAlert } from "lucide-react";
+import type { DocumentTransaction } from "@/domain/document/commands";
+import type { WidgetNode } from "@/domain/document/model";
+import { nextPart, revealAll, revealHide, revealNext, revealOn, revealToggle, revealTransaction, revealedCount, type RevealPart } from "@/domain/document/reveal";
+import { useEditorStore } from "@/features/editor/store";
 import { useFlowSession, type FlowResult } from "./flow-session";
 
 // Clean DOM pieces shared by the flow simulators' panels (plan 07 §2): few words, one control per idea.
@@ -139,4 +143,45 @@ export function ResetLink({ title, disabled, onClick }: { title: string; disable
       <RotateCcw size={12} />เริ่มใหม่
     </button>
   </footer>;
+}
+
+/** The widget as currently stored (so a press never starts from a stale render). */
+export function latestWidget(slideId: string, nodeId: string): WidgetNode | null {
+  const slide = useEditorStore.getState().history?.content.document.slides.find((item) => item.id === slideId);
+  const node = slide?.nodes.find((item) => item.id === nodeId);
+  return node && (node.type === "git-simulator" || node.type === "data-simulator" || node.type === "deploy-simulator" || node.type === "ai-simulator" || node.type === "ssh-simulator") ? node : null;
+}
+
+/**
+ * Progressive reveal (plan 07 §2), shared by every simulator panel: the toggle “ค่อยๆ แสดงทีละส่วน” (off by default) and,
+ * while it is on, “แสดงส่วนถัดไป” / “แสดงทั้งหมด” / “ซ่อนใหม่”. Every press is its own undoable transaction.
+ * `parts` are the current step's parts (each simulator declares them next to its layout); `onHidden` runs after the board is hidden again.
+ */
+export function RevealControls({ node, parts, slideId, writable, transact, onHidden }: {
+  node: WidgetNode; parts: readonly RevealPart[]; slideId: string; writable: boolean; transact: (tx: DocumentTransaction) => boolean; onHidden?: () => void;
+}) {
+  const on = revealOn(node.reveal);
+  const count = revealedCount(parts, node.reveal);
+  const next = nextPart(parts, node.reveal);
+  const apply = (compute: (current: number | undefined) => number | undefined, label: string, hidden = false) => {
+    if (!writable || !useEditorStore.getState().flushPendingEdits()) return;
+    const latest = latestWidget(slideId, node.id) ?? node;
+    if (transact(revealTransaction(slideId, latest, compute(latest.reveal), label)) && hidden) onHidden?.();
+  };
+  return <Section title="ค่อยๆ แสดงทีละส่วน" aside={on ? <span className="text-[11px] font-medium text-slate-400">{count}/{parts.length}</span> : undefined}>
+    <label className="flex cursor-pointer items-center gap-2.5 rounded-xl bg-slate-50 px-3 py-2 text-[13px] font-medium text-slate-800">
+      <input type="checkbox" role="switch" className="h-4 w-4 accent-blue-600" checked={on} disabled={!writable} aria-label="ค่อยๆ แสดงทีละส่วน"
+        onChange={(event) => apply(() => revealToggle(event.target.checked), event.target.checked ? "แสดงทีละส่วน: เปิด" : "แสดงทีละส่วน: ปิด", event.target.checked)} />
+      <span className="min-w-0 flex-1 leading-snug">เปิดกระดานว่างแล้วเผยทีละส่วน</span>
+    </label>
+    {on && <>
+      <Action primary disabled={!writable || !next} icon={<Eye size={14} />} onClick={() => apply((current) => revealNext(parts, current), "แสดงส่วนถัดไป")}>
+        {next ? `แสดงส่วนถัดไป: ${next.label} (${count + 1}/${parts.length})` : `แสดงครบทุกส่วนแล้ว (${parts.length}/${parts.length})`}
+      </Action>
+      <div className="grid grid-cols-2 gap-2">
+        <Action disabled={!writable || count >= parts.length} onClick={() => apply((current) => revealAll(parts, current), "แสดงทั้งหมด")}>แสดงทั้งหมด</Action>
+        <Action disabled={!writable || count === 0} icon={<EyeOff size={14} />} onClick={() => apply(revealHide, "ซ่อนใหม่", true)}>ซ่อนใหม่</Action>
+      </div>
+    </>}
+  </Section>;
 }

@@ -11,7 +11,8 @@ import { CaptionBar, Gate, Icon, IconLabel, Label, MARK_STYLE, Packet, Pipe, TON
 import type { IconName } from "@/features/flow/icon-paths";
 import type { FlowPlay } from "@/features/flow/flow-session";
 import { useFlowPlayback } from "@/features/flow/use-flow-playback";
-import { CAPTION_BOX, SSH_H, SSH_W, hopPath, keySlot, sceneOf, sshViews, type Box, type MachineBox, type Scene } from "./ssh-layout";
+import { partFilter } from "@/domain/document/reveal";
+import { CAPTION_BOX, SSH_H, SSH_W, hopPath, keySlot, sceneOf, sshParts, sshPartsOfFrames, sshViews, type Box, type MachineBox, type Scene } from "./ssh-layout";
 
 // Canvas rendering of the SSH simulator (plan 07 §4c). Draw inside a Group already translated to node.x/node.y.
 // Deterministic for export: without a play it draws the stored state only.
@@ -114,8 +115,12 @@ function OneWayLink({ box, compact, made, font }: { box: Box; compact: boolean; 
   </Group>;
 }
 
-function MachineView({ machine, state, compact, marks, layout, host, font }: {
-  machine: Machine; state: SshState; compact: boolean; marks: Marks; layout: MachineBox; host: Host; font: string;
+/**
+ * One laptop. `shows` = which of its pieces are revealed: the laptop with its terminal and the ~/.ssh folder with its files.
+ * In the wide step they are two reveal parts (`a`, `ssh`); in the compact step one part per laptop.
+ */
+function MachineView({ machine, state, compact, marks, layout, host, font, shows }: {
+  machine: Machine; state: SshState; compact: boolean; marks: Marks; layout: MachineBox; host: Host; font: string; shows: { laptop: boolean; folder: boolean };
 }) {
   const me = state[machine];
   const hint = hintCommand(state, host);
@@ -124,7 +129,8 @@ function MachineView({ machine, state, compact, marks, layout, host, font }: {
   const folder = layout.folder;
   const style = folderMark ? MARK_STYLE[folderMark] : null;
   return <Group listening={false}>
-    <Laptop box={layout.box} title={machine === "a" ? "เครื่อง A (ของเรา)" : "เครื่อง B (เพื่อน / เครื่องใหม่)"} font={font} />
+    {shows.laptop && <Laptop box={layout.box} title={machine === "a" ? "เครื่อง A (ของเรา)" : "เครื่อง B (เพื่อน / เครื่องใหม่)"} font={font} />}
+    {shows.folder && <>
     <Rect x={folder.x} y={folder.y} width={folder.w} height={folder.h} cornerRadius={10} fill={style?.fill ?? "#FFFFFF"} stroke={style?.stroke ?? "#CBD5E1"} strokeWidth={style ? 3 : 1.5} />
     <IconLabel x={folder.x + 12} y={folder.y + (compact ? 6 : 10)} width={folder.w - 24} icon="folder" text="~/.ssh" size={compact ? 13 : 15} bold color={C.title} font={font} />
     <FileRow box={layout.rows.priv} compact={compact} exists={me.priv} icon="key" name="id_ed25519" note="ใช้ทำผลสแกน (นิ้วจริง) · อยู่ในเครื่องนี้ ไม่ส่งให้ใคร" short="ใช้ทำผลสแกน (นิ้วจริง)" empty="ยังไม่มีกุญแจลับ"
@@ -132,7 +138,8 @@ function MachineView({ machine, state, compact, marks, layout, host, font }: {
     <OneWayLink box={layout.link} compact={compact} made={me.pub} font={font} />
     <FileRow box={layout.rows.pub} compact={compact} exists={me.pub} icon="fingerprint" name="id_ed25519.pub" note="ใช้ตรวจผลสแกนได้อย่างเดียว (ลายนิ้วมือ) · แจกได้" short="ตรวจผลสแกนได้อย่างเดียว" empty="ยังไม่มีกุญแจสาธารณะ"
       mark={toneOf(marks, `pub${suffix}`)} font={font} />
-    <Terminal box={layout.term} compact={compact} machine={me} hint={hint} font={font} />
+    </>}
+    {shows.laptop && <Terminal box={layout.term} compact={compact} machine={me} hint={hint} font={font} />}
   </Group>;
 }
 
@@ -181,10 +188,13 @@ function Payload({ title, color, lines, font }: { title: string; color: string; 
 }
 
 /** Canvas rendering of an SSH simulator node. `play` (editor only) animates the last action. */
-export function SshWidgetView({ node, play, fontFamily: font }: { node: SshSimulatorNode; play: FlowPlay | null; fontFamily: string }): JSX.Element {
+export function SshWidgetView({ node, play: playing, fontFamily: font }: { node: SshSimulatorNode; play: FlowPlay | null; fontFamily: string }): JSX.Element {
   const view = normalizeSshView(node.view);
   const host = hostOf(node.host);
   const scene = sceneOf(view);
+  const shows = partFilter(sshParts(view, node.host), node.reveal);
+  // An animation that needs a part which is hidden (e.g. hidden again meanwhile) is not drawn.
+  const play = playing && sshPartsOfFrames(view, playing.frames).every(shows) ? playing : null;
   const flow = useFlowPlayback<SshState, Pt>(node.id, play, node.state, (_before, _after, move) => hopPath(view, move));
   const { state, marks } = flow;
   const onPath = (point: Pt) => Boolean(flow.path?.some((item) => Math.abs(item.x - point.x) < 1 && Math.abs(item.y - point.y) < 1));
@@ -195,19 +205,24 @@ export function SshWidgetView({ node, play, fontFamily: font }: { node: SshSimul
   return <Group scaleX={node.scale} scaleY={node.scale} clipX={0} clipY={0} clipWidth={SSH_W} clipHeight={SSH_H}>
     <Rect x={1} y={1} width={SSH_W - 2} height={SSH_H - 2} cornerRadius={18} fill={C.frame} stroke={C.frameStroke} strokeWidth={2} />
     <Label x={24} y={18} width={SSH_W - 48} text={`SSH: ${title.label}`} size={24} bold color={C.title} font={font} />
-    <MachineView machine="a" state={state} compact={scene.compact} marks={marks} layout={scene.machines.a} host={host} font={font} />
-    {scene.machines.b && <MachineView machine="b" state={state} compact marks={marks} layout={scene.machines.b} host={host} font={font} />}
-    {scene.pipes.map((pipe, index) => <Pipe key={index} from={pipe.from} to={pipe.to}
-      active={move && onPath(pipe.from) && onPath(pipe.to) ? move.tone : null} font={font} />)}
-    <Gate at={scene.scanner} label="ด่านสแกนนิ้ว" sub={scene.compact ? undefined : `ประตูของ ${host.name}`} tone={gateTone} font={font} />
-    {scene.thief && <Thief box={scene.thief} state={state} mark={toneOf(marks, "thief")} font={font} />}
+    <MachineView machine="a" state={state} compact={scene.compact} marks={marks} layout={scene.machines.a} host={host} font={font}
+      shows={{ laptop: shows("a"), folder: scene.compact ? shows("a") : shows("ssh") }} />
+    {scene.machines.b && <MachineView machine="b" state={state} compact marks={marks} layout={scene.machines.b} host={host} font={font} shows={{ laptop: shows("b"), folder: shows("b") }} />}
+    {shows("gate") && <>
+      {scene.pipes.map((pipe, index) => <Pipe key={index} from={pipe.from} to={pipe.to}
+        active={move && onPath(pipe.from) && onPath(pipe.to) ? move.tone : null} font={font} />)}
+      <Gate at={scene.scanner} label="ด่านสแกนนิ้ว" sub={scene.compact ? undefined : `ประตูของ ${host.name}`} tone={gateTone} font={font} />
+    </>}
+    {scene.thief && shows("thief") && <Thief box={scene.thief} state={state} mark={toneOf(marks, "thief")} font={font} />}
 
+    {shows("host") && <>
     <Card box={github} title={host.name} icon="cloud" fill={C.github} font={font} />
     <Card box={repo} mark={toneOf(marks, "repo")} fill="#FFFFFF" font={font}>
       <IconLabel x={repo.x + 12} y={repo.y + 10} width={repo.w - 24} icon="gitBranch" text="repo: coffee-shop" size={14} bold color={C.text} font={font} />
       <Label x={repo.x + 34} y={repo.y + 38} width={repo.w - 46} text={state.pushes ? `โค้ดของเรา · ส่งขึ้นแล้ว ${state.pushes} ครั้ง ✓` : "โค้ดของเรา · ยังไม่ได้ส่งขึ้น"} size={12} color={state.pushes ? C.ok : C.muted} font={font} />
     </Card>
-    <KeysList scene={scene} state={state} marks={marks} host={host} font={font} />
+    </>}
+    {shows(scene.compact ? "host" : "keys") && <KeysList scene={scene} state={state} marks={marks} host={host} font={font} />}
 
     <CaptionBar box={CAPTION_BOX} text={flow.frame ? flow.frame.caption : idleCaption(view, state, host)} step={flow.step} font={font} />
     {move && flow.path && <Packet key={flow.runKey} runKey={flow.runKey} path={flow.path} label={move.label} tone={move.tone}
