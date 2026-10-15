@@ -1,29 +1,36 @@
 "use client";
 
 import { useId, useState, type JSX, type KeyboardEvent, type ReactNode } from "react";
-import { ArrowDownToLine, ArrowUpFromLine, ChevronDown, CircleCheck, CopyPlus, GitBranch, GitCommitHorizontal, GitMerge, Info, PackagePlus, RotateCcw, Trash2, TriangleAlert, Undo2 } from "lucide-react";
+import { CONFLICT_FILL } from "./git-widget-view";
+import { Eye, GitPullRequest, ArrowDownToLine, ArrowUpFromLine, ChevronDown, CircleCheck, CopyPlus, GitBranch, GitCommitHorizontal, GitMerge, Info, PackagePlus, RotateCcw, Trash2, TriangleAlert, Undo2 } from "lucide-react";
 import type { DocumentTransaction } from "@/domain/document/commands";
+import { hostOf, HOSTS, type HostId } from "@/domain/hosting";
 import { fitBounds } from "@/domain/document/camera";
-import { gitNodeSize, gitViewOf, type GitSimulatorNode, type GitView } from "@/domain/document/model";
+import { gitHasMachineB, gitNodeSize, gitViewOf, type GitSimulatorNode, type GitView } from "@/domain/document/model";
 import { useEditorStore } from "@/features/editor/store";
 import { applyGitAction } from "@/domain/git/reducer";
-import { RESET_TOOLTIP, describeGitTransition, repositoryLabel } from "@/domain/git/messages";
+import { MERGE_HINT, RESET_TOOLTIP, describeGitTransition, repositoryLabel } from "@/domain/git/messages";
+import { mergeCommitMessage } from "@/domain/git/merge3";
 import type { GitAction, MachineId } from "@/domain/git/model";
-import { MAIN_BRANCH, isDiverged, suggestBranchName } from "@/domain/git/selectors";
+import { lineDiff, diffCounts, diffWindow } from "@/domain/git/diff";
+import { MAIN_BRANCH, currentBranch, currentRequest, mergeBase, requestInfo, suggestBranchName } from "@/domain/git/selectors";
 import { findGitNode, gitDraftFor } from "./git-draft";
 import { messageKey, nextTransferKey, useGitSessionStore } from "./session-store";
-import { READ_ONLY_REASON, getActionAvailability, getBranchAvailability, nextBranchStep, nextGitStep, projectState, type Availability, type BranchAvailability, type BranchRow } from "./view-model";
-import { GIT_VIEWS, viewHasRemote } from "./widget-layout";
+import { READ_ONLY_REASON, getActionAvailability, getBranchAvailability, getRequestAvailability, nextBranchStep, nextGitStep, nextReviewStep, projectState, type Availability, type BranchAvailability, type BranchRow } from "./view-model";
+import { gitViewList, viewHasRemote } from "./widget-layout";
 
 const ACTION_NAMES: Record<GitAction["type"], string> = {
   edit: "แก้ไฟล์", stage: "Add", commit: "Commit", push: "Push", clone: "Clone", pull: "Pull",
-  merge: "Merge", resetToRemote: "ใช้เวอร์ชัน GitHub", reset: "Reset demo",
+  mergeTake: "ใส่ไฟล์ตอน merge", mergeAbort: "ยกเลิก merge", resetToRemote: "ใช้เวอร์ชันของ remote", reset: "Reset demo",
+  mrOpen: "เปิด MR", mrApprove: "อนุมัติ MR", mrMerge: "Merge MR",
   branchCreate: "สร้าง branch", branchSwitch: "สลับ branch", branchMerge: "Merge branch", branchDelete: "ลบ branch",
 };
 
-function transactionLabel(action: GitAction): string {
-  const where = action.type === "reset" ? "" : ` ${repositoryLabel(action.machine)}`;
-  return `Git (จำลอง): ${ACTION_NAMES[action.type]}${where}`;
+function transactionLabel(action: GitAction, host: HostId | undefined): string {
+  const where = action.type === "reset" ? "" : ` ${repositoryLabel(action.machine, host)}`;
+  const mr = hostOf(host).mergeRequestShort;
+  const name = action.type === "mrOpen" ? `เปิด ${mr}` : action.type === "mrApprove" ? `อนุมัติ ${mr}` : action.type === "mrMerge" ? `Merge ${mr}` : ACTION_NAMES[action.type];
+  return `Git (จำลอง): ${name}${where}`;
 }
 
 /** Step 3 is wider: after a step change, zoom out (never in) or pan so the whole widget stays on screen. */
@@ -63,24 +70,28 @@ export function GitPanel({ node, slideId, writable, transact }: {
   const view = gitViewOf(node);
   const storedTab = useGitSessionStore((s) => s.tabs[nodeId] ?? "A");
   // Only step 3 has a second machine.
-  const machine: MachineId = view === "full" && storedTab === "B" ? "B" : "A";
+  const machine: MachineId = gitHasMachineB(view) && storedTab === "B" ? "B" : "A";
   const result = useGitSessionStore((s) => s.results[nodeId]);
   const message = useGitSessionStore((s) => s.messages[messageKey(nodeId, machine)] ?? "");
   const draft = useEditorStore((s) => gitDraftFor(s.pendingEdit, nodeId, machine)?.draft ?? null);
   const { setTab, setResult, startTransfer, setMessage, clearNode } = useGitSessionStore.getState();
-  const availability = getActionAvailability({ state, machine, draft, message, writable });
+  const host = hostOf(node.host);
+  const review = view === "review";
+  const availability = getActionAvailability({ state, machine, draft, message, writable, host: node.host, review });
   const repo = state.machines[machine];
   const [nameDraft, setNameDraft] = useState<string | null>(null);
   const branchName = nameDraft ?? suggestBranchName(repo);
   const branches = getBranchAvailability({ state, machine, draft, name: branchName, writable });
 
-  const runAction = (action: GitAction) => {
+  const runAction = (plain: GitAction) => {
+    // In the review lesson Push / Pull also work on a branch and main is protected.
+    const action: GitAction = review && (plain.type === "push" || plain.type === "pull") ? { ...plain, review: true } : plain;
     // The file typed on the board is applied first, as its own Edit step.
     if (!useEditorStore.getState().flushPendingEdits()) return;
     const latest = findGitNode(slideId, nodeId) ?? node;
     const transition = applyGitAction(latest.state, action);
     if (transition.changed && !transact({
-      label: transactionLabel(action),
+      label: transactionLabel(action, node.host),
       affectedSlideId: slideId,
       commands: [{ type: "nodes.replace", slideId, nodes: [{ ...latest, state: transition.nextState }] }],
     })) {
@@ -88,9 +99,15 @@ export function GitPanel({ node, slideId, writable, transact }: {
       return;
     }
     if (action.type === "reset" && transition.changed) clearNode(nodeId);
-    setResult(nodeId, { code: transition.code, outcome: transition.outcome, message: describeGitTransition(action, transition) });
+    setResult(nodeId, { code: transition.code, outcome: transition.outcome, message: describeGitTransition(action, transition, node.host) });
     if (transition.transfer) startTransfer(nodeId, { ...transition.transfer, key: nextTransferKey() });
-    if (action.type === "commit" && transition.code === "COMMITTED") setMessage(nodeId, action.machine, "");
+    if (action.type === "commit" && (transition.code === "COMMITTED" || transition.code === "MERGED")) setMessage(nodeId, action.machine, "");
+    // Like Git's editor opening with “Merge …”: the message box starts with the merge commit's usual text.
+    if (transition.code === "MERGE_CONFLICT" && "machine" in action) {
+      const merging = transition.nextState.machines[action.machine].merging;
+      if (merging) setMessage(nodeId, action.machine, mergeCommitMessage(merging.label));
+    }
+    if (action.type === "mergeAbort" && transition.changed) setMessage(nodeId, action.machine, "");
     if (action.type === "branchCreate" && transition.changed) setNameDraft(null);
   };
 
@@ -101,6 +118,13 @@ export function GitPanel({ node, slideId, writable, transact }: {
     if (transact({ label: "Git (จำลอง): เปลี่ยนขั้นบทเรียน", affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes: [changed] }] })) keepOnScreen(changed);
   };
 
+  /** GitHub ↔ GitLab: only the names change; one undoable step. */
+  const changeHost = (next: HostId) => {
+    if (next === host.id || !writable || !useEditorStore.getState().flushPendingEdits()) return;
+    const latest = findGitNode(slideId, nodeId) ?? node;
+    transact({ label: `เปลี่ยนเป็น ${HOSTS[next].name}`, affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes: [{ ...latest, host: next }] }] });
+  };
+
   const onMessageKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key !== "Enter" || isComposing(event)) return;
     event.preventDefault();
@@ -108,11 +132,12 @@ export function GitPanel({ node, slideId, writable, transact }: {
   };
 
   const showRemote = viewHasRemote(view);
-  const diverged = showRemote && isDiverged(state, machine);
   const projected = projectState(state, machine, draft).state;
-  const target = view === "branch" ? nextBranchStep(projected, machine, availability) : null;
+  const target = view === "branch" ? nextBranchStep(projected, machine, availability) : review ? nextReviewStep(projected, machine, availability) : null;
+  const requests = getRequestAvailability({ state, machine, writable, id: currentRequest(state)?.status === "open" ? currentRequest(state)!.id : null, host: node.host });
   const next = target ? target.step : nextGitStep(projected, machine, availability, showRemote);
-  const strayBranch = view !== "branch" && repo.initialized && branches.current !== MAIN_BRANCH ? branches.others.find((row) => row.name === MAIN_BRANCH) : undefined;
+  const strayBranch = view !== "branch" && !review && repo.initialized && branches.current !== MAIN_BRANCH ? branches.others.find((row) => row.name === MAIN_BRANCH) : undefined;
+  const views = gitViewList(host.id);
   const readOnlyId = `${ids}-read-only`;
   const reasonsOf = (key: string, items: [string, Availability][]) => ({ key, items, prefix: ids, readOnlyId });
 
@@ -125,6 +150,15 @@ export function GitPanel({ node, slideId, writable, transact }: {
       </div>
     </header>
 
+    <div role="group" aria-label="ที่เก็บโค้ดออนไลน์" className="flex items-center gap-2">
+      <span className="text-xs font-semibold text-slate-500">ใช้เว็บ</span>
+      <div className="grid flex-1 grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
+        {(Object.values(HOSTS)).map((item) => <button key={item.id} type="button" aria-pressed={host.id === item.id} disabled={!writable}
+          className={`rounded-lg px-2 py-1 text-xs font-semibold transition-colors disabled:cursor-not-allowed ${host.id === item.id ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}
+          onClick={() => changeHost(item.id)}>{item.name}</button>)}
+      </div>
+    </div>
+
     {!writable && <p id={readOnlyId} className="rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600">{READ_ONLY_REASON}: ดูได้อย่างเดียว</p>}
 
     <div className="space-y-1.5">
@@ -133,36 +167,45 @@ export function GitPanel({ node, slideId, writable, transact }: {
         <select id={`${ids}-view`} value={view} disabled={!writable} aria-describedby={`${ids}-view-description`}
           onChange={(event) => changeView(event.target.value as GitView)}
           className="w-full appearance-none truncate rounded-xl border border-slate-300 bg-white py-2 pl-3 pr-8 text-[13px] font-semibold text-slate-800 shadow-sm outline-none transition-colors hover:border-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30">
-          {GIT_VIEWS.map((item, index) => <option key={item.id} value={item.id}>{index + 1} · {item.label}</option>)}
+          {views.map((item, index) => <option key={item.id} value={item.id}>{index + 1} · {item.label}</option>)}
         </select>
         <ChevronDown aria-hidden size={16} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
       </div>
-      <p id={`${ids}-view-description`} className="text-[11px] leading-snug text-slate-500">{GIT_VIEWS.find((item) => item.id === view)?.description}</p>
+      <p id={`${ids}-view-description`} className="text-[11px] leading-snug text-slate-500">{views.find((item) => item.id === view)?.description}</p>
     </div>
 
     <div className="space-y-2">
-      {view === "full" && <div role="group" aria-label="ใช้งานเครื่อง" className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
+      {gitHasMachineB(view) && <div role="group" aria-label="ใช้งานเครื่อง" className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
         {(["A", "B"] as const).map((id) => <button key={id} type="button" aria-pressed={machine === id}
           className={`rounded-lg px-2 py-1.5 text-sm font-semibold transition-colors ${machine === id ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}
           onClick={() => { if (useEditorStore.getState().flushPendingEdits()) setTab(nodeId, id); }}>{repositoryLabel(id)}</button>)}
       </div>}
       <p className="text-xs font-semibold text-slate-500">ขั้นตอนบน{repositoryLabel(machine)}</p>
 
-      {diverged && <section aria-labelledby={`${ids}-merge-title`} className="rounded-xl border border-amber-300 bg-amber-50/80 p-3 shadow-sm shadow-amber-100">
-        <h3 id={`${ids}-merge-title`} className="flex items-center gap-1.5 font-semibold leading-6 text-amber-950"><GitMerge size={16} aria-hidden />ประวัติแยกกัน</h3>
-        <p className="text-xs leading-snug text-amber-900/80">ต่างคนต่าง Commit ไฟล์เดียวกัน Merge แล้วจะเก็บไฟล์ของใคร? (คลิกวง commit บนกระดานเพื่อดูแต่ละฝั่ง)</p>
-        <div className="mt-2.5 space-y-2">
-          <ActionButton id={`${ids}-merge-ours`} reasonId={`${ids}-merge-reason`} label="Merge: เก็บไฟล์ของเรา" icon={<GitMerge size={15} />} variant={next === "merge" ? "next" : "default"}
-            availability={availability.merge} readOnlyId={readOnlyId} onRun={() => runAction({ type: "merge", machine, keep: "ours" })} />
-          <ActionButton id={`${ids}-merge-theirs`} reasonId={`${ids}-merge-reason`} label="Merge: ใช้ไฟล์จาก GitHub" icon={<GitMerge size={15} />}
-            availability={availability.merge} readOnlyId={readOnlyId} onRun={() => runAction({ type: "merge", machine, keep: "theirs" })} />
+      {repo.merging && <section aria-labelledby={`${ids}-merge-title`} className="rounded-xl border border-amber-300 bg-amber-50/80 p-3 shadow-sm shadow-amber-100">
+        <h3 id={`${ids}-merge-title`} className="flex items-center gap-1.5 font-semibold leading-6 text-amber-950"><GitMerge size={16} aria-hidden />กำลัง merge: ไฟล์ชนกัน
+          {next === "resolve" && <span className="rounded-full bg-blue-600/10 px-1.5 py-px text-[10px] font-semibold text-blue-700">ทำต่อ</span>}</h3>
+        <p className="text-xs leading-snug text-amber-900/80">{MERGE_HINT}</p>
+        <p className="mt-1.5 flex flex-wrap items-center gap-1 text-[11px] text-slate-600" aria-label="สีในไฟล์">
+          <span className="rounded px-1.5 py-px" style={{ background: CONFLICT_FILL.ours }}>ของเรา (HEAD)</span>
+          <span className="rounded px-1.5 py-px" style={{ background: CONFLICT_FILL.theirs }}>ของ {repo.merging.label}</span>
+          <span className="rounded px-1.5 py-px" style={{ background: CONFLICT_FILL.marker }}>เครื่องหมาย</span></p>
+        <div className="mt-2.5 grid grid-cols-2 gap-2">
+          <ActionButton id={`${ids}-take-ours`} label="ใช้ของเรา" icon={null} title="ใส่ไฟล์ของเราทั้งไฟล์ลงในกล่อง (ยังต้อง Add + Commit)"
+            availability={availability.mergeTake} readOnlyId={readOnlyId} onRun={() => runAction({ type: "mergeTake", machine, side: "ours" })} />
+          <ActionButton id={`${ids}-take-theirs`} label="ใช้ของอีกฝั่ง" icon={null} title={`ใส่ไฟล์ของ ${repo.merging.label} ทั้งไฟล์ลงในกล่อง (ยังต้อง Add + Commit)`}
+            availability={availability.mergeTake} readOnlyId={readOnlyId} onRun={() => runAction({ type: "mergeTake", machine, side: "theirs" })} />
         </div>
-        {visibleReasons(availability.merge).length > 0 && <p id={`${ids}-merge-reason`} className="mt-2 text-[11px] leading-snug text-amber-900/80">{visibleReasons(availability.merge).join(" • ")}</p>}
-        <div className="mt-1.5 flex justify-end">
-          <ActionButton id={`${ids}-reset-remote`} label="ทิ้งงานของเรา ใช้เวอร์ชัน GitHub" icon={<Undo2 size={13} />} variant="link"
+        <div className="mt-2 space-y-1">
+          <ActionButton id={`${ids}-merge-abort`} label="ยกเลิก merge" icon={<Undo2 size={15} />}
+            availability={availability.mergeAbort} readOnlyId={readOnlyId} onRun={() => runAction({ type: "mergeAbort", machine })} />
+          <Command text="git merge --abort" />
+        </div>
+        {repo.merging.label === "origin/main" && currentBranch(repo) === MAIN_BRANCH && <div className="mt-1.5 flex justify-end">
+          <ActionButton id={`${ids}-reset-remote`} label={`ทิ้งงานของเรา ใช้เวอร์ชัน ${host.name}`} icon={<Undo2 size={13} />} variant="link"
             title="ทิ้ง commit และการแก้ที่ยังไม่ได้ Push ของเครื่องนี้ ย้อนกลับด้วย Undo ได้"
             availability={availability.resetToRemote} readOnlyId={readOnlyId} onRun={() => runAction({ type: "resetToRemote", machine })} />
-        </div>
+        </div>}
       </section>}
 
       {strayBranch && <section aria-labelledby={`${ids}-stray-title`} className="rounded-xl border border-amber-300 bg-amber-50/80 p-3 shadow-sm shadow-amber-100">
@@ -174,7 +217,7 @@ export function GitPanel({ node, slideId, writable, transact }: {
       </section>}
 
       {!repo.initialized ? <ol className="space-y-3">
-        <StepCard number={1} title="Clone" description="คัดลอกไฟล์และ commit จาก GitHub" active={availability.clone.enabled}
+        <StepCard number={1} title="Clone" description={`คัดลอกไฟล์และ commit จาก ${host.name}`} active={availability.clone.enabled}
           reasons={reasonsOf("clone", [["", availability.clone]])}>
           <ActionButton id={`${ids}-clone`} label="Clone" icon={<CopyPlus size={15} />} variant={availability.clone.enabled ? "next" : "default"}
             availability={availability.clone} readOnlyId={readOnlyId} onRun={() => runAction({ type: "clone", machine: "B" })} />
@@ -195,7 +238,11 @@ export function GitPanel({ node, slideId, writable, transact }: {
           <ActionButton id={`${ids}-commit`} label="Commit" icon={<GitCommitHorizontal size={15} />} variant={next === "commit" ? "next" : "default"}
             availability={availability.commit} readOnlyId={readOnlyId} onRun={() => runAction({ type: "commit", machine, message })} />
         </StepCard>
-        {showRemote && <StepCard number={3} title="GitHub" description="Push ส่งขึ้น • Pull รับลงมา" active={next === "push" || next === "pull"}
+        {review && <StepCard number={3} title="Branch (ทางแยก)" description="main ถูกป้องกัน: แตก branch เพื่อทำงานใหม่"
+          active={next === "create" || next === "switch"} reasons={reasonsOf("branch", [])}>
+          <BranchCard ids={ids} machine={machine} branches={branches} name={branchName} onName={setNameDraft} next={target} writable={writable} readOnlyId={readOnlyId} run={runAction} compact />
+        </StepCard>}
+        {showRemote && <StepCard number={review ? 4 : 3} title={host.name} description="Push ส่งขึ้น • Pull รับลงมา" active={next === "push" || next === "pull"}
           reasons={reasonsOf("remote", [["Push", availability.push], ["Pull", availability.pull]])}>
           <div className="grid grid-cols-2 gap-2">
             <ActionButton id={`${ids}-push`} reasonId={`${ids}-remote-reason`} label="Push" icon={<ArrowUpFromLine size={15} />} variant={next === "push" ? "next" : "default"}
@@ -203,6 +250,14 @@ export function GitPanel({ node, slideId, writable, transact }: {
             <ActionButton id={`${ids}-pull`} reasonId={`${ids}-remote-reason`} label="Pull" icon={<ArrowDownToLine size={15} />} variant={next === "pull" ? "next" : "default"}
               availability={availability.pull} readOnlyId={readOnlyId} onRun={() => runAction({ type: "pull", machine })} />
           </div>
+          {review && <div className="space-y-1">
+            <Command text={currentBranch(repo) === MAIN_BRANCH ? "git push origin main" : `git push -u origin ${currentBranch(repo)}`} />
+            <Command text={currentBranch(repo) === MAIN_BRANCH ? "git pull" : "git pull origin main"} />
+          </div>}
+        </StepCard>}
+        {review && <StepCard number={5} title={hostOf(node.host).mergeRequest} description={`ขอรวม branch เข้า main ให้เพื่อนตรวจก่อน (${hostOf(node.host).mergeRequestShort})`}
+          active={next === "openMr" || next === "approve" || next === "mergeMr"} reasons={reasonsOf("mr", [])}>
+          <RequestCard ids={ids} state={state} machine={machine} host={host.id} writable={writable} readOnlyId={readOnlyId} open={requests.open} next={target} branch={currentBranch(repo)} run={runAction} />
         </StepCard>}
         {view === "branch" && <StepCard number={3} title="Branch (ทางแยก)" description="ทางแยกให้ลองของใหม่ โดย main ไม่โดนกระทบ"
           active={next === "create" || next === "switch" || next === "mergeBranch"} reasons={reasonsOf("branch", [])}>
@@ -229,22 +284,24 @@ function Command({ text }: { text: string }) {
 
 const PLAN_HINT: Record<BranchRow["plan"], string> = {
   "fast-forward": "Fast-forward: แค่เลื่อนไปข้างหน้า ไม่สร้าง commit ใหม่",
-  merge: "สร้าง merge commit ที่มีสองพ่อแม่",
-  conflict: "ไฟล์ถูกแก้ต่างกันทั้งสองฝั่ง (ชนกัน) ต้องเลือกว่าจะเก็บไฟล์ของใคร",
+  merge: "Git รวมให้เอง (แก้คนละบรรทัด) สร้าง merge commit ที่มีสองพ่อแม่",
+  conflict: "แก้บรรทัดเดียวกันทั้งสองฝั่ง: Git จะหยุดให้คุณแก้ไฟล์เอง (conflict)",
   "up-to-date": "Already up to date: รวมไว้แล้ว",
   unavailable: "",
 };
 
-function BranchCard({ ids, machine, branches, name, onName, next, writable, readOnlyId, run }: {
+function BranchCard({ ids, machine, branches, name, onName, next, writable, readOnlyId, run, compact = false }: {
   ids: string;
   machine: MachineId;
   branches: BranchAvailability;
   name: string;
   onName: (value: string) => void;
-  next: ReturnType<typeof nextBranchStep>;
+  next: { step: string; branch: string | null } | null;
   writable: boolean;
   readOnlyId: string;
   run: (action: GitAction) => void;
+  /** The review lesson only needs create / switch: merging and deleting happen on the remote there. */
+  compact?: boolean;
 }) {
   const { current, others } = branches;
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -254,8 +311,8 @@ function BranchCard({ ids, machine, branches, name, onName, next, writable, read
   };
   const reasonFor = (id: string, availability: Availability) => visibleReasons(availability).length > 0
     ? <p id={id} className="text-[11px] leading-snug text-slate-500">{visibleReasons(availability).join(" • ")}</p> : null;
-  const merges = others.filter((row) => row.plan !== "unavailable");
-  const deletable = others.filter((row) => row.name !== MAIN_BRANCH);
+  const merges = compact ? [] : others.filter((row) => row.plan !== "unavailable");
+  const deletable = compact ? [] : others.filter((row) => row.name !== MAIN_BRANCH);
   const heading = "text-[11px] font-semibold text-slate-600";
   return <>
     <p className="flex items-center gap-1.5 text-xs text-slate-600">ตอนนี้อยู่ที่
@@ -286,20 +343,10 @@ function BranchCard({ ids, machine, branches, name, onName, next, writable, read
     {merges.length > 0 && <div className="space-y-1.5 border-t border-slate-100 pt-2">
       <p className={heading}>Merge เข้า {current}</p>
       {merges.map((row) => <div key={row.name} className="space-y-1">
-        {row.plan === "conflict"
-          ? <div className="space-y-1.5 rounded-lg border border-amber-300 bg-amber-50/80 p-2">
-            <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-950"><GitMerge size={14} aria-hidden />Merge {row.name} เข้า {current}: ไฟล์ชนกัน</p>
-            <p className="text-[11px] leading-snug text-amber-900/80">{PLAN_HINT.conflict} (คลิกวง commit บนกระดานเพื่อดูแต่ละฝั่ง)</p>
-            <ActionButton id={`${ids}-merge-${row.name}-ours`} reasonId={`${ids}-merge-${row.name}-reason`} label={`Merge: เก็บไฟล์ของ ${current}`} icon={<GitMerge size={15} />}
-              variant={next?.step === "mergeBranch" && next.branch === row.name ? "next" : "default"}
-              availability={row.merge} readOnlyId={readOnlyId} onRun={() => run({ type: "branchMerge", machine, name: row.name, keep: "ours" })} />
-            <ActionButton id={`${ids}-merge-${row.name}-theirs`} reasonId={`${ids}-merge-${row.name}-reason`} label={`Merge: ใช้ไฟล์จาก ${row.name}`} icon={<GitMerge size={15} />}
-              availability={row.merge} readOnlyId={readOnlyId} onRun={() => run({ type: "branchMerge", machine, name: row.name, keep: "theirs" })} />
-          </div>
-          : <ActionButton id={`${ids}-merge-${row.name}`} reasonId={`${ids}-merge-${row.name}-reason`} label={`Merge ${row.name} เข้า ${current}`} icon={<GitMerge size={15} />}
-            variant={next?.step === "mergeBranch" && next.branch === row.name ? "next" : "default"}
-            availability={row.merge} readOnlyId={readOnlyId} onRun={() => run({ type: "branchMerge", machine, name: row.name })} />}
-        {(row.plan === "fast-forward" || row.plan === "merge") && <p className="text-[11px] leading-snug text-slate-500">{row.name}: {PLAN_HINT[row.plan]}</p>}
+        <ActionButton id={`${ids}-merge-${row.name}`} reasonId={`${ids}-merge-${row.name}-reason`} label={`Merge ${row.name} เข้า ${current}`} icon={<GitMerge size={15} />}
+          variant={next?.step === "mergeBranch" && next.branch === row.name ? "next" : "default"}
+          availability={row.merge} readOnlyId={readOnlyId} onRun={() => run({ type: "branchMerge", machine, name: row.name })} />
+        {(row.plan === "fast-forward" || row.plan === "merge" || row.plan === "conflict") && <p className="text-[11px] leading-snug text-slate-500">{row.name}: {PLAN_HINT[row.plan]}</p>}
         {reasonFor(`${ids}-merge-${row.name}-reason`, row.merge)}
         <Command text={`git merge ${row.name}`} />
       </div>)}
@@ -316,6 +363,77 @@ function BranchCard({ ids, machine, branches, name, onName, next, writable, read
       {deletable.filter((row) => visibleReasons(row.delete).length > 0).map((row) => <p key={row.name} id={`${ids}-delete-${row.name}-reason`} className="text-[11px] leading-snug text-slate-500">{row.name}: {visibleReasons(row.delete).join(" • ")}</p>)}
     </div>}
   </>;
+}
+
+const CHIP = { open: "bg-amber-100 text-amber-800", approved: "bg-blue-100 text-blue-800", merged: "bg-green-100 text-green-800", closed: "bg-slate-100 text-slate-600" } as const;
+
+/** Merge Request step: open one from the current branch, and for each request look at the changes, approve, merge. */
+function RequestCard({ ids, state, machine, host, writable, readOnlyId, open, next, branch, run }: {
+  ids: string;
+  state: GitSimulatorNode["state"];
+  machine: MachineId;
+  host: HostId;
+  writable: boolean;
+  readOnlyId: string;
+  open: Availability;
+  next: { step: string; id?: number } | null;
+  branch: string;
+  run: (action: GitAction) => void;
+}) {
+  const term = hostOf(host).mergeRequest;
+  const [showing, setShowing] = useState<number | null>(null);
+  const requests = [...(state.remote.requests ?? [])].reverse();
+  const reason = (availability: Availability, id: string) => visibleReasons(availability).length > 0 && !availability.enabled
+    ? <p id={id} className="text-[11px] leading-snug text-slate-500">{visibleReasons(availability).join(" • ")}</p> : null;
+  return <>
+    <div className="space-y-1">
+      <ActionButton id={`${ids}-mr-open`} reasonId={`${ids}-mr-open-reason`} label={branch === MAIN_BRANCH ? `เปิด ${term}` : `เปิด ${term}: ${branch} → main`} icon={<GitPullRequest size={15} />}
+        variant={next?.step === "openMr" ? "next" : "default"} availability={open} readOnlyId={readOnlyId} onRun={() => run({ type: "mrOpen", machine })} />
+      {reason(open, `${ids}-mr-open-reason`)}
+      <Command text={`New ${hostOf(host).mergeRequestShort} (เว็บ ${hostOf(host).name})`} />
+    </div>
+    {requests.length === 0 && <p className="text-[11px] leading-snug text-slate-500">ยังไม่มี {term}: Push branch แล้วเปิดอันแรก</p>}
+    {requests.map((request) => {
+      const info = requestInfo(state, request);
+      const status = request.status === "open" ? (info?.approved ? "approved" : "open") : request.status;
+      const label = { open: "เปิดอยู่", approved: "อนุมัติแล้ว", merged: "รวมแล้ว", closed: "ปิดแล้ว" }[status];
+      const mine = getRequestAvailability({ state, machine, writable, id: request.id, host });
+      const focus = next?.id === request.id;
+      return <div key={request.id} className="space-y-1.5 rounded-lg border border-slate-200 bg-slate-50 p-2" aria-label={`${term} !${request.id}`} role="group">
+        <p className="flex items-center justify-between gap-2 text-xs font-semibold text-slate-800"><span className="truncate">!{request.id} {request.source} → main</span>
+          <span className={`shrink-0 rounded-full px-1.5 py-px text-[10px] font-semibold ${CHIP[status]}`}>{label}</span></p>
+        <p className="text-[11px] leading-snug text-slate-500">เปิดโดยเครื่อง {request.author} • {request.approvedBy.length ? `อนุมัติโดยเครื่อง ${request.approvedBy.join(", ")}` : "ยังไม่มีคนอนุมัติ"}
+          {info?.conflict ? " • ชนกับ main" : ""}{request.status === "open" ? " • pipeline ✓ ผ่าน" : ""}</p>
+        {request.status === "open" && <>
+          <button type="button" aria-pressed={showing === request.id} className="app-button w-full" onClick={() => setShowing(showing === request.id ? null : request.id)}><Eye size={15} />ดูการเปลี่ยนแปลง</button>
+          {showing === request.id && <RequestDiff state={state} request={request} />}
+          <ActionButton id={`${ids}-mr-approve-${request.id}`} reasonId={`${ids}-mr-approve-${request.id}-reason`} label="อนุมัติ (Approve)" icon={<CircleCheck size={15} />}
+            variant={focus && next?.step === "approve" ? "next" : "default"} availability={mine.approve} readOnlyId={readOnlyId} onRun={() => run({ type: "mrApprove", machine, id: request.id })} />
+          {reason(mine.approve, `${ids}-mr-approve-${request.id}-reason`)}
+          <ActionButton id={`${ids}-mr-merge-${request.id}`} reasonId={`${ids}-mr-merge-${request.id}-reason`} label="Merge เข้า main" icon={<GitMerge size={15} />}
+            variant={focus && next?.step === "mergeMr" ? "next" : "default"} availability={mine.merge} readOnlyId={readOnlyId} onRun={() => run({ type: "mrMerge", machine, id: request.id })} />
+          {reason(mine.merge, `${ids}-mr-merge-${request.id}-reason`)}
+        </>}
+      </div>;
+    })}
+  </>;
+}
+
+/** What the request changes: its branch's file against where it left main (reuses the commit diff). */
+function RequestDiff({ state, request }: { state: GitSimulatorNode["state"]; request: { source: string } }) {
+  const tip = state.remote.branches?.[request.source];
+  const after = tip ? state.commits[tip]?.snapshot : null;
+  const base = tip && state.remote.mainHead ? mergeBase(state, state.remote, state.remote.mainHead, tip) : null;
+  if (!after) return null;
+  const diff = lineDiff(base ? state.commits[base]?.snapshot.content ?? "" : "", after.content);
+  const counts = diffCounts(diff);
+  const shown = diffWindow(diff, 10);
+  return <div className="overflow-hidden rounded-md bg-slate-900 font-mono text-[11px] leading-[16px]" role="region" aria-label="การเปลี่ยนแปลงใน Merge Request">
+    <p className="px-2 py-1 text-[10px] text-sky-300">{after.name} · +{counts.added} −{counts.removed}</p>
+    {shown.lines.map((line, index) => <p key={index} data-diff={line.kind} className={`whitespace-pre px-2 ${line.kind === "add" ? "bg-green-500/20 text-green-200" : line.kind === "del" ? "bg-red-500/20 text-red-200" : "text-slate-300"}`}>
+      {line.kind === "add" ? "+ " : line.kind === "del" ? "− " : "  "}{line.text}</p>)}
+    {shown.after > 0 && <p className="px-2 text-slate-500">… อีก {shown.after} บรรทัด</p>}
+  </div>;
 }
 
 type ReasonList = { key: string; items: [string, Availability][]; prefix: string; readOnlyId: string };
@@ -380,13 +498,16 @@ function ActionButton({ id, label, icon, availability, onRun, variant = "default
   </button>;
 }
 
-function ResultMessage({ result }: { result: { outcome: "success" | "noop" | "rejected"; message: string } | undefined }) {
+function ResultMessage({ result }: { result: { code: string; outcome: "success" | "noop" | "rejected"; message: string } | undefined }) {
+  // A merge that stopped on conflicts is not an error, but it needs the learner: shown as a warning.
+  const warning = result?.code === "MERGE_CONFLICT";
   const icon = !result ? null
+    : warning ? <TriangleAlert size={15} className="mt-0.5 shrink-0 text-amber-600" aria-hidden />
     : result.outcome === "success" ? <CircleCheck size={15} className="mt-0.5 shrink-0 text-green-600" aria-hidden />
       : result.outcome === "rejected" ? <TriangleAlert size={15} className="mt-0.5 shrink-0 text-amber-600" aria-hidden />
         : <Info size={15} className="mt-0.5 shrink-0 text-slate-500" aria-hidden />;
-  const prefix = !result ? "" : result.outcome === "success" ? "สำเร็จ: " : result.outcome === "rejected" ? "ทำไม่ได้: " : "ไม่มีการเปลี่ยนแปลง: ";
-  const tone = !result ? "" : result.outcome === "success" ? "border-green-200 bg-green-50 text-green-900"
+  const prefix = !result ? "" : warning ? "ต้องแก้ไฟล์: " : result.outcome === "success" ? "สำเร็จ: " : result.outcome === "rejected" ? "ทำไม่ได้: " : "ไม่มีการเปลี่ยนแปลง: ";
+  const tone = !result ? "" : warning ? "border-amber-200 bg-amber-50 text-amber-900" : result.outcome === "success" ? "border-green-200 bg-green-50 text-green-900"
     : result.outcome === "rejected" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-slate-200 bg-slate-50 text-slate-700";
   // Sticky: the latest result stays visible at the bottom of the panel even when the step cards scroll.
   return <div aria-live="polite" className={result ? "sticky bottom-0 z-10 -mx-4 bg-white/95 px-4 pb-3 pt-2 backdrop-blur-sm" : ""}>

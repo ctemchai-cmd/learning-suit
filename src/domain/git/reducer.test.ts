@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createInitialGitState } from "./initial";
 import { applyGitAction } from "./reducer";
-import { aheadBehind, ancestorsOf, branchNames, currentBranch, hasStaged, hasUnstaged, isAncestor, knownCommitsNewestFirst, planBranchMerge, suggestBranchName, validateBranchName } from "./selectors";
+import { aheadBehind, branchNames, currentRequest, requestInfo, currentBranch, hasStaged, hasUnstaged, knownCommitsNewestFirst, planBranchMerge, suggestBranchName, validateBranchName } from "./selectors";
 import { describeGitTransition } from "./messages";
 import type { FileSnapshot, GitAction, GitCommit, GitResultCode, GitSimulationState, GitTransition, MachineRepository } from "./model";
 import { createProjectContent, type GitSimulatorNode, type ProjectContent } from "../document/model";
@@ -68,7 +68,7 @@ function run(state: GitSimulationState, action: GitAction): GitTransition {
   expect(JSON.stringify(state)).toBe(before);
   if (!first.changed) expect(first.nextState).toBe(state);
   if (first.outcome === "noop") expect(first.changed).toBe(false);
-  if (first.outcome === "rejected" && first.changed) expect(first.code).toBe("DIVERGED");
+  if (first.outcome === "rejected" && first.changed) expect(first.code).toBe("COMMIT_LIMIT"); // a refused Pull still keeps its fetch
   expect(first.affectedCommitIds).toEqual([...first.affectedCommitIds].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))));
   expect(typeof describeGitTransition(action, first)).toBe("string");
   produced.push(first.nextState);
@@ -291,15 +291,16 @@ describe("GIT-03 — rejected Push, then Pull fetches before reporting divergenc
     expect(gitStateIn(history).machines.A.knownCommitIds).toEqual(["C1", "C2"]);
     expect(knownCommitsNewestFirst(gitStateIn(history), "A").map((item) => item.id)).toEqual(["C2", "C1"]);
 
-    // 5. A Pull → DIVERGED but keeps the fetch
-    const diverged = dispatch(pull("A"), "DIVERGED");
-    expect(diverged).toMatchObject({ outcome: "rejected", changed: true, affectedCommitIds: ["C3"] });
+    // 5. A Pull → both sides changed the same line: the fetch is kept and the merge stops on a conflict
+    const diverged = dispatch(pull("A"), "MERGE_CONFLICT");
+    expect(diverged).toMatchObject({ outcome: "success", changed: true, affectedCommitIds: ["C3"] });
     expect(diverged.transfer).toEqual({ from: "remote", to: "A", commitIds: ["C3"] });
     state = gitStateIn(history);
-    expect(state.machines.A).toEqual(machineRepo(SA, SA, "C2", "C3", ["C1", "C2", "C3"]));
+    const markers = "<<<<<<< HEAD (ของเรา)\n<h1>งานต่อของ A</h1>\n=======\n<h1>งานต่อของ B</h1>\n>>>>>>> origin/main\n";
+    expect(state.machines.A).toEqual({ ...machineRepo({ name: "index.html", content: markers }, { name: "index.html", content: markers }, "C2", "C3", ["C1", "C2", "C3"]), merging: { theirs: "C3", label: "origin/main" } });
     expect(state.remote).toEqual({ mainHead: "C3", knownCommitIds: ["C1", "C3"] });
     expect(state.machines.B).toEqual(machineRepo(SB, SB, "C3", "C3", ["C1", "C3"]));
-    expect(describeGitTransition(pull("A"), diverged)).toBe("รับข้อมูลจาก GitHub แล้ว แต่ประวัติแยกกัน (ต่างคนต่าง Commit) เลือก Merge เพื่อรวมประวัติ หรือใช้เวอร์ชันของ GitHub");
+    expect(describeGitTransition(pull("A"), diverged)).toContain("ไฟล์ชนกัน");
 
     // 6. One Undo restores the pre-fetch state; Redo restores the recorded fetch result
     const pastAfterPull = history.past.length;
@@ -309,11 +310,11 @@ describe("GIT-03 — rejected Push, then Pull fetches before reporting divergenc
     expect(gitStateIn(history)).toEqual(beforeRejectedPush);
     history = redo(history).history;
     expect(gitStateIn(history)).toEqual(diverged.nextState);
-    expect(gitStateIn(history).machines.A).toEqual(machineRepo(SA, SA, "C2", "C3", ["C1", "C2", "C3"]));
+    expect(gitStateIn(history).machines.A.merging).toEqual({ theirs: "C3", label: "origin/main" });
 
-    // 7. Pull again → DIVERGED without change, no new history
+    // 7. Pull again while merging → refused without change, no new history
     const pastBeforeRepeat = history.past.length;
-    const repeat = dispatch(pull("A"), "DIVERGED");
+    const repeat = dispatch(pull("A"), "MERGE_IN_PROGRESS");
     expect(repeat).toMatchObject({ outcome: "rejected", changed: false, transfer: null, affectedCommitIds: [] });
     expect(history.past.length).toBe(pastBeforeRepeat);
 
@@ -611,68 +612,155 @@ describe("Push, Reset and ordering edge cases", () => {
   });
 });
 
-describe("GIT-07 — resolve a diverged history", () => {
-  const merge = (machine: "A" | "B", keep: "ours" | "theirs"): GitAction => ({ type: "merge", machine, keep });
+describe("GIT-07 — a diverged Pull is a real merge: Git joins different lines, conflicts are fixed in the file", () => {
   const resetToRemote = (machine: "A" | "B"): GitAction => ({ type: "resetToRemote", machine });
+  const take = (machine: "A" | "B", side: "ours" | "theirs"): GitAction => ({ type: "mergeTake", machine, side });
+  const abort = (machine: "A" | "B"): GitAction => ({ type: "mergeAbort", machine });
+  const MARKED = { name: "index.html", content: "<<<<<<< HEAD (ของเรา)\n<h1>งานต่อของ A</h1>\n=======\n<h1>รุ่นสองจาก B</h1>\n>>>>>>> origin/main\n" };
 
-  /** A committed C3 while B pushed C2; A's Pull fetched C2 and reported the divergence. */
-  function divergedA(): GitSimulationState {
+  /** A committed C3 while B pushed C2 (the same line differs): A's Pull fetched C2 and stopped on a conflict. */
+  function conflictedA(): GitSimulationState {
     let state = editStageCommit(afterGit01Step5(), "A", SA, "A change");
     state = step(state, push("A"), "NON_FAST_FORWARD");
-    return step(state, pull("A"), "DIVERGED");
+    return step(state, pull("A"), "MERGE_CONFLICT");
   }
 
-  it("merges with two parents, keeps our file, and then Push is accepted", () => {
-    const state = divergedA();
-    const merged = run(state, merge("A", "ours"));
-    expect(merged).toMatchObject({ outcome: "success", changed: true, code: "MERGED", affectedCommitIds: ["C4"], transfer: null });
+  it("conflict: nothing is committed, the file gets markers, the machine is merging, and the fetch is kept", () => {
+    let state = editStageCommit(afterGit01Step5(), "A", SA, "A change");
+    state = step(state, push("A"), "NON_FAST_FORWARD");
+    const pulled = run(state, pull("A"));
+    expect(pulled).toMatchObject({ outcome: "success", changed: true, code: "MERGE_CONFLICT", affectedCommitIds: ["C2"], transfer: { from: "remote", to: "A", commitIds: ["C2"] } });
+    const repo = pulled.nextState.machines.A;
+    expect(repo).toMatchObject({ mainHead: "C3", originMainHead: "C2", knownCommitIds: ["C1", "C2", "C3"], merging: { theirs: "C2", label: "origin/main" }, working: MARKED, index: MARKED });
+    expect(Object.keys(pulled.nextState.commits)).toEqual(["C1", "C2", "C3"]);
+    expect(describeGitTransition(pull("A"), pulled)).toContain("แก้บรรทัดเดียวกันกับ origin/main");
+    expect(describeGitTransition(pull("A"), pulled, "gitlab")).toContain("ไฟล์ชนกัน");
+  });
+
+  it("Commit with a marker line left is refused; resolving by hand then Add + Commit makes a two-parent merge commit and Push works", () => {
+    const state = conflictedA();
+    const early = run(state, commitAction("A", "Merge origin/main"));
+    expect(early).toMatchObject({ outcome: "rejected", changed: false, code: "UNRESOLVED_CONFLICT" });
+    expect(describeGitTransition(commitAction("A", "x"), early)).toContain("ยังมีเครื่องหมาย conflict เหลืออยู่");
+
+    // Keeping one marker line is still refused (Add succeeds, as in Git — only Commit checks).
+    let work = step(state, edit("A", { name: "index.html", content: "<h1>ผสม</h1>\n=======\n" }), "EDITED");
+    work = step(work, stage("A"), "STAGED");
+    expect(run(work, commitAction("A", "x"))).toMatchObject({ code: "UNRESOLVED_CONFLICT" });
+
+    const fixed: FileSnapshot = { name: "index.html", content: "<h1>งานต่อของ A และ B</h1>\n" };
+    let resolved = step(state, edit("A", fixed), "EDITED");
+    expect(run(resolved, commitAction("A", "x"))).toMatchObject({ code: "UNRESOLVED_CONFLICT" }); // edited but not added yet
+    resolved = step(resolved, stage("A"), "STAGED");
+    const merged = run(resolved, commitAction("A", "Merge origin/main"));
+    expect(merged).toMatchObject({ outcome: "success", changed: true, code: "MERGED", affectedCommitIds: ["C4"] });
     const next = merged.nextState;
-    expect(next.commits.C4).toEqual({ id: "C4", parentId: "C3", mergeParentId: "C2", message: "Merge งานจาก GitHub (ใช้ไฟล์ของเรา)", snapshot: SA });
-    expect(next.machines.A).toEqual(machineRepo(SA, SA, "C4", "C2", ["C1", "C2", "C3", "C4"]));
+    expect(next.commits.C4).toEqual({ id: "C4", parentId: "C3", mergeParentId: "C2", message: "Merge origin/main", snapshot: fixed });
+    expect(next.machines.A).toEqual(machineRepo(fixed, fixed, "C4", "C2", ["C1", "C2", "C3", "C4"]));
+    expect("merging" in next.machines.A).toBe(false);
     expect(aheadBehind(next, "A")).toEqual({ ahead: 2, behind: 0 });
-    expect(isAncestor("C2", "C4", next.machines.A.knownCommitIds, next.commits)).toBe(true);
-    expect(ancestorsOf("C4", next.machines.A.knownCommitIds, next.commits)).toEqual(["C1", "C2", "C3", "C4"]);
-    expect(describeGitTransition(merge("A", "ours"), merged)).toBe("สร้าง C4 รวมประวัติกับ C2 ของ GitHub แล้ว (เก็บไฟล์ของเรา) กด Push ได้เลย");
+    expect(describeGitTransition(commitAction("A", "x"), merged)).toContain("กด Push ได้เลย");
 
     const pushed = run(next, push("A"));
     expect(pushed).toMatchObject({ code: "PUSHED", transfer: { from: "A", to: "remote", commitIds: ["C3", "C4"] } });
-    expect(pushed.nextState.remote).toEqual({ mainHead: "C4", knownCommitIds: ["C1", "C2", "C3", "C4"] });
-
-    // B fast-forwards to the merge commit and receives A's side too.
-    const pulled = run(pushed.nextState, pull("B"));
-    expect(pulled).toMatchObject({ code: "PULLED", transfer: { from: "remote", to: "B", commitIds: ["C3", "C4"] } });
-    expect(pulled.nextState.machines.B).toEqual(machineRepo(SA, SA, "C4", "C4", ["C1", "C2", "C3", "C4"]));
+    const pulledB = run(pushed.nextState, pull("B"));
+    expect(pulledB).toMatchObject({ code: "PULLED" });
+    expect(pulledB.nextState.machines.B).toEqual(machineRepo(fixed, fixed, "C4", "C4", ["C1", "C2", "C3", "C4"]));
   });
 
-  it("can keep GitHub's file instead", () => {
-    const merged = run(divergedA(), merge("A", "theirs"));
-    expect(merged.nextState.commits.C4).toMatchObject({ parentId: "C3", mergeParentId: "C2", message: "Merge งานจาก GitHub (ใช้ไฟล์จาก GitHub)", snapshot: S2 });
-    expect(merged.nextState.machines.A).toEqual(machineRepo(S2, S2, "C4", "C2", ["C1", "C2", "C3", "C4"]));
-    expect(describeGitTransition(merge("A", "theirs"), merged)).toContain("เก็บไฟล์จาก GitHub");
+  it("the quick buttons only fill the file; the learner still has to Add + Commit (and can resolve to ours or theirs)", () => {
+    let ours = run(conflictedA(), take("A", "ours"));
+    expect(ours).toMatchObject({ outcome: "success", code: "MERGE_TAKEN", changed: true });
+    expect(ours.nextState.machines.A).toMatchObject({ working: SA, index: MARKED, mainHead: "C3" });
+    expect(describeGitTransition(take("A", "ours"), ours)).toContain("ของเรา");
+    expect(run(ours.nextState, take("A", "ours"))).toMatchObject({ outcome: "noop", code: "NO_CHANGE" });
+    ours = { ...ours, nextState: step(ours.nextState, stage("A"), "STAGED") };
+    // A merge commit may equal HEAD's file — it is still the merge.
+    const keptOurs = run(ours.nextState, commitAction("A", "Merge origin/main"));
+    expect(keptOurs).toMatchObject({ code: "MERGED" });
+    expect(keptOurs.nextState.commits.C4).toMatchObject({ parentId: "C3", mergeParentId: "C2", snapshot: SA });
+
+    let theirs = step(conflictedA(), take("A", "theirs"), "MERGE_TAKEN");
+    expect(describeGitTransition(take("A", "theirs"), run(conflictedA(), take("A", "theirs")))).toContain("อีกฝั่ง");
+    theirs = step(theirs, stage("A"), "STAGED");
+    theirs = step(theirs, commitAction("A", "Merge origin/main"), "MERGED");
+    expect(theirs.commits.C4).toMatchObject({ parentId: "C3", mergeParentId: "C2", snapshot: S2 });
+    expect(run(afterGit01Step5(), take("A", "ours"))).toMatchObject({ outcome: "rejected", code: "NOT_MERGING" });
   });
 
-  it("refuses to merge when not diverged, with unsaved work, or before any fetch", () => {
-    expect(run(afterGit01Step5(), merge("B", "ours"))).toMatchObject({ outcome: "noop", code: "NO_CHANGE", changed: false });
-    // Behind only: Pull fast-forwards that, Merge has nothing to do.
-    expect(run(afterGit01Step5(), merge("A", "ours"))).toMatchObject({ outcome: "noop", code: "NO_CHANGE" });
-    const dirty = step(divergedA(), edit("A", SB), "EDITED");
-    const blocked = run(dirty, merge("A", "ours"));
-    expect(blocked).toMatchObject({ outcome: "rejected", code: "DIRTY_WORKTREE", changed: false });
-    expect(describeGitTransition(merge("A", "ours"), blocked)).toBe("Commit งานที่ค้างก่อน Merge");
-    const neverFetched = editStageCommit(createInitialGitState(), "A", S1, "only local");
-    expect(run(neverFetched, merge("A", "ours"))).toMatchObject({ outcome: "rejected", code: "REMOTE_EMPTY" });
-    expect(run(createInitialGitState(), merge("B", "ours"))).toMatchObject({ outcome: "rejected", code: "NOT_INITIALIZED" });
+  it("abort restores the pre-merge file and Staging and leaves merging; Pull can start the merge again", () => {
+    const state = conflictedA();
+    const aborted = run(state, abort("A"));
+    expect(aborted).toMatchObject({ outcome: "success", changed: true, code: "MERGE_ABORTED" });
+    expect(aborted.nextState.machines.A).toEqual(machineRepo(SA, SA, "C3", "C2", ["C1", "C2", "C3"]));
+    expect(run(aborted.nextState, abort("A"))).toMatchObject({ outcome: "rejected", code: "NOT_MERGING" });
+    expect(run(aborted.nextState, pull("A"))).toMatchObject({ code: "MERGE_CONFLICT" });
+    expect(describeGitTransition(abort("A"), aborted)).toContain("ยกเลิก merge");
+    // edits made while merging are dropped too
+    const edited = step(state, edit("A", SB), "EDITED");
+    expect(run(edited, abort("A")).nextState.machines.A).toEqual(machineRepo(SA, SA, "C3", "C2", ["C1", "C2", "C3"]));
   });
 
-  it("uses GitHub's version: drops local commits and edits, keeps the fetched history", () => {
-    const dirty = step(divergedA(), edit("A", SB), "EDITED");
-    const reset = run(dirty, resetToRemote("A"));
-    expect(reset).toMatchObject({ outcome: "success", changed: true, code: "RESET_TO_REMOTE", affectedCommitIds: ["C2"], transfer: null });
-    expect(reset.nextState.machines.A).toEqual(machineRepo(S2, S2, "C2", "C2", ["C1", "C2"]));
-    expect(reset.nextState.commits.C3).toBeDefined(); // still in the registry; Undo shows it again
-    expect(aheadBehind(reset.nextState, "A")).toEqual({ ahead: 0, behind: 0 });
-    expect(describeGitTransition(resetToRemote("A"), reset)).toBe("เครื่อง A ทิ้งงานของตัวเองแล้ว ใช้เวอร์ชันของ GitHub (main = C2) ย้อนกลับด้วย Undo ได้");
-    expect(run(reset.nextState, resetToRemote("A"))).toMatchObject({ outcome: "noop", code: "NO_CHANGE" });
+  it("while merging, Push / Pull / switch / new branch / another merge are refused with a clear message; editing still works", () => {
+    const state = conflictedA();
+    for (const action of [push("A"), pull("A"), switchTo("main"), create("other"), mergeBranch("main")]) {
+      const refused = run(state, action);
+      expect(refused, action.type).toMatchObject({ outcome: "rejected", changed: false, code: "MERGE_IN_PROGRESS" });
+      expect(describeGitTransition(action, refused), action.type).toContain("กำลัง merge");
+    }
+    expect(run(state, edit("A", SB))).toMatchObject({ code: "EDITED" });
+  });
+
+  it("Git joins changes on different lines by itself: a merge commit with two parents on Pull", () => {
+    const base = F("a\nb\nc\nd\ne\n");
+    let state = editStageCommit(createInitialGitState(), "A", base, "base");
+    state = step(step(state, push("A"), "PUSHED"), clone, "CLONED");
+    state = editStageCommit(state, "B", F("A\nb\nc\nd\ne\n"), "B first line");
+    state = step(state, push("B"), "PUSHED");
+    state = editStageCommit(state, "A", F("a\nb\nc\nd\nE\n"), "A last line"); // C3
+    const pulled = run(state, pull("A"));
+    expect(pulled).toMatchObject({ outcome: "success", changed: true, code: "AUTO_MERGED", affectedCommitIds: ["C2", "C4"] });
+    const next = pulled.nextState;
+    expect(next.commits.C4).toEqual({ id: "C4", parentId: "C3", mergeParentId: "C2", message: "Merge origin/main", snapshot: F("A\nb\nc\nd\nE\n") });
+    expect(next.machines.A).toEqual(machineRepo(F("A\nb\nc\nd\nE\n"), F("A\nb\nc\nd\nE\n"), "C4", "C2", ["C1", "C2", "C3", "C4"]));
+    expect(describeGitTransition(pull("A"), pulled)).toContain("Git รวมให้เอง: แก้คนละบรรทัด");
+    expect(describeGitTransition(pull("A"), pulled, "gitlab")).toContain("ของ GitLab");
+    expect(run(next, push("A"))).toMatchObject({ code: "PUSHED" });
+    // adjacent lines are a conflict (like Git), identical edits are not
+    let adjacent = editStageCommit(createInitialGitState(), "A", base, "base");
+    adjacent = step(step(adjacent, push("A"), "PUSHED"), clone, "CLONED");
+    adjacent = step(editStageCommit(adjacent, "B", F("A\nb\nc\nd\ne\n"), "b1"), push("B"), "PUSHED");
+    adjacent = editStageCommit(adjacent, "A", F("a\nB\nc\nd\ne\n"), "a2");
+    expect(run(adjacent, pull("A"))).toMatchObject({ code: "MERGE_CONFLICT" });
+    let same = editStageCommit(createInitialGitState(), "A", base, "base");
+    same = step(step(same, push("A"), "PUSHED"), clone, "CLONED");
+    same = step(editStageCommit(same, "B", F("a\nb\nX\nd\ne\n"), "b"), push("B"), "PUSHED");
+    same = editStageCommit(same, "A", F("a\nb\nX\nd\ne\n"), "a");
+    expect(run(same, pull("A"))).toMatchObject({ code: "AUTO_MERGED" });
+  });
+
+  it("a dirty tree still blocks Pull before the fetch, and a full commit list stops a merge without losing the fetch", () => {
+    const dirty = step(editStageCommit(afterGit01Step5(), "A", SA, "A change"), edit("A", SB), "EDITED");
+    expect(run(dirty, pull("A"))).toMatchObject({ outcome: "rejected", code: "DIRTY_WORKTREE", changed: false });
+    const diverged = editStageCommit(afterGit01Step5(), "A", SA, "A change");
+    const full: GitSimulationState = { ...diverged, commits: { ...diverged.commits, ...filler(50, 197) }, nextCommitNumber: 300 };
+    const limited = run(full, pull("A"));
+    expect(limited).toMatchObject({ outcome: "rejected", changed: true, code: "COMMIT_LIMIT" });
+    expect(limited.nextState.machines.A).toMatchObject({ originMainHead: "C2", knownCommitIds: ["C1", "C2", "C3"] });
+    expect("merging" in limited.nextState.machines.A).toBe(false);
+  });
+
+  it("uses GitHub's version: drops local commits, edits and an unfinished merge, keeps the fetched history", () => {
+    for (const from of [step(conflictedA(), edit("A", SB), "EDITED"), step(step(editStageCommit(afterGit01Step5(), "A", SA, "A change"), pull("A"), "MERGE_CONFLICT"), edit("A", SB), "EDITED")]) {
+      const reset = run(from, resetToRemote("A"));
+      expect(reset).toMatchObject({ outcome: "success", changed: true, code: "RESET_TO_REMOTE", affectedCommitIds: ["C2"], transfer: null });
+      expect(reset.nextState.machines.A).toEqual(machineRepo(S2, S2, "C2", "C2", ["C1", "C2"]));
+      expect(reset.nextState.commits.C3).toBeDefined(); // still in the registry; Undo shows it again
+      expect(aheadBehind(reset.nextState, "A")).toEqual({ ahead: 0, behind: 0 });
+      expect(describeGitTransition(resetToRemote("A"), reset)).toBe("เครื่อง A ทิ้งงานของตัวเองแล้ว ใช้เวอร์ชันของ GitHub (main = C2) ย้อนกลับด้วย Undo ได้");
+      expect(describeGitTransition(resetToRemote("A"), reset, "gitlab")).toContain("ใช้เวอร์ชันของ GitLab");
+      expect(run(reset.nextState, resetToRemote("A"))).toMatchObject({ outcome: "noop", code: "NO_CHANGE" });
+    }
     expect(run(editStageCommit(createInitialGitState(), "A", S1, "x"), resetToRemote("A"))).toMatchObject({ outcome: "rejected", code: "REMOTE_EMPTY" });
   });
 });
@@ -683,7 +771,7 @@ describe("GIT-07 — resolve a diverged history", () => {
 
 const switchTo = (name: string): GitAction => ({ type: "branchSwitch", machine: "A", name });
 const create = (name: string): GitAction => ({ type: "branchCreate", machine: "A", name });
-const mergeBranch = (name: string, keep?: "ours" | "theirs"): GitAction => ({ type: "branchMerge", machine: "A", name, ...(keep ? { keep } : {}) });
+const mergeBranch = (name: string): GitAction => ({ type: "branchMerge", machine: "A", name });
 const deleteBranch = (name: string): GitAction => ({ type: "branchDelete", machine: "A", name });
 const F = (content: string): FileSnapshot => ({ name: "index.html", content });
 const repoA = (state: GitSimulationState) => state.machines.A;
@@ -764,7 +852,7 @@ describe("GIT-09 — branches", () => {
   it("says Already up to date when the other branch is an ancestor of the current one", () => {
     const state = step(onFeature(), switchTo("main"), "SWITCHED");
     const ahead = editStageCommit(state, "A", F("main moved on\n"), "main moved on"); // C3; feature (C2) is not an ancestor
-    expect(run(ahead, mergeBranch("feature"))).toMatchObject({ outcome: "rejected", code: "MERGE_CONFLICT" });
+    expect(run(ahead, mergeBranch("feature"))).toMatchObject({ outcome: "success", code: "MERGE_CONFLICT" }); // same line changed on both sides
     const merged = step(state, mergeBranch("feature"), "FAST_FORWARDED");
     const noop = run(merged, mergeBranch("feature"));
     expect(noop).toMatchObject({ outcome: "noop", changed: false });
@@ -791,28 +879,49 @@ describe("GIT-09 — branches", () => {
     expect(describeGitTransition(mergeBranch("feature"), merged)).toContain("merge commit");
   });
 
-  it("conflict: both sides changed the file differently, so ours/theirs is required and both tips become the parents", () => {
+  it("conflict: the same line changed on both sides stops the merge with markers; resolving + Commit gives the two-parent merge", () => {
     let state = step(onFeature(), switchTo("main"), "SWITCHED");
     state = editStageCommit(state, "A", F("main work\n"), "main work"); // C3
     expect(planBranchMerge(state, "A", "feature")).toBe("conflict");
-    const refused = run(state, mergeBranch("feature"));
-    expect(refused).toMatchObject({ outcome: "rejected", changed: false, code: "MERGE_CONFLICT" });
-    expect(describeGitTransition(mergeBranch("feature"), refused)).toContain("ชนกัน");
+    const started = run(state, mergeBranch("feature"));
+    expect(started).toMatchObject({ outcome: "success", changed: true, code: "MERGE_CONFLICT", affectedCommitIds: [] });
+    const marked = F("<<<<<<< HEAD (ของเรา)\nmain work\n=======\nfeature work\n>>>>>>> feature\n");
+    expect(repoA(started.nextState)).toMatchObject({ mainHead: "C3", working: marked, index: marked, merging: { theirs: "C2", label: "feature" } });
+    expect(Object.keys(started.nextState.commits)).toEqual(["C1", "C2", "C3"]);
+    expect(describeGitTransition(mergeBranch("feature"), started)).toContain("ไฟล์ชนกัน");
 
-    const ours = run(state, mergeBranch("feature", "ours"));
-    expect(ours).toMatchObject({ outcome: "success", code: "BRANCH_MERGED" });
-    expect(ours.nextState.commits.C4).toMatchObject({ parentId: "C3", mergeParentId: "C2", snapshot: F("main work\n") });
-    expect(repoA(ours.nextState)).toMatchObject({ mainHead: "C4", working: F("main work\n"), index: F("main work\n") });
+    expect(run(started.nextState, commitAction("A", "Merge branch 'feature'"))).toMatchObject({ outcome: "rejected", code: "UNRESOLVED_CONFLICT" });
+    let resolved = step(started.nextState, edit("A", F("main work\nfeature work\n")), "EDITED");
+    resolved = step(resolved, stage("A"), "STAGED");
+    const done = run(resolved, commitAction("A", "Merge branch 'feature'"));
+    expect(done).toMatchObject({ outcome: "success", code: "MERGED", affectedCommitIds: ["C4"] });
+    expect(done.nextState.commits.C4).toEqual({ id: "C4", parentId: "C3", mergeParentId: "C2", message: "Merge branch 'feature'", snapshot: F("main work\nfeature work\n") });
+    expect(repoA(done.nextState)).toMatchObject({ mainHead: "C4", working: F("main work\nfeature work\n"), branches: { feature: "C2" } });
+    expect("merging" in repoA(done.nextState)).toBe(false);
+    expect(describeGitTransition(commitAction("A", "x"), done)).not.toContain("กด Push");
 
-    const theirs = run(state, mergeBranch("feature", "theirs"));
-    expect(theirs.nextState.commits.C4).toMatchObject({ parentId: "C3", mergeParentId: "C2", snapshot: F("feature work\n") });
-    expect(repoA(theirs.nextState).working).toEqual(F("feature work\n"));
-    expect(describeGitTransition(mergeBranch("feature", "theirs"), theirs)).toContain("ของ feature");
+    // abort goes back to main's own file
+    const aborted = run(started.nextState, { type: "mergeAbort", machine: "A" });
+    expect(repoA(aborted.nextState)).toMatchObject({ mainHead: "C3", working: F("main work\n"), index: F("main work\n") });
+    expect("merging" in repoA(aborted.nextState)).toBe(false);
 
-    // both sides converged on the same file: nothing to choose
+    // both sides converged on the same file: nothing to resolve
     const same = editStageCommit(step(onFeature(), switchTo("main"), "SWITCHED"), "A", F("feature work\n"), "same change");
     expect(planBranchMerge(same, "A", "feature")).toBe("merge");
     expect(run(same, mergeBranch("feature"))).toMatchObject({ outcome: "success", code: "BRANCH_MERGED" });
+  });
+
+  it("different lines on the two branches are merged by Git itself", () => {
+    const base = "one\ntwo\nthree\nfour\nfive\n";
+    let state = editStageCommit(createInitialGitState(), "A", F(base), "base");
+    state = step(state, create("feature"), "BRANCH_CREATED");
+    state = editStageCommit(state, "A", F("ONE\ntwo\nthree\nfour\nfive\n"), "feature top");
+    state = editStageCommit(step(state, switchTo("main"), "SWITCHED"), "A", F("one\ntwo\nthree\nfour\nFIVE\n"), "main bottom");
+    expect(planBranchMerge(state, "A", "feature")).toBe("merge");
+    const merged = run(state, mergeBranch("feature"));
+    expect(merged).toMatchObject({ outcome: "success", code: "BRANCH_MERGED", affectedCommitIds: ["C4"] });
+    expect(merged.nextState.commits.C4).toEqual({ id: "C4", parentId: "C3", mergeParentId: "C2", message: "Merge branch 'feature'", snapshot: F("ONE\ntwo\nthree\nfour\nFIVE\n") });
+    expect(describeGitTransition(mergeBranch("feature"), merged)).toContain("Git รวมให้เอง: แก้คนละบรรทัด");
   });
 
   it("refuses to merge from a dirty tree and when the branch is missing, and respects the commit limit", () => {
@@ -822,7 +931,7 @@ describe("GIT-09 — branches", () => {
     const diverged = editStageCommit(state, "A", F("main work\n"), "main work");
     const full: GitSimulationState = { ...diverged, commits: { ...diverged.commits, ...filler(50, 197) }, nextCommitNumber: 300 };
     expect(Object.keys(full.commits)).toHaveLength(200);
-    expect(run(full, mergeBranch("feature", "ours"))).toMatchObject({ outcome: "rejected", code: "COMMIT_LIMIT" });
+    expect(run(full, mergeBranch("feature"))).toMatchObject({ outcome: "rejected", code: "COMMIT_LIMIT" });
   });
 
   it("the commit limit also applies to commits on a branch", () => {
@@ -860,7 +969,7 @@ describe("GIT-09 — branches", () => {
 
   it("Push, Pull, Resolve and Reset-to-GitHub work on main only: off main they are refused with a clear message", () => {
     const state = onFeature();
-    for (const action of [push("A"), pull("A"), { type: "merge", machine: "A", keep: "ours" } as GitAction, { type: "resetToRemote", machine: "A" } as GitAction]) {
+    for (const action of [push("A"), pull("A"), { type: "resetToRemote", machine: "A" } as GitAction]) {
       const refused = run(state, action);
       expect(refused, action.type).toMatchObject({ outcome: "rejected", changed: false, code: "NOT_ON_MAIN" });
       expect(describeGitTransition(action, refused)).toContain("main");
@@ -904,6 +1013,255 @@ describe("GIT-09 — branch selectors and schema", () => {
     expect(parse(withA({ branches: { "bad name": "C1" } }))).toThrow();
     expect(parse(withA({ branches: { feature: "C9" } }))).toThrow();
     expect(parse(withA({ branches: Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`b${i}`, "C1"])) }))).toThrow();
+  });
+
+  it("the document schema accepts a merging state and the host switch, rejects broken ones, and old documents (neither field) still load", () => {
+    let conflicted = step(onFeature(), switchTo("main"), "SWITCHED");
+    conflicted = step(editStageCommit(conflicted, "A", F("main work\n"), "main work"), mergeBranch("feature"), "MERGE_CONFLICT");
+    expect(repoA(conflicted).merging).toEqual({ theirs: "C2", label: "feature" });
+    const parse = (state: GitSimulationState, extra: Record<string, unknown> = {}) => {
+      const content = createProjectContent("บทเรียน Git");
+      content.document.slides[0].nodes.push({ id: "0c8b0f3e-6f4a-4c1e-8a57-5b0f7c2d9e10", type: "git-simulator", x: 0, y: 0, rotation: 0, opacity: 1, locked: false, scale: 1, state, ...extra } as GitSimulatorNode);
+      return () => parseProjectContent(JSON.parse(JSON.stringify(content)));
+    };
+    expect(parse(conflicted)()).toBeDefined();
+    expect(parse(conflicted, { host: "gitlab" })()).toBeDefined();
+    expect(parse(onFeature(), { host: "github" })()).toBeDefined();
+    expect(parse(onFeature())()).toBeDefined(); // a document from before the switch
+    const node = (extra: Record<string, unknown>) => parse(onFeature(), extra)().document.slides[0].nodes.find((item) => item.type === "git-simulator") as GitSimulatorNode;
+    expect(node({ host: "gitlab" }).host).toBe("gitlab");
+    expect(node({}).host).toBeUndefined();
+    expect(parse(onFeature(), { host: "bitbucket" })).toThrow();
+    const withMerging = (merging: unknown) => parse({ ...conflicted, machines: { ...conflicted.machines, A: { ...repoA(conflicted), merging } as MachineRepository } });
+    expect(withMerging({ theirs: "C2", label: "feature" })).not.toThrow();
+    expect(withMerging({ theirs: "C9", label: "feature" })).toThrow(); // a commit this machine does not know
+    expect(withMerging({ theirs: "C2", label: "bad label!" })).toThrow();
+    expect(withMerging({ theirs: "C2" })).toThrow();
+    expect(withMerging({ theirs: "C2", label: "feature", extra: 1 })).toThrow();
+    expect(parse({ ...conflicted, machines: { ...conflicted.machines, B: { ...conflicted.machines.B, merging: { theirs: "C2", label: "x" } } } })).toThrow(); // B is not even cloned
+  });
+});
+
+describe("GitHub ↔ GitLab: every message names the chosen site", () => {
+  it("no result message mentions GitHub when the host is GitLab (and the default is GitHub)", () => {
+    const messages: string[] = [];
+    const sample = (state: GitSimulationState, action: GitAction) => {
+      const transition = applyGitAction(state, action);
+      messages.push(describeGitTransition(action, transition, "gitlab"));
+      expect(describeGitTransition(action, transition)).toBe(describeGitTransition(action, transition, "github"));
+      return transition.nextState;
+    };
+    let state = sample(createInitialGitState(), clone); // REMOTE_EMPTY
+    sample(state, pull("A")); // REMOTE_EMPTY
+    state = sample(editStageCommit(createInitialGitState(), "A", S1, "first"), push("A"));
+    sample(state, push("A")); // NO_CHANGE
+    sample(state, clone);
+    sample(state, clone); // CLONED
+    state = step(step(state, clone, "CLONED"), edit("B", S2), "EDITED");
+    state = sample(step(step(state, stage("B"), "STAGED"), commitAction("B", "b"), "COMMITTED"), push("B"));
+    sample(editStageCommit(state, "A", SA, "a"), push("A")); // NON_FAST_FORWARD
+    sample(state, pull("A")); // PULLED
+    sample(editStageCommit(state, "A", SA, "a"), pull("A")); // MERGE_CONFLICT
+    sample(createInitialGitState(), pull("B")); // NOT_INITIALIZED
+    sample(state, { type: "resetToRemote", machine: "A" });
+    expect(messages.length).toBeGreaterThan(8);
+    for (const message of messages) expect(message, message).not.toContain("GitHub");
+    expect(messages.some((message) => message.includes("GitLab"))).toBe(true);
+    // planted omission: the same sample WITH the default host does name GitHub, so the check above can fail
+    expect(describeGitTransition(push("A"), applyGitAction(state, push("A")))).toContain("GitHub");
+  });
+});
+
+describe("GIT-13 — Merge Request lesson: protected main, branch push, open / approve / merge", () => {
+  const pushR = (machine: "A" | "B"): GitAction => ({ type: "push", machine, review: true });
+  const pullR = (machine: "A" | "B"): GitAction => ({ type: "pull", machine, review: true });
+  const open = (machine: "A" | "B"): GitAction => ({ type: "mrOpen", machine });
+  const approve = (machine: "A" | "B", id = 1): GitAction => ({ type: "mrApprove", machine, id });
+  const mergeMr = (machine: "A" | "B", id = 1): GitAction => ({ type: "mrMerge", machine, id });
+  const base = "one\ntwo\nthree\nfour\nfive\n";
+  const file = (content: string): FileSnapshot => ({ name: "app.txt", content });
+
+  /** A pushed C1 (the project's start) and B cloned it. */
+  function started(): GitSimulationState {
+    let state = editStageCommit(createInitialGitState(), "A", file(base), "start");
+    state = step(state, pushR("A"), "PUSHED");
+    return step(state, clone, "CLONED");
+  }
+  /** A: branch `name` with one commit changing `content`, pushed; HEAD stays on that branch. */
+  function branchPushed(from: GitSimulationState, name: string, content: string): GitSimulationState {
+    let state = step(from, { type: "branchCreate", machine: "A", name }, "BRANCH_CREATED");
+    state = editStageCommit(state, "A", file(content), `${name} work`);
+    return step(state, pushR("A"), "BRANCH_PUSHED");
+  }
+
+  it("main is protected in the review lesson only: a direct push is refused; the other steps still push main", () => {
+    const state = editStageCommit(started(), "A", file("ONE\ntwo\nthree\nfour\nfive\n"), "direct");
+    const refused = run(state, pushR("A"));
+    expect(refused).toMatchObject({ outcome: "rejected", changed: false, code: "MAIN_PROTECTED" });
+    expect(describeGitTransition(pushR("A"), refused)).toBe("main ถูกป้องกัน: ต้องแตก branch แล้วเปิด Pull Request (GitHub ไม่ให้ Push เข้า main ตรง ๆ)");
+    expect(describeGitTransition(pushR("A"), refused, "gitlab")).toContain("เปิด Merge Request");
+    expect(run(state, push("A"))).toMatchObject({ outcome: "success", code: "PUSHED" }); // steps 2–4: unchanged behaviour
+    expect(run(editStageCommit(createInitialGitState(), "A", file(base), "first"), pushR("A"))).toMatchObject({ code: "PUSHED" }); // the empty remote gets its first main
+  });
+
+  it("a push from a branch sends that branch (and its commits) and the remote keeps it next to main; steps 2–4 still refuse it", () => {
+    const state = branchPushed(started(), "feature", "ONE\ntwo\nthree\nfour\nfive\n");
+    expect(state.remote).toEqual({ mainHead: "C1", knownCommitIds: ["C1", "C2"], branches: { feature: "C2" } });
+    const onBranch = step(started(), { type: "branchCreate", machine: "A", name: "feature" }, "BRANCH_CREATED");
+    const committed = editStageCommit(onBranch, "A", file("ONE\ntwo\nthree\nfour\nfive\n"), "work");
+    const sent = run(committed, pushR("A"));
+    expect(sent).toMatchObject({ outcome: "success", code: "BRANCH_PUSHED", affectedCommitIds: ["C2"], transfer: { from: "A", to: "remote", commitIds: ["C2"] } });
+    expect(describeGitTransition(pushR("A"), sent)).toContain("ส่ง branch feature ขึ้น GitHub แล้ว");
+    expect(run(state, pushR("A"))).toMatchObject({ outcome: "noop", code: "NO_CHANGE" });
+    expect(run(committed, push("A"))).toMatchObject({ outcome: "rejected", code: "NOT_ON_MAIN" });
+    // a second commit goes as a fast-forward of the remote branch; a rewritten branch is refused
+    const more = editStageCommit(state, "A", file("ONE\nTWO\nthree\nfour\nfive\n"), "more");
+    expect(run(more, pushR("A")).nextState.remote.branches).toEqual({ feature: "C3" });
+    const empty = step(editStageCommit(createInitialGitState(), "A", file(base), "x"), { type: "branchCreate", machine: "A", name: "f" }, "BRANCH_CREATED");
+    expect(run(empty, pushR("A"))).toMatchObject({ outcome: "rejected", code: "REMOTE_EMPTY" });
+  });
+
+  it("open: needs a pushed branch with something new, one open request per branch", () => {
+    expect(run(started(), open("A"))).toMatchObject({ outcome: "rejected", code: "MR_NEED_BRANCH" });
+    const local = editStageCommit(step(started(), { type: "branchCreate", machine: "A", name: "feature" }, "BRANCH_CREATED"), "A", file("ONE\ntwo\nthree\nfour\nfive\n"), "ONE");
+    expect(run(local, open("A"))).toMatchObject({ outcome: "rejected", code: "MR_NOT_PUSHED" });
+    const nothing = step(step(started(), { type: "branchCreate", machine: "A", name: "idle" }, "BRANCH_CREATED"), pushR("A"), "BRANCH_PUSHED");
+    expect(run(nothing, open("A"))).toMatchObject({ outcome: "rejected", code: "MR_NOTHING_NEW" });
+    const pushed = branchPushed(started(), "feature", "ONE\ntwo\nthree\nfour\nfive\n");
+    const opened = run(pushed, open("A"));
+    expect(opened).toMatchObject({ outcome: "success", code: "MR_OPENED" });
+    expect(opened.nextState.remote.requests).toEqual([{ id: 1, source: "feature", target: "main", title: "feature work", status: "open", author: "A", approvedBy: [] }]);
+    expect(describeGitTransition(open("A"), opened)).toBe("เปิด Pull Request !1: feature → main แล้ว รอเพื่อนร่วมทีมดูการเปลี่ยนแปลงและอนุมัติ (Approve)");
+    expect(describeGitTransition(open("A"), opened, "gitlab")).toContain("เปิด Merge Request !1");
+    expect(run(opened.nextState, open("A"))).toMatchObject({ outcome: "rejected", code: "MR_EXISTS" });
+    expect(requestInfo(opened.nextState, currentRequest(opened.nextState)!)).toEqual({ approved: false, conflict: false, fastForward: true, mergeable: false });
+  });
+
+  it("approve: the author cannot approve their own request; the teammate can, once", () => {
+    const state = step(branchPushed(started(), "feature", "ONE\ntwo\nthree\nfour\nfive\n"), open("A"), "MR_OPENED");
+    const self = run(state, approve("A"));
+    expect(self).toMatchObject({ outcome: "rejected", changed: false, code: "MR_SELF_APPROVE" });
+    expect(describeGitTransition(approve("A"), self)).toContain("อนุมัติ Pull Request ของตัวเองไม่ได้");
+    const approved = run(state, approve("B"));
+    expect(approved).toMatchObject({ outcome: "success", code: "MR_APPROVED" });
+    expect(approved.nextState.remote.requests![0].approvedBy).toEqual(["B"]);
+    expect(run(approved.nextState, approve("B"))).toMatchObject({ outcome: "noop", code: "NO_CHANGE" });
+    expect(run(state, approve("B", 9))).toMatchObject({ outcome: "rejected", code: "MR_NOT_FOUND" });
+    expect(run(createInitialGitState(), approve("B"))).toMatchObject({ code: "NOT_INITIALIZED" });
+  });
+
+  it("merge: refused until approved; then a fast-forward of main, the request is merged and the branch is deleted on the remote", () => {
+    const opened = step(branchPushed(started(), "feature", "ONE\ntwo\nthree\nfour\nfive\n"), open("A"), "MR_OPENED");
+    expect(run(opened, mergeMr("A"))).toMatchObject({ outcome: "rejected", code: "MR_NOT_APPROVED" });
+    const ready = step(opened, approve("B"), "MR_APPROVED");
+    expect(requestInfo(ready, ready.remote.requests![0])).toMatchObject({ mergeable: true, fastForward: true });
+    const merged = run(ready, mergeMr("A"));
+    expect(merged).toMatchObject({ outcome: "success", code: "MR_FAST_FORWARDED", affectedCommitIds: ["C2"] });
+    expect(merged.nextState.remote).toEqual({ mainHead: "C2", knownCommitIds: ["C1", "C2"], requests: [{ id: 1, source: "feature", target: "main", title: "feature work", status: "merged", author: "A", approvedBy: ["B"] }] });
+    expect(describeGitTransition(mergeMr("A"), merged)).toContain("fast-forward");
+    expect(describeGitTransition(mergeMr("A"), merged)).toContain("ลบ branch feature บน GitHub");
+    expect(run(merged.nextState, mergeMr("A"))).toMatchObject({ outcome: "rejected", code: "MR_NOT_FOUND" });
+    // both machines then git switch main + git pull
+    const pulledB = run(merged.nextState, pull("B"));
+    expect(pulledB).toMatchObject({ code: "PULLED" });
+    const onMain = step(merged.nextState, { type: "branchSwitch", machine: "A", name: "main" }, "SWITCHED");
+    expect(run(onMain, pull("A"))).toMatchObject({ code: "PULLED" });
+  });
+
+  it("merge after main moved on other lines: Git makes a merge commit on the remote", () => {
+    let state = branchPushed(started(), "feature", "ONE\ntwo\nthree\nfour\nfive\n"); // C2
+    state = step(state, { type: "branchSwitch", machine: "A", name: "main" }, "SWITCHED");
+    state = branchPushed(state, "other", "one\ntwo\nthree\nfour\nFIVE\n"); // C3
+    state = step(state, { type: "branchSwitch", machine: "A", name: "feature" }, "SWITCHED");
+    state = step(state, open("A"), "MR_OPENED");
+    state = step(state, { type: "branchSwitch", machine: "A", name: "other" }, "SWITCHED");
+    state = step(state, open("A"), "MR_OPENED");
+    state = step(step(state, approve("B", 1), "MR_APPROVED"), approve("B", 2), "MR_APPROVED");
+    state = step(state, mergeMr("B", 1), "MR_FAST_FORWARDED");
+    const merged = run(state, mergeMr("B", 2));
+    expect(merged).toMatchObject({ outcome: "success", code: "MR_MERGED", affectedCommitIds: ["C4"] });
+    expect(merged.nextState.commits.C4).toEqual({ id: "C4", parentId: "C2", mergeParentId: "C3", message: "Merge branch 'other' (!2)", snapshot: file("ONE\ntwo\nthree\nfour\nFIVE\n") });
+    expect(merged.nextState.remote.mainHead).toBe("C4");
+    expect(merged.nextState.remote.knownCommitIds).toEqual(["C1", "C2", "C3", "C4"]);
+    expect(merged.nextState.remote.branches).toBeUndefined();
+    expect(describeGitTransition(mergeMr("B", 2), merged)).toContain("สร้าง merge commit C4");
+    expect(merged.nextState.nextCommitNumber).toBe(5);
+  });
+
+  it("merge conflict is refused, and the author's fix path (pull main into the branch, resolve, push) makes it mergeable", () => {
+    let state = branchPushed(started(), "feature", "ONE\ntwo\nthree\nfour\nfive\n"); // C2 changes line 1
+    state = step(state, { type: "branchSwitch", machine: "A", name: "main" }, "SWITCHED");
+    state = branchPushed(state, "other", "1st\ntwo\nthree\nfour\nfive\n"); // C3 changes line 1 differently
+    state = step(state, open("A"), "MR_OPENED"); // !1 other
+    state = step(state, { type: "branchSwitch", machine: "A", name: "feature" }, "SWITCHED");
+    state = step(state, open("A"), "MR_OPENED"); // !2 feature
+    state = step(step(state, approve("B", 1), "MR_APPROVED"), approve("B", 2), "MR_APPROVED");
+    state = step(state, mergeMr("B", 1), "MR_FAST_FORWARDED"); // main = C3
+
+    expect(requestInfo(state, state.remote.requests![1])).toMatchObject({ approved: true, conflict: true, mergeable: false });
+    const refused = run(state, mergeMr("B", 2));
+    expect(refused).toMatchObject({ outcome: "rejected", changed: false, code: "MR_CONFLICT" });
+    expect(describeGitTransition(mergeMr("B", 2), refused)).toBe("ชนกับ main: ดึง main มา merge ใน branch แก้ conflict แล้ว Push ใหม่ (git switch <branch> แล้ว git pull origin main)");
+
+    // A is on feature: git pull origin main (review) merges main into the branch and stops on the conflict
+    const pulled = run(state, pullR("A"));
+    expect(pulled).toMatchObject({ outcome: "success", code: "MERGE_CONFLICT" }); // A already knows C3: it pushed it
+    expect(pulled.nextState.machines.A).toMatchObject({ head: "feature", merging: { theirs: "C3", label: "origin/main" } });
+    expect(run(pulled.nextState, pushR("A"))).toMatchObject({ code: "MERGE_IN_PROGRESS" });
+    let fixed = step(pulled.nextState, edit("A", file("1st and ONE\ntwo\nthree\nfour\nfive\n")), "EDITED");
+    fixed = step(step(fixed, stage("A"), "STAGED"), commitAction("A", "Merge origin/main"), "MERGED");
+    expect(fixed.commits.C4).toMatchObject({ parentId: "C2", mergeParentId: "C3" });
+    const pushed = run(fixed, pushR("A"));
+    expect(pushed).toMatchObject({ code: "BRANCH_PUSHED" });
+    expect(requestInfo(pushed.nextState, pushed.nextState.remote.requests![1])).toMatchObject({ conflict: false, fastForward: true, mergeable: true }); // approval kept
+    const done = run(pushed.nextState, mergeMr("A", 2));
+    expect(done).toMatchObject({ code: "MR_FAST_FORWARDED" });
+    expect(done.nextState.remote.mainHead).toBe("C4");
+    expect(done.nextState.commits.C4.snapshot).toEqual(file("1st and ONE\ntwo\nthree\nfour\nfive\n"));
+  });
+
+  it("Pull on a branch (review) fast-forwards it to main when main moved on; without the review flag it is still refused", () => {
+    let state = step(started(), { type: "branchCreate", machine: "A", name: "feature" }, "BRANCH_CREATED");
+    state = { ...state, ...{} };
+    // B moves main through a merged request, then A (still on the unchanged branch) pulls main in
+    let b = step(state, { type: "branchSwitch", machine: "A", name: "main" }, "SWITCHED");
+    b = step(b, { type: "branchCreate", machine: "A", name: "work" }, "BRANCH_CREATED");
+    b = editStageCommit(b, "A", file("ONE\ntwo\nthree\nfour\nfive\n"), "work");
+    b = step(step(b, pushR("A"), "BRANCH_PUSHED"), open("A"), "MR_OPENED");
+    b = step(step(b, approve("B"), "MR_APPROVED"), mergeMr("B"), "MR_FAST_FORWARDED");
+    b = step(b, { type: "branchSwitch", machine: "A", name: "feature" }, "SWITCHED");
+    expect(run(b, pull("A"))).toMatchObject({ outcome: "rejected", code: "NOT_ON_MAIN" });
+    const pulled = run(b, pullR("A"));
+    expect(pulled).toMatchObject({ code: "PULLED" });
+    expect(pulled.nextState.machines.A).toMatchObject({ head: "feature", mainHead: "C1", branches: { feature: "C2", work: "C2" }, working: file("ONE\ntwo\nthree\nfour\nfive\n") });
+    expect(describeGitTransition(pullR("A"), pulled)).toContain("เลื่อน feature ไป C2");
+  });
+
+  it("the request limit and the schema: remote branches and requests are validated; documents without them still load", () => {
+    const opened = step(branchPushed(started(), "feature", "ONE\ntwo\nthree\nfour\nfive\n"), open("A"), "MR_OPENED");
+    const parse = (state: GitSimulationState, view?: string) => {
+      const content = createProjectContent("บทเรียน Git");
+      content.document.slides[0].nodes.push({ id: "0c8b0f3e-6f4a-4c1e-8a57-5b0f7c2d9e10", type: "git-simulator", x: 0, y: 0, rotation: 0, opacity: 1, locked: false, scale: 1, ...(view ? { view } : {}), state } as GitSimulatorNode);
+      return () => parseProjectContent(JSON.parse(JSON.stringify(content)));
+    };
+    expect(parse(opened, "review")()).toBeDefined();
+    expect(parse(started())()).toBeDefined(); // old document: no branches, no requests
+    const withRemote = (patch: Partial<GitSimulationState["remote"]>): GitSimulationState => ({ ...opened, remote: { ...opened.remote, ...patch } });
+    const request = opened.remote.requests![0];
+    expect(parse(withRemote({ branches: { feature: "C9" } }))).toThrow();
+    expect(parse(withRemote({ branches: { main: "C2" } }))).toThrow();
+    expect(parse(withRemote({ branches: {} }))).toThrow(); // an open request needs its branch
+    expect(parse(withRemote({ requests: [{ ...request, id: 2 }] }))).toThrow();
+    expect(parse(withRemote({ requests: [{ ...request, approvedBy: ["A"] }] }))).toThrow(); // self approval
+    expect(parse(withRemote({ requests: [{ ...request, status: "weird" as never }] }))).toThrow();
+    expect(parse(withRemote({ requests: [{ ...request, target: "dev" as never }] }))).toThrow();
+    const full = Array.from({ length: 21 }, (_, i) => ({ ...request, id: i + 1, status: "closed" as const }));
+    expect(parse(withRemote({ requests: full }))).toThrow();
+    // the limit itself
+    const twenty = withRemote({ requests: Array.from({ length: 20 }, (_, i) => ({ ...request, id: i + 1, status: "closed" as const })) });
+    expect(parse(twenty)).not.toThrow();
+    const again = { ...twenty, remote: { ...twenty.remote, requests: twenty.remote.requests!.map((item, i) => i === 0 ? { ...item, status: "closed" as const } : item) } };
+    expect(run(again, open("A"))).toMatchObject({ outcome: "rejected", code: "MR_LIMIT" });
   });
 });
 

@@ -1,3 +1,4 @@
+import { hostOf, type Host, type HostId } from "../hosting";
 import type { CarriedLine, FlowFrame, FlowTone, Hop, Mark } from "../data/model";
 import { createInitialSshState } from "./initial";
 import { KEYGEN_COMMAND, type Machine, type SshAction, type SshMachine, type SshOutcome, type SshState, type SshTransition, type SshView } from "./model";
@@ -37,7 +38,7 @@ const PUBLIC_KEY_OUT = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5… you@example.com";
 // Steps 2–3 — create the key pair, register the public key
 // ---------------------------------------------------------------------------
 
-function keygen(state: SshState, machine: Machine): SshTransition {
+function keygen(state: SshState, machine: Machine, host: Host): SshTransition {
   const who = NAME[machine];
   if (hasKeys(state, machine)) return noop(state, `${who} มีคู่กุญแจอยู่แล้ว ไม่ต้องสร้างซ้ำ (สร้างใหม่จะได้ลายนิ้วมือคนละแบบ ต้องไปลงทะเบียนใหม่)`);
   const flow = new Flow(state);
@@ -48,78 +49,83 @@ function keygen(state: SshState, machine: Machine): SshTransition {
     (s) => patch(s, machine, { priv: true, out: ["Your identification has been saved in ~/.ssh/id_ed25519"] }), [{ spot: priv, tone: "new" }]);
   flow.step(hop(priv, pub, "คำนวณ .pub", "ok"), "คำนวณ .pub ออกมาจากกุญแจลับ: ทางเดียว จาก .pub ย้อนกลับไปหากุญแจลับไม่ได้ (เหมือนจากภาพลายนิ้วมือ เสกนิ้วจริงไม่ได้)",
     (s) => patch(s, machine, { pub: true, out: ["Your public key has been saved in ~/.ssh/id_ed25519.pub"] }), [{ spot: pub, tone: "new" }, { spot: priv, tone: "read" }]);
-  flow.step(null, "ได้ id_ed25519.pub = กุญแจสาธารณะ เปรียบเหมือนลายนิ้วมือ: แจกให้ GitHub ดูได้ ใช้ตรวจผลสแกนได้อย่างเดียว", undefined, [{ spot: pub, tone: "allowed" }]);
+  flow.step(null, `ได้ id_ed25519.pub = กุญแจสาธารณะ เปรียบเหมือนลายนิ้วมือ: แจกให้ ${host.name} ดูได้ ใช้ตรวจผลสแกนได้อย่างเดียว`, undefined, [{ spot: pub, tone: "allowed" }]);
   return finish(state, flow, "success", `${who} สร้างคู่กุญแจแล้ว: id_ed25519 (ลับ) และ id_ed25519.pub (สาธารณะ)`);
 }
 
-function register(state: SshState, machine: Machine): SshTransition {
+function register(state: SshState, machine: Machine, host: Host): SshTransition {
   const who = NAME[machine];
   if (!hasKeys(state, machine)) return noop(state, `${who} ยังไม่มีกุญแจให้ลงทะเบียน: ทำข้อ “สร้างคู่กุญแจ” ก่อน`, "rejected");
-  if (state.registered.includes(machine)) return noop(state, `GitHub รู้จักลายนิ้วมือของ${who} แล้ว ไม่ต้องลงทะเบียนซ้ำ`);
+  if (state.registered.includes(machine)) return noop(state, `${host.name} รู้จักลายนิ้วมือของ${who} แล้ว ไม่ต้องลงทะเบียนซ้ำ`);
   const flow = new Flow(state);
   flow.step(null, "เปิดไฟล์ .pub แล้วคัดลอกเนื้อหา: คัดลอกเฉพาะลายนิ้วมือ ไม่แตะกุญแจลับ",
     (s) => patch(s, machine, { cmd: "cat ~/.ssh/id_ed25519.pub", out: [PUBLIC_KEY_OUT] }), [{ spot: fileSpot(machine, "pub"), tone: "read" }]);
-  flow.step(hop(fileSpot(machine, "pub"), "keys", ".pub", "data", PUBLIC_KEY_LINES), "วางลงที่ GitHub → Settings → SSH keys เหมือนแตะนิ้วลงทะเบียนที่เครื่องสแกนของประตู (ทำครั้งเดียว)",
+  flow.step(hop(fileSpot(machine, "pub"), "keys", ".pub", "data", PUBLIC_KEY_LINES), `วางลงที่ ${host.name} → ${host.keysPage} เหมือนแตะนิ้วลงทะเบียนที่เครื่องสแกนของประตู (ทำครั้งเดียว)`,
     (s) => ({ ...s, registered: [...s.registered, machine] }), [{ spot: "keys", tone: "changed" }, { spot: `key:${machine}`, tone: "new" }]);
-  flow.step(null, `GitHub จำลายนิ้วมือของ${who} ไว้แล้ว ต่อไปประตูจะเทียบกับลายนิ้วมือนี้ ✓`, undefined, [{ spot: `key:${machine}`, tone: "allowed" }]);
-  return finish(state, flow, "success", `ลงทะเบียนกุญแจสาธารณะของ${who} กับ GitHub แล้ว`);
+  flow.step(null, `${host.name} จำลายนิ้วมือของ${who} ไว้แล้ว ต่อไปประตูจะเทียบกับลายนิ้วมือนี้ ✓`, undefined, [{ spot: `key:${machine}`, tone: "allowed" }]);
+  return finish(state, flow, "success", `ลงทะเบียนกุญแจสาธารณะของ${who} กับ ${host.name} แล้ว`);
 }
 
-function revoke(state: SshState, machine: Machine): SshTransition {
+function revoke(state: SshState, machine: Machine, host: Host): SshTransition {
   const who = NAME[machine];
-  if (!state.registered.includes(machine)) return noop(state, `GitHub ไม่มีลายนิ้วมือของ${who} อยู่แล้ว ไม่มีอะไรให้ลบ`);
+  if (!state.registered.includes(machine)) return noop(state, `${host.name} ไม่มีลายนิ้วมือของ${who} อยู่แล้ว ไม่มีอะไรให้ลบ`);
   const flow = new Flow(state);
-  flow.step(null, `${who} หาย! เข้า GitHub → Settings → SSH keys แล้วลบกุญแจของเครื่องนี้ออก`, undefined, [{ spot: `key:${machine}`, tone: "blocked" }]);
+  flow.step(null, `${who} หาย! เข้า ${host.name} → ${host.keysPage} แล้วลบกุญแจของเครื่องนี้ออก`, undefined, [{ spot: `key:${machine}`, tone: "blocked" }]);
   flow.step(null, `ลบแล้ว: เหมือนลบลายนิ้วมือนี้ออกจากระบบประตู ใครถือ${who} ไปก็เข้าไม่ได้อีก ✓`,
     (s) => ({ ...s, registered: s.registered.filter((item) => item !== machine) }), [{ spot: "keys", tone: "changed" }, { spot: `key:${machine}`, tone: "removed" }]);
-  return finish(state, flow, "success", `ลบกุญแจของ${who} ออกจาก GitHub แล้ว: ต่อจากนี้${who} เข้าไม่ได้`);
+  return finish(state, flow, "success", `ลบกุญแจของ${who} ออกจาก ${host.name} แล้ว: ต่อจากนี้${who} เข้าไม่ได้`);
 }
 
 // ---------------------------------------------------------------------------
 // Step 4 — connect (the fingerprint scanner)
 // ---------------------------------------------------------------------------
 
-const DENIED_OUT = (mode: "test" | "push") => mode === "push"
-  ? ["git@github.com: Permission denied (publickey).", "fatal: Could not read from remote repository."]
-  : ["git@github.com: Permission denied (publickey)."];
+/** The answer of `ssh -T` as terminal lines (GitHub's long sentence wraps after the first clause). */
+const welcomeLines = (host: Host): string[] => host.sshWelcome.split(/(?<=authenticated,) /);
+/** The first sentence of the answer (“Hi you!”, “Welcome to GitLab, @you!”). */
+const greeting = (host: Host): string => host.sshWelcome.match(/^[^!]*!/)?.[0] ?? host.sshWelcome;
 
-function connect(state: SshState, machine: Machine, mode: "test" | "push"): SshTransition {
+const DENIED_OUT = (host: Host, mode: "test" | "push") => mode === "push"
+  ? [`git@${host.sshHost}: Permission denied (publickey).`, "fatal: Could not read from remote repository."]
+  : [`git@${host.sshHost}: Permission denied (publickey).`];
+
+function connect(state: SshState, machine: Machine, mode: "test" | "push", host: Host): SshTransition {
   const who = NAME[machine];
-  const command = mode === "push" ? "git push" : "ssh -T git@github.com";
+  const command = mode === "push" ? "git push" : `ssh -T git@${host.sshHost}`;
   const flow = new Flow(state);
   const priv = fileSpot(machine, "priv");
-  flow.step(hop(machine, "scanner", mode === "push" ? "git push" : "ssh -T", "request"), `${who} ขอเข้าประตูของ GitHub ผ่าน SSH`,
+  flow.step(hop(machine, "scanner", mode === "push" ? "git push" : "ssh -T", "request"), `${who} ขอเข้าประตูของ ${host.name} ผ่าน SSH`,
     (s) => patch(s, machine, { cmd: command, out: [] }));
   if (!state[machine].priv) {
     flow.step(hop("scanner", machine, "Permission denied", "blocked"),
-      machine === "a" ? "GitHub: คุณคือใคร? ไม่มีลายนิ้วมือที่ลงทะเบียนไว้ ✗ Permission denied (publickey)"
-        : "GitHub: คุณคือใคร? เครื่อง B ไม่มีนิ้วที่ตรงกับลายนิ้วมือที่ลงทะเบียนไว้ ✗ Permission denied (publickey)",
-      (s) => patch(s, machine, { out: DENIED_OUT(mode) }), [{ spot: "scanner", tone: "blocked" }]);
+      machine === "a" ? `${host.name}: คุณคือใคร? ไม่มีลายนิ้วมือที่ลงทะเบียนไว้ ✗ Permission denied (publickey)`
+        : `${host.name}: คุณคือใคร? เครื่อง B ไม่มีนิ้วที่ตรงกับลายนิ้วมือที่ลงทะเบียนไว้ ✗ Permission denied (publickey)`,
+      (s) => patch(s, machine, { out: DENIED_OUT(host, mode) }), [{ spot: "scanner", tone: "blocked" }]);
     return finish(state, flow, "failed", machine === "a"
-      ? "เข้าไม่ได้: เครื่องเรายังไม่มีกุญแจ GitHub จึงไม่รู้ว่าเราคือใคร (ทำข้อ “สร้างคู่กุญแจ”)"
+      ? `เข้าไม่ได้: เครื่องเรายังไม่มีกุญแจ ${host.name} จึงไม่รู้ว่าเราคือใคร (ทำข้อ “สร้างคู่กุญแจ”)`
       : "เครื่อง B เข้าไม่ได้: ไม่มีนิ้ว (กุญแจลับ) ที่ตรงกับลายนิ้วมือที่ลงทะเบียนไว้");
   }
   if (!state.registered.includes(machine)) {
     flow.step(hop("scanner", machine, "Permission denied", "blocked"),
-      `GitHub: ไม่มีลายนิ้วมือนี้ในระบบ ✗ Permission denied (publickey) — ต้องนำ .pub ของ${who} ไปลงทะเบียนก่อน`,
-      (s) => patch(s, machine, { out: DENIED_OUT(mode) }), [{ spot: "scanner", tone: "blocked" }, { spot: "keys", tone: "blocked" }]);
-    return finish(state, flow, "failed", `เข้าไม่ได้: GitHub ไม่มีลายนิ้วมือของ${who} (ยังไม่ได้ลงทะเบียน หรือถูกลบไปแล้ว) ทำข้อ “ลงทะเบียน .pub กับ GitHub”`);
+      `${host.name}: ไม่มีลายนิ้วมือนี้ในระบบ ✗ Permission denied (publickey) — ต้องนำ .pub ของ${who} ไปลงทะเบียนก่อน`,
+      (s) => patch(s, machine, { out: DENIED_OUT(host, mode) }), [{ spot: "scanner", tone: "blocked" }, { spot: "keys", tone: "blocked" }]);
+    return finish(state, flow, "failed", `เข้าไม่ได้: ${host.name} ไม่มีลายนิ้วมือของ${who} (ยังไม่ได้ลงทะเบียน หรือถูกลบไปแล้ว) ทำข้อ “ลงทะเบียน .pub กับ ${host.name}”`);
   }
   // The random number = “touch the scanner now”: a fresh one every time, so yesterday's scan result is worthless.
   flow.step(hop("github", machine, "ขอแตะนิ้ว", "request", [{ kind: "note", text: "เลขสุ่ม 7f3a9c… (ใช้ได้ครั้งเดียว)" }]),
-    "ประตูขอให้แตะนิ้วตอนนี้: GitHub ส่งเลขสุ่มที่ใช้ได้ครั้งเดียวมา กันคนเอาผลสแกนเก่ามาเปิดซ้ำ");
+    `ประตูขอให้แตะนิ้วตอนนี้: ${host.name} ส่งเลขสุ่มที่ใช้ได้ครั้งเดียวมา กันคนเอาผลสแกนเก่ามาเปิดซ้ำ`);
   flow.step(null, "เครื่องเรา “แตะนิ้ว” = ใช้กุญแจลับประทับลงบนเลขนั้นในเครื่อง ได้ผลสแกนของครั้งนี้ ตัวนิ้วไม่ออกไปไหน", undefined, [{ spot: priv, tone: "read" }]);
   flow.step(hop(machine, "scanner", "ผลสแกน", "data", [{ kind: "code", text: "ผลสแกน (ลายเซ็น) 9b1e42…" }, { kind: "pass", text: "ไม่มีกุญแจลับในก้อนนี้" }]),
     "ส่งกลับแค่ผลสแกนของเลขนี้ ไม่ใช่กุญแจลับ");
   flow.step(null, "ประตูใช้ลายนิ้วมือที่ลงทะเบียนไว้ (.pub) ตรวจผลสแกนที่กุญแจลับทำขึ้น ตรงกัน ✓ ประตูเปิด", undefined,
     [{ spot: "scanner", tone: "allowed" }, { spot: `key:${machine}`, tone: "allowed" }]);
   if (mode === "test") {
-    flow.step(hop("scanner", machine, "Hi you!", "ok"), "GitHub: Hi you! You've successfully authenticated ✓ ประตูเปิดให้เราแล้ว",
-      (s) => patch(s, machine, { out: ["Hi you! You've successfully authenticated,", "but GitHub does not provide shell access."] }));
-    return finish(state, flow, "success", `ทดสอบผ่าน: GitHub ทักว่า Hi you! — ประตูเปิดให้${who}`);
+    flow.step(hop("scanner", machine, greeting(host).replace(/,.*$/, ""), "ok"), `${host.name}: ${welcomeLines(host).join(" ").replace(/,$/, "")} ✓ ประตูเปิดให้เราแล้ว`,
+      (s) => patch(s, machine, { out: welcomeLines(host) }));
+    return finish(state, flow, "success", `ทดสอบผ่าน: ${host.name} ทักว่า ${greeting(host)} — ประตูเปิดให้${who}`);
   }
   flow.step(hop(machine, "repo", "โค้ด", "ok"), "ประตูเปิดแล้ว: โค้ดถูกส่งขึ้น repo ✓",
-    (s) => ({ ...patch(s, machine, { out: ["To github.com:you/coffee-shop.git", "   main -> main"] }), pushes: Math.min(99, s.pushes + 1) }), [{ spot: "repo", tone: "new" }]);
+    (s) => ({ ...patch(s, machine, { out: [`To ${host.sshHost}:you/coffee-shop.git`, "   main -> main"] }), pushes: Math.min(99, s.pushes + 1) }), [{ spot: "repo", tone: "new" }]);
   return finish(state, flow, "success", `git push สำเร็จ: ประตูเปิดให้${who} เพราะผลสแกนตรงกับลายนิ้วมือ (.pub) ที่ลงทะเบียนไว้`);
 }
 
@@ -127,12 +133,12 @@ function connect(state: SshState, machine: Machine, mode: "test" | "push"): SshT
 // Step 5 — other machines, a copied .pub
 // ---------------------------------------------------------------------------
 
-function thiefTry(state: SshState): SshTransition {
-  if (!state.registered.includes("a")) return noop(state, "ยังไม่มีลายนิ้วมือของเครื่อง A บน GitHub ให้คัดลอก: ลงทะเบียนเครื่อง A ก่อน", "rejected");
+function thiefTry(state: SshState, host: Host): SshTransition {
+  if (!state.registered.includes("a")) return noop(state, `ยังไม่มีลายนิ้วมือของเครื่อง A บน ${host.name} ให้คัดลอก: ลงทะเบียนเครื่อง A ก่อน`, "rejected");
   const flow = new Flow(state);
   flow.step(hop("keys", "thief", ".pub", "data", PUBLIC_KEY_LINES), "มีคนคัดลอก .pub ของเรามา: กุญแจสาธารณะใครก็เห็นได้ นั่นคือแค่ภาพลายนิ้วมือ",
     (s) => ({ ...s, thief: "copied" }));
-  flow.step(hop("thief", "scanner", "ขอเข้า", "request"), "เขาเอา .pub ไปแจ้ง GitHub ว่า “ฉันคือเจ้าของ”");
+  flow.step(hop("thief", "scanner", "ขอเข้า", "request"), `เขาเอา .pub ไปแจ้ง ${host.name} ว่า “ฉันคือเจ้าของ”`);
   flow.step(hop("scanner", "thief", "ขอแตะนิ้ว", "request", [{ kind: "note", text: "เลขสุ่ม 41c8d0… (ใช้ได้ครั้งเดียว)" }]), "ประตูส่งเลขสุ่มมา ขอให้แตะนิ้วตอนนี้");
   flow.step(null, "เขามีแต่ภาพลายนิ้วมือ (.pub) ไม่มีนิ้วจริง (กุญแจลับ) จึงไม่มีอะไรให้แตะสแกน", undefined, [{ spot: "thief", tone: "blocked" }]);
   flow.step(null, ".pub ตรวจผลสแกนได้อย่างเดียว ทำผลสแกนไม่ได้ และย้อนไปหากุญแจลับก็ไม่ได้ → เข้าไม่ได้ ✗", undefined, [{ spot: "thief", tone: "blocked" }]);
@@ -141,35 +147,36 @@ function thiefTry(state: SshState): SshTransition {
   return finish(state, flow, "failed", "คนที่คัดลอก .pub ไปเข้าไม่ได้: มีแค่ภาพลายนิ้วมือ ไม่มีนิ้วจริง (กุญแจลับ) ไว้แตะสแกน");
 }
 
-function setupB(state: SshState): SshTransition {
+function setupB(state: SshState, host: Host): SshTransition {
   if (hasKeys(state, "b") && state.registered.includes("b")) return noop(state, "เครื่อง B มีกุญแจของตัวเองและลงทะเบียนแล้ว");
-  const generated = hasKeys(state, "b") ? null : keygen(state, "b");
+  const generated = hasKeys(state, "b") ? null : keygen(state, "b", host);
   const flow = new Flow(generated ? generated.nextState : state);
   if (generated) flow.frames.push(...generated.frames);
-  const registered = register(flow.state, "b");
+  const registered = register(flow.state, "b", host);
   flow.frames.push(...registered.frames);
   flow.state = registered.nextState;
   return finish(state, flow, "success", "เครื่อง B สร้างกุญแจของตัวเองและลงทะเบียนแล้ว: แต่ละเครื่องมีกุญแจของตัวเอง");
 }
 
-function reset(state: SshState): SshTransition {
+function reset(state: SshState, host: Host): SshTransition {
   const initial = createInitialSshState();
   if (JSON.stringify(initial) === JSON.stringify(state)) return noop(state, "เป็นค่าตั้งต้นอยู่แล้ว");
-  const flow = new Flow(state).step(null, "เริ่มใหม่: ยังไม่มีกุญแจ GitHub ยังไม่รู้จักใคร", () => initial);
+  const flow = new Flow(state).step(null, `เริ่มใหม่: ยังไม่มีกุญแจ ${host.name} ยังไม่รู้จักใคร`, () => initial);
   return finish(state, flow, "success", "เริ่มใหม่แล้ว");
 }
 
 /** Applies one action in a lesson step. Never throws for user input; rejected actions change nothing. Laptop B and the copier only exist in the last step. */
-export function applySshAction(state: SshState, action: SshAction, view: SshView): SshTransition {
+export function applySshAction(state: SshState, action: SshAction, view: SshView, hostId?: HostId): SshTransition {
+  const host = hostOf(hostId);
   const others = view === "others";
   switch (action.type) {
-    case "keygen": return action.machine === "b" && !others ? onlyInOthers(state, "เครื่อง B") : keygen(state, action.machine);
-    case "register": return action.machine === "b" && !others ? onlyInOthers(state, "เครื่อง B") : register(state, action.machine);
-    case "test": return action.machine === "b" && !others ? onlyInOthers(state, "เครื่อง B") : connect(state, action.machine, "test");
-    case "push": return action.machine === "b" && !others ? onlyInOthers(state, "เครื่อง B") : connect(state, action.machine, "push");
-    case "thief.try": return others ? thiefTry(state) : onlyInOthers(state, "การแอบใช้ .pub");
-    case "revoke": return action.machine === "b" && !others ? onlyInOthers(state, "เครื่อง B") : revoke(state, action.machine);
-    case "b.setup": return others ? setupB(state) : onlyInOthers(state, "เครื่อง B");
-    case "reset": return reset(state);
+    case "keygen": return action.machine === "b" && !others ? onlyInOthers(state, "เครื่อง B") : keygen(state, action.machine, host);
+    case "register": return action.machine === "b" && !others ? onlyInOthers(state, "เครื่อง B") : register(state, action.machine, host);
+    case "test": return action.machine === "b" && !others ? onlyInOthers(state, "เครื่อง B") : connect(state, action.machine, "test", host);
+    case "push": return action.machine === "b" && !others ? onlyInOthers(state, "เครื่อง B") : connect(state, action.machine, "push", host);
+    case "thief.try": return others ? thiefTry(state, host) : onlyInOthers(state, "การแอบใช้ .pub");
+    case "revoke": return action.machine === "b" && !others ? onlyInOthers(state, "เครื่อง B") : revoke(state, action.machine, host);
+    case "b.setup": return others ? setupB(state, host) : onlyInOthers(state, "เครื่อง B");
+    case "reset": return reset(state, host);
   }
 }

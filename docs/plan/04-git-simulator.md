@@ -137,7 +137,9 @@ type GitResultCode =
   | 'NOT_INITIALIZED' | 'INVALID_FILE' | 'INVALID_MESSAGE'
   | 'NOTHING_STAGED' | 'NO_LOCAL_COMMITS' | 'REMOTE_EMPTY'
   | 'ALREADY_INITIALIZED' | 'DIRTY_WORKTREE'
-  | 'NON_FAST_FORWARD' | 'DIVERGED' | 'COMMIT_LIMIT';
+  | 'NON_FAST_FORWARD' | 'COMMIT_LIMIT'
+  // เพิ่ม 2026-10-15 (ดู “Merge จริงระดับบรรทัด”): 'AUTO_MERGED' | 'MERGE_CONFLICT' | 'MERGED' | 'MERGE_TAKEN' | 'MERGE_ABORTED'
+  //   | 'MERGE_IN_PROGRESS' | 'NOT_MERGING' | 'UNRESOLVED_CONFLICT'  (DIVERGED ถูกยกเลิก);
 
 type GitTransition = {
   nextState: GitSimulationState;
@@ -179,7 +181,7 @@ commit preview, selected machine, commit message input, scroll และผล�
 | Commit | initialized, message valid, index ต่างจาก HEAD, commits ยังไม่ครบ 200 | สร้าง commit จาก index, parent=local HEAD, เพิ่ม local known IDs, เลื่อน local HEAD, เพิ่ม counter | message ผิด → `INVALID_MESSAGE`; index null/เท่า HEAD → `NOTHING_STAGED`; เต็ม → `COMMIT_LIMIT` |
 | Push | initialized, local HEAD มีค่า | รับ ancestors ของ local HEAD ที่ remote ยังไม่มี, เลื่อน remote HEAD, อัปเดต originMainHead ของผู้ส่ง | ไม่มี local HEAD → `NO_LOCAL_COMMITS`; non-FF → `NON_FAST_FORWARD` |
 | Clone | B ยังไม่ initialized, remote HEAD มีค่า | รับ ancestors ของ remote HEAD, B working/index=remote HEAD snapshot, heads ทั้งสอง=remote HEAD | B มี repo แล้ว → `ALREADY_INITIALIZED`; remote ว่าง → `REMOTE_EMPTY` |
-| Pull | initialized, clean, remote HEAD มีค่า | fetch ก่อน integration ตามขั้นตอนด้านล่าง | dirty → `DIRTY_WORKTREE`; remote ว่าง → `REMOTE_EMPTY`; divergence → `DIVERGED` |
+| Pull | initialized, clean, remote HEAD มีค่า | fetch ก่อน integration ตามขั้นตอนด้านล่าง | dirty → `DIRTY_WORKTREE`; remote ว่าง → `REMOTE_EMPTY`; divergence → merge (`AUTO_MERGED` / `MERGE_CONFLICT`); กำลัง merging → `MERGE_IN_PROGRESS` |
 | Reset | ไม่มี | แทน state ทั้งหมดด้วย initial fixture | state เท่ากับ initial → `NO_CHANGE` |
 
 ### Commit
@@ -194,7 +196,7 @@ Push ใช้ local known set ตรวจว่า remote HEAD เป็น an
 
 กรณี remote ว่างรับ ancestors ของ local HEAD ทั้งหมด กรณี HEAD เท่ากันไม่โอนข้อมูลใหม่ แต่อัปเดต `originMainHead` ของผู้ส่งให้ตรงหากยังล้าสมัย ผลเป็น `PUSHED` พร้อม changed=true เฉพาะที่เปลี่ยน tracking; ถ้าทุกค่าเท่าเดิมใช้ `NO_CHANGE` Working/index ของผู้ส่งอาจ dirty ได้เพราะ Push ส่ง commit เท่านั้น เครื่องอีกฝั่งไม่เปลี่ยนทุกกรณี
 
-### Pull: fetch แล้ว fast-forward only
+### Pull: fetch แล้ว fast-forward หรือ merge
 
 1. ตรวจ initialized; ถ้ายังไม่ initialized ให้ `NOT_INITIALIZED`
 2. ถ้า working/index ไม่ clean ให้ `DIRTY_WORKTREE` **ก่อน fetch** และไม่เปลี่ยนข้อมูลใด UI ระบุว่า “โหมดจำลองนี้ให้ Commit งานที่ค้างก่อน Pull” ไม่บอกว่าข้อจำกัดนี้ใช้กับ Git จริงทุกกรณี
@@ -202,14 +204,14 @@ Push ใช้ local known set ตรวจว่า remote HEAD เป็น an
 4. Fetch ancestors ของ remote HEAD เข้า local known IDs โดยคง commit ID และ snapshot เดิม แล้วตั้ง `originMainHead=remote.mainHead`
 5. ถ้า local HEAD เท่ากับ remote HEAD หรือ remote HEAD เป็น ancestor ของ local HEAD: คง local HEAD/index/working ไว้ ผลเป็น `FETCHED_UP_TO_DATE` เมื่อ fetch เปลี่ยน state หรือ `NO_CHANGE` เมื่อไม่มีการเปลี่ยนเลย อย่าเลื่อนเครื่องที่ ahead ถอยหลัง
 6. ถ้า local HEAD เป็น ancestor ของ remote HEAD: เลื่อน local HEAD ไป remote HEAD และตั้ง working/index เป็น snapshot ของหัวใหม่นั้น ผลเป็น `PULLED` ไม่มี commit ใหม่
-7. ถ้าไม่เข้าเงื่อนไขข้างต้น: คืน `DIVERGED` และเก็บผล fetch จากขั้น 4 แต่ไม่เปลี่ยน HEAD/index/working ผล changed ขึ้นกับ fetch มีข้อมูลใหม่หรือไม่
+7. ถ้าไม่เข้าเงื่อนไขข้างต้น (ประวัติแยก): เก็บผล fetch จากขั้น 4 แล้ว **merge `origin/main` เข้า `main`** แบบ 3-way ระดับบรรทัด (ดู “Merge จริงระดับบรรทัด” ด้านล่าง) — Git รวมให้เอง (`AUTO_MERGED`, สร้าง merge commit “Merge origin/main”) หรือหยุดที่ conflict (`MERGE_CONFLICT`, เข้าสถานะ merging, ไม่ Commit ให้) ครบ 200 commit → `COMMIT_LIMIT` (rejected แต่ยังเก็บ fetch)
 
-การรับข้อมูลจาก GitHub ไม่เท่ากับยอมรวมประวัติ การแจ้ง divergence ต้องอธิบายว่า “รับข้อมูลจาก GitHub แล้ว แต่ประวัติแยกกัน (ต่างคนต่าง Commit) เลือก Merge เพื่อรวมประวัติ หรือใช้เวอร์ชันของ GitHub” ไม่แสดงว่าทุกอย่างถูกยกเลิก
+(เดิมขั้นนี้คืน `DIVERGED` แล้วให้เลือก “เก็บไฟล์ของเรา/ของ GitHub” ทั้งไฟล์ — ยกเลิกแล้วเมื่อ 2026-10-15 เพราะไม่ตรงกับ Git จริงที่ผู้สอนต้องการสอน)
 
 ### Merge และใช้เวอร์ชัน GitHub (แก้ประวัติที่แยกกัน, เพิ่ม 2026-09-26)
 
-- `merge { machine, keep: "ours" | "theirs" }`: ต้อง initialized, clean (`DIRTY_WORKTREE` = “Commit งานที่ค้างก่อน Merge”), รู้ `originMainHead` แล้ว (ไม่รู้ → `REMOTE_EMPTY` “ให้ Pull ก่อน”) และแยกจริง (ถ้า origin เป็น ancestor ของ main หรือกลับกัน → `NO_CHANGE`); ครบ 200 commit → `COMMIT_LIMIT` สร้าง `C${n}` ที่มี `parentId = mainHead`, `mergeParentId = originMainHead`, ข้อความอัตโนมัติ “Merge งานจาก GitHub (ใช้ไฟล์ของเรา/ใช้ไฟล์จาก GitHub)” และ snapshot ของฝั่งที่เลือก (ตัวจำลองมีไฟล์เดียวที่ทั้งสองฝั่งแก้ จึงแทน conflict resolution ด้วยการเลือกฝั่ง ไม่ทำ 3-way merge ระดับบรรทัด) เลื่อน main และตั้ง working/index เป็น snapshot นั้น ผล `MERGED`; หลังจากนั้น Push เป็น fast-forward เพราะ commit ของ GitHub เป็น ancestor แล้ว
-- `resetToRemote { machine }` (“ทิ้งงานของเรา ใช้เวอร์ชัน GitHub”, เท่ากับ `git reset --hard origin/main`): ต้อง initialized และรู้ `originMainHead`; ทิ้ง working/index ที่ค้างด้วย เลื่อน main ไป origin ตั้ง working/index เป็น snapshot ของ origin และตัด known IDs ให้เหลือ ancestors ของ origin (commit ของเราที่ไม่มีใครรู้หายจากรายการ แต่ยังอยู่ใน registry จึง Undo คืนได้) ผล `RESET_TO_REMOTE` หรือ `NO_CHANGE` ถ้าตรงอยู่แล้ว
+- ~~`merge { machine, keep }`~~ ถูกแทนที่ด้วย Pull ที่ merge เอง + `mergeTake` / `mergeAbort` + Commit ระหว่าง merging (หัวข้อถัดไป)
+- `resetToRemote { machine }` (“ทิ้งงานของเรา ใช้เวอร์ชัน GitHub”, เท่ากับ `git reset --hard origin/main`): ต้อง initialized และรู้ `originMainHead`; ทิ้ง working/index ที่ค้างด้วย เลื่อน main ไป origin ตั้ง working/index เป็น snapshot ของ origin และตัด known IDs ให้เหลือ ancestors ของ origin (commit ของเราที่ไม่มีใครรู้หายจากรายการ แต่ยังอยู่ใน registry จึง Undo คืนได้) ผล `RESET_TO_REMOTE` หรือ `NO_CHANGE` ถ้าตรงอยู่แล้ว; ถ้ากำลัง merging อยู่จะทิ้ง merge นั้นด้วย (ทางหนีของ Pull ที่ชน)
 - Schema: `mergeParentId` optional ต้องมีอยู่จริง เลขน้อยกว่าตัวเอง ต่างจาก `parentId` และ `parentId` ต้องไม่เป็น null; known set ของทุก repository ต้องรวม parent ทั้งสองของทุก commit ที่รู้ เอกสารเก่าที่ไม่มี field นี้ยังอ่านได้
 
 ### Branch (ทางแยก, เพิ่ม 2026-10-05)
@@ -219,15 +221,47 @@ Push ใช้ local known set ตรวจว่า remote HEAD เป็น an
 - **ข้อมูล (optional, เอกสารเก่าไม่มี = มีแค่ `main`, HEAD อยู่ที่ main):** `MachineRepository.branches?: Record<name, CommitId>` เฉพาะ branch อื่นนอกจาก `main` (≤ 20, ชื่อ 1–40 ตัว `[A-Za-z0-9._/-]` ไม่ใช่ `HEAD`/`main`/`__proto__`) และ `head?: string` (branch ปัจจุบัน ไม่เก็บเมื่อเป็น main; state ถูก normalize ให้ไม่มี `branches` ว่างหรือ `head: "main"`). `mainHead` ยังเป็นปลาย `main`. Commit graph ใช้ `parentId`/`mergeParentId` เดิม
 - **Action ใหม่:** `branchCreate` (`git switch -c`: แตกจาก commit ปัจจุบันแล้วสลับไป; ปฏิเสธถ้ายังไม่มี commit — "ต้อง commit อย่างน้อยหนึ่งครั้งก่อนแตก branch"; ชื่อซ้ำ/ไม่ถูกต้อง/เกิน 20 ปฏิเสธ; งานที่ค้างติดไปด้วยเหมือน Git), `branchSwitch` (`git switch`: working+index เป็น snapshot ของปลาย branch; ปฏิเสธ `DIRTY_WORKTREE` เมื่อ working ≠ index หรือ index ≠ HEAD), `branchMerge` (`git merge <name>` เข้า branch ปัจจุบัน), `branchDelete` (`git branch -d`: ลบได้เฉพาะ branch ที่ไม่ใช่ main/ปัจจุบัน และรวมเข้า branch ปัจจุบันแล้ว; commit ยังอยู่ในประวัติ)
 - **Commit** ขยับเฉพาะ branch ปัจจุบัน (`mainHead` เปลี่ยนเมื่ออยู่ที่ main เท่านั้น) นับรวมกับเพดาน 200 commit
-- **Merge:** ถ้า branch ปัจจุบันเป็น ancestor ของอีกฝั่ง = fast-forward (ย้าย pointer + ไฟล์, ไม่มี commit ใหม่, `FAST_FORWARDED`); ถ้าอีกฝั่งเป็น ancestor ของปัจจุบัน = noop "Already up to date"; ไม่เช่นนั้นสร้าง merge commit (`parentId` = ปลายปัจจุบัน, `mergeParentId` = ปลาย branch ที่รวม, ข้อความ `Merge branch '<name>'`). เทียบไฟล์เดียวกับ common ancestor (commit เลขสูงสุดที่ทั้งสองฝั่งมี): ฝั่งเดียวที่เปลี่ยน = เก็บของฝั่งนั้น; ทั้งสองฝั่งเปลี่ยนต่างกัน = **conflict** → ต้องส่ง `keep: "ours" | "theirs"` (ไม่ส่ง = `MERGE_CONFLICT` ปฏิเสธ) เหมือนกล่อง Merge ของ Pull ที่ประวัติแยกกัน
-- **Push / Pull / Merge (GitHub) / ใช้เวอร์ชัน GitHub ใช้กับ `main` เท่านั้น:** ถ้า HEAD อยู่ branch อื่นจะปฏิเสธ `NOT_ON_MAIN` พร้อมข้อความให้สลับไป main ก่อน (เลือกปฏิเสธแทน push เงียบ ๆ เพราะไฟล์ที่เห็นเป็นของ branch นั้น ผู้เริ่มเรียนจะสับสน) Push ส่ง `main` และบรรพบุรุษของมันเท่านั้น branch ที่ยังไม่ merge ไม่ถูกส่ง. ขั้น 1–3 ไม่มีปุ่มสร้าง/สลับ แต่เมื่อ HEAD ไม่ใช่ main จะมีการ์ด "อยู่ที่ branch X" พร้อมปุ่ม "สลับไป main"
+- **Merge:** ถ้า branch ปัจจุบันเป็น ancestor ของอีกฝั่ง = fast-forward (ย้าย pointer + ไฟล์, ไม่มี commit ใหม่, `FAST_FORWARDED`); ถ้าอีกฝั่งเป็น ancestor ของปัจจุบัน = noop "Already up to date"; ไม่เช่นนั้น merge แบบ 3-way ระดับบรรทัดกับ common ancestor (commit เลขสูงสุดที่ทั้งสองฝั่งมี): แก้คนละบรรทัด = สร้าง merge commit เอง (`BRANCH_MERGED`, `parentId` = ปลายปัจจุบัน, `mergeParentId` = ปลาย branch ที่รวม, ข้อความ `Merge branch '<name>'`); แก้บรรทัดเดียวกัน = **conflict** (`MERGE_CONFLICT`, เข้าสถานะ merging) ไม่มี `keep` อีกแล้ว
+- **Push / Pull / ใช้เวอร์ชัน GitHub ใช้กับ `main` เท่านั้น:** ถ้า HEAD อยู่ branch อื่นจะปฏิเสธ `NOT_ON_MAIN` พร้อมข้อความให้สลับไป main ก่อน (เลือกปฏิเสธแทน push เงียบ ๆ เพราะไฟล์ที่เห็นเป็นของ branch นั้น ผู้เริ่มเรียนจะสับสน) Push ส่ง `main` และบรรพบุรุษของมันเท่านั้น branch ที่ยังไม่ merge ไม่ถูกส่ง. ขั้น 1–3 ไม่มีปุ่มสร้าง/สลับ แต่เมื่อ HEAD ไม่ใช่ main จะมีการ์ด "อยู่ที่ branch X" พร้อมปุ่ม "สลับไป main"
 - **ภาพ:** `main` เป็น lane 0; branch อื่นที่มี commit ของตัวเองได้ lane ถัดไปตามลำดับสร้าง (แตกออกจาก commit ต้นทางด้วยเส้นเฉียง), commit ที่ไม่อยู่ใน branch ใด (ฝั่ง GitHub ที่ fetch มา, branch ที่ลบแล้ว) อยู่ lane สุดท้าย. ป้ายชื่อ branch ที่ปลาย commit (main สีเข้ม, อื่น ๆ เขียว) และป้ายน้ำเงิน `HEAD → <branch>` + วงรอบ commit ปัจจุบัน + pill "คุณอยู่ที่ branch: X (HEAD)". ไฟล์ที่แสดงคือไฟล์ของ branch ปัจจุบัน
-- **แผง (การ์ด 3 "Branch (ทางแยก)"):** ช่องชื่อ (แนะนำ `feature`, `feature-2`, …) + "สร้าง branch" (`git switch -c <name>`), ปุ่ม "สลับไป <name>" (`git switch`), "Merge <name> เข้า <current>" (`git merge`) ที่แสดงกล่องเลือกไฟล์เมื่อ conflict, "ลบ branch <name>" (`git branch -d`) พร้อมข้อความเหตุผลเมื่อกดไม่ได้ และคำสั่งจริงใต้ปุ่มแต่ละอัน. "ทำต่อ": Add → Commit → (บน main ไม่มี branch) สร้าง branch → … → (บน branch ที่มีงานของตัวเอง) สลับไป main → Merge
+- **แผง (การ์ด 3 "Branch (ทางแยก)"):** ช่องชื่อ (แนะนำ `feature`, `feature-2`, …) + "สร้าง branch" (`git switch -c <name>`), ปุ่ม "สลับไป <name>" (`git switch`), "Merge <name> เข้า <current>" (`git merge`) ปุ่มเดียวทุกกรณี (ใต้ปุ่มบอกว่า Git รวมให้เอง / จะชนกัน), "ลบ branch <name>" (`git branch -d`) พร้อมข้อความเหตุผลเมื่อกดไม่ได้ และคำสั่งจริงใต้ปุ่มแต่ละอัน. "ทำต่อ": Add → Commit → (บน main ไม่มี branch) สร้าง branch → … → (บน branch ที่มีงานของตัวเอง) สลับไป main → Merge
 - **Test:** GIT-09 (vitest: reducer, selectors, schema, lane layout) และ GIT-10 (Playwright)
+
+### Merge จริงระดับบรรทัด และ conflict (เพิ่ม 2026-10-15)
+
+เป้าหมายคือให้ผู้สอนโชว์ได้ว่า “แก้คนละบรรทัด → Git รวมให้เอง; แก้บรรทัดเดียวกัน → ต้องแก้ไฟล์เอง” เหมือน Git จริง ใช้กับทั้ง Pull ที่ประวัติแยก (merge `origin/main`) และ `branchMerge`
+
+- **อัลกอริทึม** (`src/domain/git/merge3.ts`, pure): merge base = common ancestor ที่เลขสูงสุด (`mergeBase`, ใช้ known IDs หลัง fetch); diff3 — บรรทัดที่ base ใช้ร่วมกับทั้งสองฝั่งเป็นจุดยึด; ระหว่างจุดยึด ฝั่งที่ไม่เปลี่ยนรับของอีกฝั่ง, ผลเหมือนกันทั้งสองฝั่งเก็บครั้งเดียว (ไม่ conflict), นอกนั้น conflict (บรรทัดติดกันที่ต่างกันรวมเป็น hunk เดียวเหมือน Git; บรรทัดต้น/ท้ายที่สองฝั่งเหมือนกันถูกย้ายออกนอก hunk) ชื่อไฟล์ตามฝั่งที่เปลี่ยน (ours เมื่อเปลี่ยนทั้งคู่) ขึ้นบรรทัดใหม่ท้ายไฟล์ตามฝั่งที่เปลี่ยน
+- **ไม่ conflict:** สร้าง merge commit ทันที (สองพ่อแม่, `Merge origin/main` / `Merge branch '<name>'`), working/index = ไฟล์ที่รวม; ผล `AUTO_MERGED` (Pull) / `BRANCH_MERGED`
+- **conflict:** ไม่ Commit ให้ — `MachineRepository.merging?: { theirs: CommitId; label: string }` (label = ชื่อ branch หรือ `origin/main`; schema optional, เอกสารเก่าไม่กระทบ; ต้อง initialized, มี working+index, `theirs` อยู่ใน known, HEAD มี commit); working **และ** index ได้ไฟล์ที่มีเครื่องหมายแบบ Git (`<<<<<<< HEAD (ของเรา)` / `=======` / `>>>>>>> <label>`) ผล `MERGE_CONFLICT` (outcome success แต่แผงแสดงเป็นคำเตือนสีเหลือง) และช่อง Commit ถูกเติม “Merge …” ให้
+- **Commit ระหว่าง merging:** ตรวจ message ก่อน แล้ว index ต้องไม่เหลือบรรทัด `<<<<<<<`/`=======`/`>>>>>>>` (ไม่งั้น `UNRESOLVED_CONFLICT` “ยังมีเครื่องหมาย conflict เหลืออยู่”) ไฟล์ที่เท่ากับ HEAD ก็ Commit ได้เพราะเป็น merge; ได้ commit ที่ `parentId` = ปลาย HEAD, `mergeParentId` = `merging.theirs`, ล้าง `merging`, ผล `MERGED`. Add ทำงานปกติ (index ← working) จึงต้อง Add ไฟล์ที่แก้แล้วก่อน
+- **`mergeTake { machine, side }`** (ปุ่ม “ใช้ของเรา/ใช้ของอีกฝั่ง”): ใส่ไฟล์ HEAD หรือ `theirs` ลง working เท่านั้น (ไม่แตะ index) → ยังต้อง Add + Commit เอง; **`mergeAbort { machine }`** (“ยกเลิก merge”, `git merge --abort`): working/index = HEAD (merge เริ่มได้เฉพาะตอน clean จึงเท่ากับก่อน merge), ล้าง `merging`
+- **ปฏิเสธขณะ merging** (`MERGE_IN_PROGRESS`, “กำลัง merge อยู่: แก้ไฟล์ให้เสร็จแล้ว Add + Commit หรือกด ‘ยกเลิก merge’ ก่อน”): Push, Pull, `branchSwitch`, `branchCreate`, `branchMerge`; `edit`/`stage`/`commit`/`mergeTake`/`mergeAbort`/`resetToRemote`/`branchDelete`/`reset` ใช้ได้
+- **UI:** กล่องไฟล์ (overlay + ภาพบน canvas) ระบายพื้นหลังบรรทัด: เหลือง = เครื่องหมาย, เขียว = ของเรา, น้ำเงิน = ของอีกฝั่ง; pill “Staging” แสดง “⚠ ยังมี conflict” จนกว่าไฟล์ที่ Add จะสะอาด; ปุ่ม Add อธิบายว่า “ยังมีเครื่องหมาย conflict: แก้ไฟล์ก่อน แล้วค่อย Add”
+
+### สลับ GitHub ↔ GitLab (เพิ่ม 2026-10-15)
+
+`GitSimulatorNode.host?: "github" | "gitlab"` (schema optional, ไม่มี = GitHub; ชื่อและข้อความจาก `src/domain/hosting.ts` `hostOf(host)` ที่ใช้ร่วมกับตัวจำลอง SSH) ภายในยังใช้ id กลาง `remote` และฟิลด์เดิมทุกตัว ไม่เปลี่ยนชื่อ field. ชื่อ remote ส่งเข้า `describeGitTransition(action, transition, host)`, `getActionAvailability({ host })`, `machineDiagram(state, machine, host)`, `gitViewList(hostName)` และการวาดบน board ทั้งหมด (ค่าเริ่มต้น = GitHub จึงไม่กระทบเอกสาร/test เดิม). การสลับเป็นการแก้ node หนึ่ง transaction ไม่แตะ state ของ Git
+
+### Merge Request / Pull Request (ขั้น 5 `review`, โบนัส, เพิ่ม 2026-10-15)
+
+ขั้นบทเรียนที่ 5 `view: "review"` ชื่อ `${hostOf(host).mergeRequest} (ทีม)` ("Merge Request (ทีม)" บน GitLab, "Pull Request (ทีม)" บน GitHub — ห้าม hard-code) ใช้ layout เดียวกับขั้น 3 (A+Git ↔ remote ↔ B+Git, `gitHasMachineB`) และมีการ์ด MR ในกล่อง remote (ไฟล์ remote ย่อเหลือ 96px, การ์ด 118px, รายการ commit เหลือ ≥3 แถว)
+
+- **Model (optional ทั้งคู่, เอกสารเก่าไม่กระทบ):** `remote.branches?: Record<branch, CommitId>` (branch อื่นที่ถูก Push ขึ้น remote, ≤20, ไม่มี `main`, ปลายต้องอยู่ใน `remote.knownCommitIds`) และ `remote.requests?: { id; source; target: "main"; title; status: "open"|"merged"|"closed"; author: MachineId; approvedBy: MachineId[] }[]` (≤ `GIT_LIMITS.requests` = 20, id = 1,2,3… ตามลำดับ, ผู้เขียนอนุมัติตัวเองไม่ได้, MR ที่ open ต้องมี branch ต้นทางอยู่บน remote)
+- **การเปิดโหมด:** `push` และ `pull` มี flag `review?: boolean` ที่แผงใส่ให้เฉพาะขั้นนี้ (reducer ไม่รู้จัก view) ขั้น 2–4 ยังเป็นเดิมทุกอย่าง: Push จาก branch อื่น = `NOT_ON_MAIN` **ตัดสินใจ: ไม่เปิด Push branch ในขั้น 2–4** เพราะไม่มี remote branch ให้เห็นในขั้นเหล่านั้นและจะทำให้กราฟ remote สับสน
+- **main ถูกป้องกัน** (`review` เท่านั้น): Push จาก main หลัง remote มี main แล้ว = `MAIN_PROTECTED` “main ถูกป้องกัน: ต้องแตก branch แล้วเปิด Merge Request” (Push main ครั้งแรกตอน remote ว่างยังทำได้ — เป็นจุดเริ่มโปรเจกต์) ปุ่ม Push ไม่ถูกปิด เพื่อให้ผู้สอนกดให้เห็นการปฏิเสธ
+- **Push branch** (`git push -u origin <branch>`): จาก branch อื่น main ส่ง branch + commit ที่ remote ยังไม่มีขึ้นไป (`BRANCH_PUSHED`); remote ว่าง = `REMOTE_EMPTY`; ซ้ำ = `NO_CHANGE`; branch ที่ remote มีแล้วแต่ไม่ใช่ ancestor = `NON_FAST_FORWARD` การอนุมัติเดิมไม่ถูกล้างเมื่อ Push เพิ่ม (ตรงกับค่าเริ่มต้นของ GitHub/GitLab)
+- **เปิด MR** `mrOpen { machine }`: ต้องอยู่ branch ที่ไม่ใช่ main (`MR_NEED_BRANCH`), branch ถูก Push แล้ว (`MR_NOT_PUSHED`), มีงานที่ main ไม่มี (`MR_NOTHING_NEW`), ยังไม่มี MR เปิดอยู่ของ branch นั้น (`MR_EXISTS`), ไม่เกิน 20 (`MR_LIMIT`) title = ข้อความ commit ปลาย branch ที่ Push; ปุ่ม “เปิด Merge Request: feature → main” (`GitHub`: Pull Request)
+- **ตรวจ/อนุมัติ** `mrApprove { machine, id }`: เจ้าของอนุมัติเองไม่ได้ (`MR_SELF_APPROVE`), อนุมัติซ้ำ = `NO_CHANGE`; ปุ่ม “ดูการเปลี่ยนแปลง” แสดง diff ของ branch เทียบกับจุดที่แยกจาก main (ใช้ `lineDiff` เดิม, session เท่านั้น) และ “อนุมัติ (Approve)”
+- **Merge** `mrMerge { machine, id }`: ต้องอนุมัติแล้ว (`MR_NOT_APPROVED`); ถ้า main ยังไม่ขยับ = fast-forward (`MR_FAST_FORWARDED`, ข้อความบอก); ถ้า main ขยับแล้วแก้คนละบรรทัด = merge commit สองพ่อแม่ “Merge branch '<b>' (!n)” บน remote (`MR_MERGED`); แก้บรรทัดเดียวกัน = `MR_CONFLICT` “ชนกับ main: ดึง main มา merge ใน branch แก้ conflict แล้ว Push ใหม่” (ไม่เปลี่ยนอะไร) สำเร็จแล้ว status = merged และ **ลบ branch ต้นทางบน remote เสมอ** (ข้อความบอก) คำนวณด้วย `requestInfo` (selectors) ตัวเดียวกับที่การ์ดบน board ใช้
+- **ทางแก้ conflict (ใช้เครื่องมือ conflict เดิม):** บนเครื่องของเจ้าของ `git switch <branch>` แล้ว Pull (`review` อนุญาตบน branch = `git pull origin main`: fast-forward branch ถ้าทำได้ ไม่งั้น merge `origin/main` เข้า branch → `AUTO_MERGED` หรือ `MERGE_CONFLICT` → แก้ไฟล์ → Add → Commit → Push branch) แล้ว MR เปลี่ยนเป็น Merge ได้ (fast-forward)
+- **Pipeline:** แสดงเพียงข้อความ “pipeline ✓ ผ่าน” บน MR ที่เปิดอยู่ (ผ่านเสมอ ไม่มี state)
+- **Board:** การ์ด “Merge Request” ในกล่อง remote: `!1 feature → main`, chip (เปิดอยู่ / อนุมัติแล้ว / รวมแล้ว), เปิดโดย/อนุมัติโดย, pipeline, และ “Merge ได้ (fast-forward | สร้าง merge commit)” / “ชนกับ main” / “รอเพื่อนอนุมัติ”; รายการ commit ของ remote มี lane และป้ายของ branch ที่ Push
+- **“ทำต่อ”** (`nextReviewStep`, ดูจากเครื่องที่เลือก): push main ครั้งแรก → สร้าง branch → แก้/Add/Commit → Push branch → เปิด MR → (เครื่องที่ไม่ใช่เจ้าของ) อนุมัติ → Merge → (เจ้าของ) สลับไป main → Pull; MR ที่ชนส่งเจ้าของกลับไป branch แล้ว Pull. การ์ดแผง: Add, Commit, Branch (แบบย่อ: สร้าง/สลับ), GitHub/GitLab (Push/Pull + คำสั่ง `git push -u origin <branch>`, `git pull origin main`), Merge Request
 
 ### Reset และการเริ่มบทเรียนใหม่
 
-ปุ่มชื่อ **Reset demo** มี tooltip “เริ่มตัวอย่างใหม่ ย้อนกลับด้วย Undo ได้” ทำทันทีเป็นหนึ่ง transaction ไม่เพิ่ม dialog ยืนยัน ตั้ง counter กลับ 1 และล้าง commit registry ของ widget นั้น ผู้สอนใช้ Undo คืนทุกฝั่งได้ การแก้ divergence ใช้ Merge หรือ “ใช้เวอร์ชัน GitHub” ด้านบน (ไม่มี Rebase/branch)
+ปุ่มชื่อ **Reset demo** มี tooltip “เริ่มตัวอย่างใหม่ ย้อนกลับด้วย Undo ได้” ทำทันทีเป็นหนึ่ง transaction ไม่เพิ่ม dialog ยืนยัน ตั้ง counter กลับ 1 และล้าง commit registry ของ widget นั้น ผู้สอนใช้ Undo คืนทุกฝั่งได้ การแก้ divergence ใช้ Pull (merge) หรือ “ใช้เวอร์ชัน GitHub” (ไม่มี Rebase)
 
 ## 5. Canvas widget และแผงควบคุม
 
@@ -249,7 +283,7 @@ Push ใช้ local known set ตรวจว่า remote HEAD เป็น an
 
 - **ไฟล์ที่แก้อยู่ (ซ้าย)**: วาดเป็น code editor ขนาดเล็กโทนมืด (แถบ tab ชื่อไฟล์ + เลขบรรทัด ยกเว้นคอลัมน์แคบในขั้น 3) เนื้อหาหลายบรรทัดเท่าที่พื้นที่พอ (บอก “… อีก N บรรทัด”; บรรทัดว่างท้ายไฟล์มีเลขบรรทัดเหมือน editor), สถานะหนึ่งบรรทัดพร้อมสัญลักษณ์ `✎ ไฟล์ใหม่ ยังไม่ Add` / `✎ แก้แล้ว ยังไม่ Add` / `✓ ไม่มีการแก้ใหม่` และกรอบส้มเมื่อมีงานค้าง ขณะพิมพ์บนกระดาน ภาพใช้ projected state จึงเปลี่ยนสถานะทันที; ขณะดู commit กล่องนี้เป็นสีน้ำเงิน หัวข้อ “โค้ดของ C1 (ดูอย่างเดียว)” และบอกให้คลิกซ้ำเพื่อกลับ
 - **Git ของเครื่อง (ขวา)**: pill เทียบ `origin/main` ที่เครื่องนั้นรู้ (`✓ ตรงกับ GitHub`, `↑ N commit ยังไม่ Push`, `↓ ตามหลัง GitHub N commit`, `↕ ประวัติแยกกับ GitHub`, `? ยังไม่รู้สถานะ GitHub`, `ยังไม่มี commit`), Staging “สิ่งที่ Add แล้ว” (`○ ยังว่าง` / `● มีไฟล์รอ Commit` กรอบน้ำเงิน / `✓ ตรงกับ commit ล่าสุด`), ลูกศร Commit และรายการ Commits
-- **Commits**: รายการที่กว้าง (≥360) แสดงหนึ่งบรรทัด ข้อความซ้าย ป้ายขวา; รายการที่แคบกว่าแสดงสองบรรทัด ป้ายเล็กด้านบนและข้อความ commit ด้านล่าง (`commitListStyle`) ข้อความจึงไม่ถูกป้ายเบียดหาย วงกลมมี ID ข้างใน สีกำหนดจากหมายเลข (สีเดียวกัน = commit เดียวกันทุกการ์ด) ใหม่อยู่บน จำนวนวงเท่าที่พื้นที่ของรายการนั้นพอ (`commitRowLimit`: ขั้น 1 = 8, ขั้น 2 = 7/GitHub 5, ขั้น 3 = 6/GitHub 5; ภาพและปุ่มคลิกใช้ค่าเดียวกัน) + “+N ก่อนหน้า” เส้นเชื่อมไป parent (merge commit มีเส้นที่สองไป `mergeParentId`); lane แรกคือ first-parent ของ `main` ส่วน commit ที่รู้แต่ไม่อยู่บนเส้นนั้น (หลัง Pull ที่ DIVERGED หรือฝั่ง GitHub ที่ถูก merge เข้ามา) วางอีก lane จึงเห็นทางแยกและจุดที่รวมกลับ ป้าย `main` (ทึบ) และ `origin/main` (เส้นขอบ) ติดกับวงที่ชี้จริง
+- **Commits**: รายการที่กว้าง (≥360) แสดงหนึ่งบรรทัด ข้อความซ้าย ป้ายขวา; รายการที่แคบกว่าแสดงสองบรรทัด ป้ายเล็กด้านบนและข้อความ commit ด้านล่าง (`commitListStyle`) ข้อความจึงไม่ถูกป้ายเบียดหาย วงกลมมี ID ข้างใน สีกำหนดจากหมายเลข (สีเดียวกัน = commit เดียวกันทุกการ์ด) ใหม่อยู่บน จำนวนวงเท่าที่พื้นที่ของรายการนั้นพอ (`commitRowLimit`: ขั้น 1 = 8, ขั้น 2 = 7/GitHub 5, ขั้น 3 = 6/GitHub 5; ภาพและปุ่มคลิกใช้ค่าเดียวกัน) + “+N ก่อนหน้า” เส้นเชื่อมไป parent (merge commit มีเส้นที่สองไป `mergeParentId`); lane แรกคือ first-parent ของ `main` ส่วน commit ที่รู้แต่ไม่อยู่บนเส้นนั้น (ระหว่าง merge ที่ชน หรือฝั่ง GitHub ที่ถูก merge เข้ามา) วางอีก lane จึงเห็นทางแยกและจุดที่รวมกลับ ป้าย `main` (ทึบ) และ `origin/main` (เส้นขอบ) ติดกับวงที่ชี้จริง
 - **GitHub**: “เก็บ commit ที่ Push ขึ้นมา (แก้ไฟล์ตรงนี้ไม่ได้)”, pill `มี N commit`/`ยังว่าง`, กล่องโค้ดอ่านอย่างเดียวโทนเดียวกับ editor (tab ชื่อไฟล์ + ป้าย `C2 • main` หรือ `C2 • ดูอย่างเดียว` เมื่อคลิกดู commit) แสดงหลายบรรทัดพร้อมเลขบรรทัดและ “… อีก N บรรทัด”; ขณะเลือก widget มี textarea อ่านอย่างเดียววางทับให้เลื่อนดูทั้งไฟล์ ก่อน Push ครั้งแรกเป็นกล่องประ “ยังไม่มีไฟล์บน GitHub” และ Commits บน GitHub
 - ลูกศร Push/Pull เชื่อมระหว่างการ์ดที่ระดับ Commits เท่านั้น เส้นและ animation อยู่ภายในกรอบ widget ไม่กระทบ bounds; ชื่อ widget และหมายเหตุหนึ่งบรรทัดท้ายภาพเปลี่ยนตามขั้น
 - เครื่อง B ก่อน Clone แสดงกล่องประ “ยังไม่ได้ Clone” แทนทั้งไฟล์และ Git UI ต้องไม่แสดงเนื้อหาฝั่ง GitHub ในการ์ด B ก่อน Clone
@@ -265,9 +299,9 @@ Widget ขยับและ clone ทั้งชุด ปรับขนา�
 
 ### แผง Git (ด้านขวา)
 
-เล็กที่สุดเท่าที่สอนได้ เรียงเป็นการ์ดเว้นระยะชัดเจน: หัวแผง, dropdown “ขั้นของบทเรียน” (native `<select>`: `1 · A → Git`, `2 · A → Git → GitHub`, `3 · A+Git → GitHub → B+Git` พร้อมคำอธิบายสั้นใต้ช่อง), (ขั้น 3) ปุ่มเลือกเครื่อง A/B ซึ่งเปลี่ยนตามอัตโนมัติเมื่อคลิกเข้าไปแก้ไฟล์หรือคลิก commit ของเครื่องนั้นบนกระดาน แล้วเป็นรายการขั้นตอนแบบมีหมายเลข: **① Add** (ปุ่ม Add), **② Commit** (ช่องข้อความ Commit มี label + ปุ่ม Commit; Enter = Commit) และตั้งแต่ขั้น 2 **③ GitHub** (Push/Pull คู่กัน); เครื่อง B ที่ยังไม่มี repo มีการ์ด Clone แทน การ์ดของ “ขั้นถัดไป” (`nextGitStep`: Add เมื่อไฟล์มีการแก้ที่ยังไม่ Add → Commit เมื่อมีของที่ Add แล้ว → Push เมื่อนำหน้า/Pull เมื่อตามหลัง; ไม่เน้นเมื่อประวัติแยก) มีกรอบน้ำเงิน ป้าย “ทำต่อ” และปุ่มสีน้ำเงิน ต่อด้วยผลลัพธ์ล่าสุด (sticky ที่ขอบล่างของแผงจึงเห็นเสมอแม้การ์ดยาวเกินจอ) และปุ่ม Reset demo ขนาดเล็กชิดขวา แผงเปิดเองเมื่อเพิ่มหรือคลิกตัวจำลอง ทั้งแบบ docked, overlay (<1100 px) และโหมดสอน; ถ้าไม่ได้เลือก widget แท็บ Git เสนอ “เลือกตัวจำลอง Git ที่มีอยู่” ก่อนปุ่มเพิ่มตัวใหม่ และตัวใหม่จะไม่วางทับตำแหน่งตัวเดิม ไม่มี editor ไฟล์, preview staged/HEAD หรือ Inspect ในแผง ปุ่มที่ใช้ไม่ได้ปิดด้วย `aria-disabled` และเหตุผลอยู่ใต้ปุ่มในการ์ดเดียวกัน (อ่านได้ด้วย keyboard/screen reader ผ่าน `aria-describedby`) ส่วนเหตุผล “อ่านอย่างเดียว” แสดงครั้งเดียวด้านบน; reducer ยังต้องตรวจเองแม้ UI ปิดปุ่มแล้ว ทุก action flush draft ของไฟล์ก่อน แล้วอ่าน node ล่าสุดจาก store (ไม่ใช้ props ที่อาจเก่า)
+เล็กที่สุดเท่าที่สอนได้ เรียงเป็นการ์ดเว้นระยะชัดเจน: หัวแผง, dropdown “ขั้นของบทเรียน” (native `<select>`: `1 · A → Git`, `2 · A → Git → GitHub`, `3 · A+Git → GitHub → B+Git` พร้อมคำอธิบายสั้นใต้ช่อง), (ขั้น 3) ปุ่มเลือกเครื่อง A/B ซึ่งเปลี่ยนตามอัตโนมัติเมื่อคลิกเข้าไปแก้ไฟล์หรือคลิก commit ของเครื่องนั้นบนกระดาน แล้วเป็นรายการขั้นตอนแบบมีหมายเลข: **① Add** (ปุ่ม Add), **② Commit** (ช่องข้อความ Commit มี label + ปุ่ม Commit; Enter = Commit) และตั้งแต่ขั้น 2 **③ GitHub** (Push/Pull คู่กัน); เครื่อง B ที่ยังไม่มี repo มีการ์ด Clone แทน การ์ดของ “ขั้นถัดไป” (`nextGitStep`: Add เมื่อไฟล์มีการแก้ที่ยังไม่ Add → Commit เมื่อมีของที่ Add แล้ว → Push เมื่อนำหน้า/Pull เมื่อตามหลังหรือประวัติแยก; ระหว่าง merging: แก้ไฟล์ (`resolve`) → Add → Commit) มีกรอบน้ำเงิน ป้าย “ทำต่อ” และปุ่มสีน้ำเงิน ต่อด้วยผลลัพธ์ล่าสุด (sticky ที่ขอบล่างของแผงจึงเห็นเสมอแม้การ์ดยาวเกินจอ) และปุ่ม Reset demo ขนาดเล็กชิดขวา แผงเปิดเองเมื่อเพิ่มหรือคลิกตัวจำลอง ทั้งแบบ docked, overlay (<1100 px) และโหมดสอน; ถ้าไม่ได้เลือก widget แท็บ Git เสนอ “เลือกตัวจำลอง Git ที่มีอยู่” ก่อนปุ่มเพิ่มตัวใหม่ และตัวใหม่จะไม่วางทับตำแหน่งตัวเดิม ไม่มี editor ไฟล์, preview staged/HEAD หรือ Inspect ในแผง ปุ่มที่ใช้ไม่ได้ปิดด้วย `aria-disabled` และเหตุผลอยู่ใต้ปุ่มในการ์ดเดียวกัน (อ่านได้ด้วย keyboard/screen reader ผ่าน `aria-describedby`) ส่วนเหตุผล “อ่านอย่างเดียว” แสดงครั้งเดียวด้านบน; reducer ยังต้องตรวจเองแม้ UI ปิดปุ่มแล้ว ทุก action flush draft ของไฟล์ก่อน แล้วอ่าน node ล่าสุดจาก store (ไม่ใช้ props ที่อาจเก่า)
 
-เมื่อเครื่องที่เลือกมีประวัติแยกกับ `origin/main` ที่รู้ (ขั้น 2–3) แสดงการ์ดสีเหลือง **“ประวัติแยกกัน”** เหนือขั้นตอน ① พร้อมปุ่ม “Merge: เก็บไฟล์ของเรา” (น้ำเงินเมื่อเป็นขั้นถัดไป), “Merge: ใช้ไฟล์จาก GitHub” และลิงก์ “ทิ้งงานของเรา ใช้เวอร์ชัน GitHub” (tooltip บอกว่า Undo ได้) `nextGitStep` คืน `merge` เมื่อ ahead และ behind พร้อมกัน
+ระหว่าง merging แสดงการ์ดสีเหลือง **“กำลัง merge: ไฟล์ชนกัน”** เหนือขั้นตอน ① พร้อมคำอธิบายบรรทัดเดียว “แก้ในไฟล์ให้เหลือแบบที่ต้องการ ลบเครื่องหมาย <<<<<<< ======= >>>>>>> แล้ว Add + Commit”, คำอธิบายสี (เขียว = ของเรา HEAD, น้ำเงิน = ของอีกฝั่ง, เหลือง = เครื่องหมาย), ปุ่มลัด “ใช้ของเรา” / “ใช้ของอีกฝั่ง” (`mergeTake`: ใส่ไฟล์ฝั่งนั้นลงกล่อง ยังต้อง Add + Commit เอง), ปุ่ม “ยกเลิก merge” (`git merge --abort`) และ (เมื่อ merge จาก Pull) ลิงก์ “ทิ้งงานของเรา ใช้เวอร์ชัน GitHub”
 
 ขณะมี working draft ให้คำนวณความพร้อมของปุ่มจาก **projected state** ที่แทน working ด้วย draft ที่ผ่าน validation แล้ว โดยยังไม่เปลี่ยน document เช่น หลัง Commit แล้วพิมพ์เนื้อหาใหม่ ปุ่ม Add ต้องเปิดทันทีเมื่อ draft ต่างจาก index และ Pull ต้องปิดเมื่อ projected state ไม่ clean ปุ่ม Commit ยังอ่าน index ที่มีอยู่จริง ไม่ถือว่า working draft ถูก Add โดยอัตโนมัติ การเปลี่ยนชื่อไฟล์อย่างเดียวใช้กติกาเดียวกัน
 
@@ -331,9 +365,9 @@ Initial → Edit A=S1 → Stage A → Edit A=SA → Commit A message=`stage snap
 2. B Edit=SB → Stage → Commit `B change`: C3 parent=C1, B main=C3 และ origin=C1
 3. B Push: remote main=C3 และ known=[C1,C3]; A ยัง known=[C1,C2]
 4. A Push: `NON_FAST_FORWARD`, rejected, changed=false; state ทุกส่วนต้องเท่ากับก่อน Push และ A ไม่แอบรู้ C3
-5. A Pull: `DIVERGED`, rejected, changed=true; A known=[C1,C2,C3], origin=C3 แต่ main=C2, working/index=SA; remote/B ไม่เปลี่ยน
+5. A Pull: SA กับ SB แก้บรรทัดเดียวกัน → `MERGE_CONFLICT`, success, changed=true; A known=[C1,C2,C3], origin=C3, main=C2 ยังไม่มี commit ใหม่, working/index = ไฟล์ที่มีเครื่องหมาย conflict, `merging={theirs:"C3",label:"origin/main"}`; remote/B ไม่เปลี่ยน
 6. Undo ข้อ 5 คืน known=[C1,C2], origin=C1 ทั้งหมดภายในหนึ่ง Undo; Redo คืน fetch result เดิม
-7. A Pull ซ้ำจากผลข้อ 5: `DIVERGED`, changed=false, ไม่มี history ใหม่ ทุกงานของ A/B ยังดูได้ใน repository ที่รู้ commit นั้น
+7. A Pull ซ้ำจากผลข้อ 5: `MERGE_IN_PROGRESS`, rejected, changed=false, ไม่มี history ใหม่ ทุกงานของ A/B ยังดูได้ใน repository ที่รู้ commit นั้น
 
 ### GIT-04 — Working/index ไม่สะอาดก่อน Pull
 
@@ -363,7 +397,19 @@ Initial → Edit A=S1 → Stage A → Edit A=SA → Commit A message=`stage snap
 
 ### GIT-08 — แก้ประวัติที่แยกกัน (เพิ่ม 2026-09-26)
 
-ต่อจาก GIT-03 ข้อ 5 (A: main=C2, origin=C3, known C1–C3): Merge ฝั่งเรา → C4 {parent C2, mergeParent C3, snapshot SA}, A ahead 2 behind 0; Push ส่ง C2, C4 และ GitHub main=C4; B Pull fast-forward ไป C4 และได้ SA. Merge ฝั่ง GitHub → snapshot ของ C3. Merge ขณะไม่แยก = `NO_CHANGE`, มีงานค้าง = `DIRTY_WORKTREE`, ยังไม่เคย fetch = `REMOTE_EMPTY`. ใช้เวอร์ชัน GitHub → main=origin, working/index = snapshot ของ origin, known ตัดเหลือ ancestors ของ origin, ทำซ้ำ = `NO_CHANGE`. Schema ปฏิเสธ mergeParent ที่ไม่รู้/ไม่มี/ไม่เก่ากว่า/ซ้ำ parent. e2e: Push ถูกปฏิเสธ → Pull → การ์ดประวัติแยก → preview commit แสดง `+N −M` → Merge → Push → B Pull; Undo 3 ครั้งแล้ว “ทิ้งงานของเรา” ได้ไฟล์ของ GitHub
+ต่อจาก GIT-03 ข้อ 5 (A: main=C2, origin=C3, known C1–C3, merging): Commit ที่ยังมีเครื่องหมาย = `UNRESOLVED_CONFLICT`; แก้ไฟล์เองหรือ `mergeTake` แล้ว Add + Commit → C4 {parent C2, mergeParent C3, snapshot = ไฟล์ที่แก้}, ล้าง `merging`, A ahead 2 behind 0; Push ส่ง C2, C4 และ GitHub main=C4; B Pull fast-forward ไป C4. `mergeAbort` คืน working/index = HEAD. ระหว่าง merging Push/Pull/สลับ branch/สร้าง branch/merge ซ้ำ = `MERGE_IN_PROGRESS`; Pull ขณะมีงานค้างยัง `DIRTY_WORKTREE`. ใช้เวอร์ชัน GitHub → main=origin, working/index = snapshot ของ origin, ล้าง `merging`, known ตัดเหลือ ancestors ของ origin. Schema ปฏิเสธ mergeParent ที่ไม่รู้/ไม่มี/ไม่เก่ากว่า/ซ้ำ parent และ `merging` ที่ `theirs` ไม่อยู่ใน known / label ผิดรูป / เครื่องที่ยังไม่ clone. e2e GIT-08/GIT-11 ดูไฟล์ `tests/e2e/git.spec.ts`
+
+### GIT-11 — แก้คนละบรรทัด Git รวมให้เอง; บรรทัดเดียวกันต้องแก้เอง (เพิ่ม 2026-10-15)
+
+เครื่อง A และ B เริ่มจากไฟล์ 5 บรรทัด: B แก้บรรทัด 1 แล้ว Push, A แก้บรรทัด 5 แล้ว Commit → A Pull = `AUTO_MERGED` (merge commit สองพ่อแม่ ข้อความ “Merge origin/main”, ไฟล์มีทั้งสองการแก้, ข้อความ “Git รวมให้เอง: แก้คนละบรรทัด”) → Push ได้. รอบสอง: ทั้งคู่แก้บรรทัด 3 → Pull = `MERGE_CONFLICT` ไฟล์มี `<<<<<<< HEAD (ของเรา)` … `=======` … `>>>>>>> origin/main` (มีแถบสีในกล่องไฟล์) ปุ่ม Commit ปิดพร้อมเหตุผล “ยังมีเครื่องหมาย conflict เหลืออยู่” แล้ว “ยกเลิก merge” คืนไฟล์ → Pull ใหม่ → แก้ไฟล์เอง → Add → Commit (ช่องข้อความมี “Merge origin/main” ให้แล้ว) → Push → B Pull fast-forward (chromium + webkit)
+
+### GIT-13 — Merge Request (เพิ่ม 2026-10-15)
+
+vitest: Push main ใน review = `MAIN_PROTECTED` (ขั้นอื่นยัง `PUSHED`); Push branch ส่ง commit และ remote เก็บ branch; `mrOpen` ทุกกฎ; เจ้าของอนุมัติเอง = `MR_SELF_APPROVE`; Merge ก่อนอนุมัติ = `MR_NOT_APPROVED`; fast-forward / merge commit บน remote / `MR_CONFLICT`; ทางแก้ (pull main เข้า branch → แก้ → Push → Merge ได้); Pull บน branch; schema รับ/ปฏิเสธ `branches` `requests` และเอกสารเก่า. e2e (chromium + webkit): main ถูกป้องกัน → สร้าง branch → Push branch → เปิด MR → A อนุมัติเองไม่ได้ → B ดู diff + อนุมัติ → Merge (fast-forward, branch ถูกลบ) → B Pull, A สลับไป main + Pull; และ GitHub ใช้คำว่า Pull Request ทุกที่
+
+### GIT-12 — สลับ GitHub ↔ GitLab (เพิ่ม 2026-10-15)
+
+segmented control “GitHub | GitLab” ใต้หัวแผง เปลี่ยน `node.host` เป็นหนึ่ง transaction (“เปลี่ยนเป็น GitLab”) ชื่อ remote ใน board (การ์ด, ชื่อบนกรอบ, footer, สถานะ sync, “ยังไม่ได้ Clone”), dropdown ขั้นบทเรียน, ข้อความผลลัพธ์/เหตุผลปุ่ม, aria-label (“โค้ดบน GitLab (C1)”) เปลี่ยนตาม; Undo คืน host
 
 ### GIT-07 — UI, history และการเก็บข้อมูล
 
@@ -376,7 +422,7 @@ Initial → Edit A=S1 → Stage A → Edit A=SA → Commit A message=`stage snap
 - Lock widget เลือก ลาก แก้ไฟล์ ดู commit หรือใช้ Git action ไม่ได้; ปลดล็อกผ่าน Objects panel แล้วทำต่อได้
 - Save → reload → workflow ทำต่อจาก staged snapshot เดิม รวมกรณี working ต่างจาก staged และ origin ล้ากว่า remote
 - PNG/PDF แสดง A/B/GitHub ตาม current state และ known sets ไม่มี DOM controls หรือ commit preview; archive round trip คืน state deep-equal
-- มากกว่า 6 commit แสดงวงล่าสุด 6 วงพร้อม “+N ก่อนหน้า” ถูกต้อง ไม่ทำให้ bounds ขยายออกนอก widget; commit เดียวกันสีเดียวกันทุกการ์ด และ DIVERGED แสดงเป็นทางแยก
+- มากกว่า 6 commit แสดงวงล่าสุด 6 วงพร้อม “+N ก่อนหน้า” ถูกต้อง ไม่ทำให้ bounds ขยายออกนอก widget; commit เดียวกันสีเดียวกันทุกการ์ด และประวัติที่แยกแสดงเป็นทางแยก
 - C3 บน A ก่อน fetch ใน GIT-03 ไม่มีในรายการ commit ของ A จึงดูไม่ได้ หลัง fetch ปรากฏเป็นทางแยกและดูได้ แม้ Pull ถูกปฏิเสธ
 
 แหล่งอ้างอิง Git และวันที่ตรวจสอบอยู่ใน [ADR 0005](../adr/0005-git-teaching-simulator.md) เกณฑ์ integration ข้ามระบบและการบันทึกผลตรวจรับอยู่ใน [แผนส่งมอบ](06-delivery-and-acceptance.md)

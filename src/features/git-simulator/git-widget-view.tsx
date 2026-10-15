@@ -3,15 +3,17 @@
 import { useEffect, useMemo, useRef, type JSX } from "react";
 import { Arrow, Circle, Group, Line, Rect, Text } from "react-konva";
 import type Konva from "konva";
-import { gitViewOf, type GitSimulatorNode, type GitView } from "@/domain/document/model";
+import { hostOf, type HostId } from "@/domain/hosting";
+import { conflictLineRoles } from "@/domain/git/merge3";
+import { gitHasMachineB, gitViewOf, type GitSimulatorNode, type GitView } from "@/domain/document/model";
 import type { GitSimulationState, MachineId, RepositoryId } from "@/domain/git/model";
 import { currentBranch } from "@/domain/git/selectors";
 import { GIT_TRANSFER_DURATION_MS, type GitPreview, type GitTab, type GitTransferAnimation } from "./session-store";
-import { branchPill, commitGraph, laneMetrics, machineDiagram, remoteDiagram, shortSyncText, type GraphRow, type Tone, type ZoneLine } from "./diagram-model";
+import { branchPill, commitGraph, laneMetrics, machineDiagram, remoteDiagram, requestDiagram, shortSyncText, type GraphRow, type Tone, type ZoneLine } from "./diagram-model";
 import { diffCounts, diffWindow, lineDiff } from "@/domain/git/diff";
 import { codeLines } from "./view-model";
 import {
-  COMMIT_LIST, codeText, commitListBox, commitListStyle, commitRowLimit, fileCodeBox, fileEditorBox, fileNameBox, GIT_COLUMN, gitShift, remoteCodeBox,
+  COMMIT_LIST, remoteRequestBox, codeText, commitListBox, commitListStyle, commitRowLimit, fileCodeBox, fileEditorBox, fileNameBox, GIT_COLUMN, gitShift, remoteCodeBox,
   remoteCodeText, remoteFileBox, REMOTE_COLUMN, viewHasRemote, widgetLayout, widgetWidth, WIDGET_H,
   type Box, type MachineLayout, type WidgetLayout,
 } from "./widget-layout";
@@ -32,6 +34,8 @@ const C = {
 export const EDITOR = {
   bg: "#0F172A", bar: "#1E293B", text: "#E2E8F0", muted: "#64748B", gutter: "#475569", dot: "#FACC15", badge: "#93C5FD",
 } as const;
+/** Background of conflict lines in the code views (the board editor uses the same). */
+export const CONFLICT_FILL = { marker: "rgba(245,158,11,0.38)", ours: "rgba(34,197,94,0.20)", theirs: "rgba(59,130,246,0.26)" } as const;
 const TONE: Record<Tone, { stroke: string; fill: string; text: string }> = {
   pending: { stroke: "#F59E0B", fill: "#FFFBEB", text: "#B45309" },
   ready: { stroke: "#3B82F6", fill: "#EFF6FF", text: "#1D4ED8" },
@@ -56,10 +60,10 @@ function Pill({ x, y, width, line, font }: { x: number; y: number; width: number
 }
 
 /** LEFT: the file being edited (working copy), or a read-only preview of a clicked commit, as a small code editor. */
-function FileColumn({ layout, machine, state, previewCommit, font }: { layout: WidgetLayout; machine: MachineId; state: GitSimulationState; previewCommit: string | null; font: string }) {
+function FileColumn({ layout, machine, state, previewCommit, font, host }: { layout: WidgetLayout; machine: MachineId; state: GitSimulationState; previewCommit: string | null; font: string; host?: HostId }) {
   const box = layout[machine]!.file;
   const big = !layout.compact;
-  const model = machineDiagram(state, machine);
+  const model = machineDiagram(state, machine, host);
   const commit = previewCommit ? state.commits[previewCommit] : null;
   const snapshot = commit ? commit.snapshot : state.machines[machine].working;
   const content = snapshot?.content ?? "";
@@ -85,7 +89,7 @@ function FileColumn({ layout, machine, state, previewCommit, font }: { layout: W
   const tabW = commit ? Math.min(tab.w, Math.max(72, editor.w - 120)) : tab.w;
   return <Group x={box.x} y={box.y} listening={false}>
     <Rect width={box.w} height={box.h} cornerRadius={12} fill={commit ? C.previewFill : C.fileCol} stroke={tone.stroke} strokeWidth={commit || model.working.tone === "pending" ? 2 : 1} />
-    <Label x={12} y={big ? 12 : 9} width={box.w - 24} text={commit ? `โค้ดของ ${commit.id} (ดูอย่างเดียว)` : layout.view === "branch" ? `ไฟล์ที่แก้อยู่ (branch ${currentBranch(state.machines[machine])})` : "ไฟล์ที่แก้อยู่"} size={big ? 17 : 13} bold color={commit ? "#1D4ED8" : C.title} font={font} />
+    <Label x={12} y={big ? 12 : 9} width={box.w - 24} text={commit ? `โค้ดของ ${commit.id} (ดูอย่างเดียว)` : layout.view === "branch" ? `ไฟล์ที่แก้อยู่ (branch ${currentBranch(state.machines[machine])})` : layout.view === "review" ? `ไฟล์ · ${currentBranch(state.machines[machine])}` : "ไฟล์ที่แก้อยู่"} size={big ? 17 : 13} bold color={commit ? "#1D4ED8" : C.title} font={font} />
     <Rect x={editor.x} y={editor.y} width={editor.w} height={editor.h} cornerRadius={radius} fill={EDITOR.bg} />
     <Rect x={editor.x} y={editor.y} width={editor.w} height={tab.h} cornerRadius={[radius, radius, 0, 0]} fill={EDITOR.bar} />
     <Rect x={tab.x} y={tab.y} width={tabW} height={tab.h} cornerRadius={[radius, tabW < editor.w ? 6 : radius, 0, 0]} fill={EDITOR.bg} />
@@ -108,6 +112,9 @@ function FileColumn({ layout, machine, state, previewCommit, font }: { layout: W
       {shownDiff.after > 0 && <Label x={textX} y={lineY(shownDiff.lines.length)} width={textW} text={`… อีก ${shownDiff.after} บรรทัด`} size={big ? 13 : 11} color={EDITOR.muted} font={font} lineHeight={metrics.lineH} />}
     </> : <>
       {metrics.gutter > 0 && view.lines.map((_, index) => <Label key={`n${index}`} x={code.x} y={lineY(index)} width={metrics.gutter - 6} text={String(index + 1)} size={metrics.gutterSize} color={EDITOR.gutter} align="right" font={font} lineHeight={metrics.lineH} />)}
+      {/* Conflict markers: amber marker lines, green = ours, blue = theirs (same colours as the board editor). */}
+      {conflictLineRoles(content).slice(0, view.lines.length).map((role, index) => role === "text" ? null
+        : <Rect key={`r${index}`} x={code.x + 2} y={lineY(index)} width={code.w - 4} height={metrics.lineH} fill={CONFLICT_FILL[role]} />)}
       {content === ""
         ? <Label x={textX} y={lineY(0)} width={textW} text="(ไฟล์ว่าง)" size={metrics.size} color={EDITOR.muted} font={font} lineHeight={metrics.lineH} />
         : view.lines.map((line, index) => <Label key={index} x={textX} y={lineY(index)} width={textW} text={line} size={metrics.size} color={EDITOR.text} font={font} lineHeight={metrics.lineH} />)}
@@ -193,14 +200,15 @@ function CommitList({ box, rows, hiddenCount, twoLine, rowH, selected, font, hea
 }
 
 /** RIGHT: the Git side of a machine (staging area → Commit → commits). */
-function GitColumn({ layout, machine, state, selected, font }: { layout: WidgetLayout; machine: MachineId; state: GitSimulationState; selected: string | null; font: string }) {
+function GitColumn({ layout, machine, state, selected, font, host }: { layout: WidgetLayout; machine: MachineId; state: GitSimulationState; selected: string | null; font: string; host?: HostId }) {
   const { view, compact } = layout;
   const box = layout[machine]!.git;
-  const model = machineDiagram(state, machine);
+  const model = machineDiagram(state, machine, host);
   const graph = commitGraph(state, machine, commitRowLimit(layout, machine));
   // Steps without GitHub hide tracking tags and the sync pill; only the Branch step names other branches and HEAD.
-  const branchStep = view === "branch";
-  const keep = (tag: string) => branchStep ? tag !== "origin/main" : tag === "main" || (viewHasRemote(view) && tag === "origin/main");
+  // The Branch step and the review lesson name branches and HEAD; only review (which has GitHub too) keeps origin/main.
+  const branchStep = view === "branch" || view === "review";
+  const keep = (tag: string) => view === "review" ? true : branchStep ? tag !== "origin/main" : tag === "main" || (viewHasRemote(view) && tag === "origin/main");
   const rows = graph.rows.map((row) => ({ ...row, tags: row.tags.filter(keep), headTag: branchStep ? row.headTag : null }));
   const staged = TONE[model.staged.tone];
   const g = GIT_COLUMN;
@@ -210,8 +218,8 @@ function GitColumn({ layout, machine, state, selected, font }: { layout: WidgetL
     <Group x={box.x} y={box.y}>
       <Rect width={box.w} height={box.h} cornerRadius={12} fill={C.gitCol} stroke={C.cardStroke} />
       <Label x={12} y={10} width={box.w - 24} text={machine === "A" ? "Git ของเครื่อง A" : "Git ของเครื่อง B"} size={compact ? 14 : 17} bold color={C.title} font={font} />
-      {branchStep && <Pill x={8} y={g.pill + 8} width={box.w - 16} line={branchPill(state, machine)} font={font} />}
-      {viewHasRemote(view) && <Pill x={8} y={g.pill + 8} width={box.w - 16} line={compact ? { ...model.sync, text: shortSyncText(model.sync.text) } : model.sync} font={font} />}
+      {branchStep && (view === "branch" || currentBranch(state.machines[machine]) !== "main") && <Pill x={8} y={g.pill + 8} width={box.w - 16} line={branchPill(state, machine, view === "review")} font={font} />}
+      {viewHasRemote(view) && !(view === "review" && currentBranch(state.machines[machine]) !== "main") && <Pill x={8} y={g.pill + 8} width={box.w - 16} line={compact ? { ...model.sync, text: shortSyncText(model.sync.text) } : model.sync} font={font} />}
       <Group x={8} y={g.stageY + 8 + shift}>
         <Rect width={box.w - 16} height={g.stageH} cornerRadius={10} fill={staged.fill} stroke={staged.stroke} strokeWidth={model.staged.tone === "ready" ? 2 : 1} />
         <Label x={10} y={8} width={box.w - 36} text={compact ? "Staging" : "Staging (สิ่งที่ Add แล้ว)"} size={14} bold color={C.title} font={font} />
@@ -220,7 +228,7 @@ function GitColumn({ layout, machine, state, selected, font }: { layout: WidgetL
       <Arrow points={[box.w / 2, g.commitArrowY + 10 + shift, box.w / 2, g.commitsY + 4 + shift]} stroke={C.arrow} fill={C.arrow} strokeWidth={2} pointerLength={7} pointerWidth={8} />
       <Label x={box.w / 2 + 8} y={g.commitArrowY + 12 + shift} width={box.w / 2 - 12} text="Commit" size={13} bold color={C.arrow} font={font} />
     </Group>
-    <CommitList box={list} rows={rows} hiddenCount={graph.hiddenCount} {...commitListStyle(layout, machine)} selected={selected} font={font} headHint={branchStep} />
+    <CommitList box={list} rows={rows} hiddenCount={graph.hiddenCount} {...commitListStyle(layout, machine)} selected={selected} font={font} headHint={view === "branch"} />
   </Group>;
 }
 
@@ -230,8 +238,8 @@ function CardFrame({ box, active, fill }: { box: Box; active: boolean; fill: str
     shadowColor="#0F172A" shadowOpacity={0.06} shadowBlur={12} shadowOffsetY={2} listening={false} />;
 }
 
-function MachineCard({ layout, machine, state, active, preview, font }: {
-  layout: WidgetLayout; machine: MachineId; state: GitSimulationState; active: boolean; preview: GitPreview | null; font: string;
+function MachineCard({ layout, machine, state, active, preview, font, host }: {
+  layout: WidgetLayout; machine: MachineId; state: GitSimulationState; active: boolean; preview: GitPreview | null; font: string; host?: HostId;
 }) {
   const repo = state.machines[machine];
   const { card, file, git, stageGap } = layout[machine] as MachineLayout;
@@ -241,21 +249,21 @@ function MachineCard({ layout, machine, state, active, preview, font }: {
     <CardFrame box={card} active={active} fill={C.card} />
     <Label x={card.x + 18} y={card.y + 14} width={card.w - 36} text={machine === "A" ? "เครื่อง A" : "เครื่อง B"} size={22} bold color={C.title} font={font} />
     {repo.initialized ? <>
-      <FileColumn layout={layout} machine={machine} state={state} previewCommit={selected} font={font} />
+      <FileColumn layout={layout} machine={machine} state={state} previewCommit={selected} font={font} host={host} />
       <Arrow points={[stageGap.x1 + 4, stageY, stageGap.x2 - 4, stageY]} stroke={C.arrow} fill={C.arrow} strokeWidth={2.5} pointerLength={9} pointerWidth={9} listening={false} />
       <Label x={stageGap.x1 - 6} y={stageY - 24} width={stageGap.x2 - stageGap.x1 + 12} text="Add" size={13} bold color={C.arrow} align="center" font={font} />
-      <GitColumn layout={layout} machine={machine} state={state} selected={selected} font={font} />
+      <GitColumn layout={layout} machine={machine} state={state} selected={selected} font={font} host={host} />
     </> : <Group x={file.x} y={file.y} listening={false}>
       <Rect width={git.x + git.w - file.x} height={file.h} cornerRadius={12} stroke="#CBD5E1" strokeWidth={2} dash={[8, 6]} />
       <Label x={0} y={file.h / 2 - 40} width={git.x + git.w - file.x} text="ยังไม่ได้ Clone" size={22} bold color={C.muted} align="center" font={font} />
-      <Text x={16} y={file.h / 2} width={git.x + git.w - file.x - 32} text={"ยังไม่มีไฟล์และ Git บนเครื่องนี้\nกด Clone เพื่อคัดลอกจาก GitHub"} fontSize={15} fontFamily={font}
+      <Text x={16} y={file.h / 2} width={git.x + git.w - file.x - 32} text={`ยังไม่มีไฟล์และ Git บนเครื่องนี้\nกด Clone เพื่อคัดลอกจาก ${hostOf(host).name}`} fontSize={15} fontFamily={font}
         fill={C.muted} align="center" lineHeight={1.5} listening={false} />
     </Group>}
   </Group>;
 }
 
 /** GitHub: no working file, only commits. Its file box shows the pushed file of `main` (or of the clicked commit). */
-function RemoteCard({ layout, state, active, preview, font }: { layout: WidgetLayout; state: GitSimulationState; active: boolean; preview: GitPreview | null; font: string }) {
+function RemoteCard({ layout, state, active, preview, font, host }: { layout: WidgetLayout; state: GitSimulationState; active: boolean; preview: GitPreview | null; font: string; host?: HostId }) {
   const box = layout.remote!;
   const compact = layout.compact;
   const model = remoteDiagram(state);
@@ -279,9 +287,10 @@ function RemoteCard({ layout, state, active, preview, font }: { layout: WidgetLa
   const badge = commitId ? (compact ? commitId : `${commitId} • ${shown ? "ดูอย่างเดียว" : "main"}`) : "";
   return <Group>
     <CardFrame box={box} active={active} fill={C.remoteCard} />
-    <Label x={box.x + 16} y={box.y + 14} width={box.w - 32} text="GitHub" size={22} bold color={C.title} font={font} />
+    <Label x={box.x + 16} y={box.y + 14} width={box.w - 32} text={hostOf(host).name} size={22} bold color={C.title} font={font} />
     <Label x={inner.x + 2} y={colY + REMOTE_COLUMN.subtitleY} width={inner.w - 4} text={compact ? "เก็บ commit ที่ Push ขึ้นมา" : "เก็บ commit ที่ Push ขึ้นมา (แก้ไฟล์ตรงนี้ไม่ได้)"} size={compact ? 11 : 13} color={C.muted} font={font} />
     <Pill x={inner.x} y={colY + REMOTE_COLUMN.pillY} width={inner.w} line={model.sync} font={font} />
+    {layout.view === "review" && <RequestPanel box={remoteRequestBox(layout)!} state={state} host={host} font={font} />}
     {file ? <Group listening={false}>
       <Rect x={frame.x} y={frame.y} width={frame.w} height={frame.h} cornerRadius={10} fill={EDITOR.bg} stroke={shown ? C.previewStroke : undefined} strokeWidth={shown ? 2.5 : 0} />
       <Rect x={frame.x} y={frame.y} width={frame.w} height={tabH} cornerRadius={[10, 10, 0, 0]} fill={EDITOR.bar} />
@@ -295,10 +304,30 @@ function RemoteCard({ layout, state, active, preview, font }: { layout: WidgetLa
       {view.more > 0 && <Label x={textX} y={lineY(view.lines.length)} width={textW} text={`… อีก ${view.more} บรรทัด`} size={compact ? 10 : 11} color={EDITOR.muted} font={font} lineHeight={metrics.lineH} />}
     </Group> : <Group x={frame.x} y={frame.y} listening={false}>
       <Rect width={frame.w} height={frame.h} cornerRadius={10} fill="#FFFFFF" stroke="#DDD6FE" dash={[6, 5]} />
-      <Label x={10} y={frame.h / 2 - 22} width={frame.w - 20} text="ยังไม่มีไฟล์บน GitHub" size={compact ? 11 : 14} bold color={C.muted} align="center" font={font} />
+      <Label x={10} y={frame.h / 2 - 22} width={frame.w - 20} text={`ยังไม่มีไฟล์บน ${hostOf(host).name}`} size={compact ? 11 : 14} bold color={C.muted} align="center" font={font} />
       <Label x={10} y={frame.h / 2 + 2} width={frame.w - 20} text="รอ Push ครั้งแรก" size={compact ? 11 : 13} color={C.muted} align="center" font={font} />
     </Group>}
     <CommitList box={commitListBox(layout, "remote")!} rows={graph.rows} hiddenCount={graph.hiddenCount} {...commitListStyle(layout, "remote")} selected={selected} font={font} />
+  </Group>;
+}
+
+/** The Merge Request in the remote box: "!1 feature → main", status chip, who opened/approved, whether it can merge. */
+function RequestPanel({ box, state, host, font }: { box: Box; state: GitSimulationState; host?: HostId; font: string }) {
+  const card = requestDiagram(state, host);
+  const term = hostOf(host).mergeRequest;
+  return <Group x={box.x} y={box.y} listening={false}>
+    <Rect width={box.w} height={box.h} cornerRadius={10} fill="#FFFFFF" stroke={C.cardStroke} />
+    <Label x={10} y={7} width={box.w - 20} text={term} size={12} bold color={C.muted} font={font} />
+    {card.empty
+      ? <Label x={10} y={box.h / 2 - 4} width={box.w - 20} text={card.text} size={13} color={C.muted} font={font} />
+      : <>
+        <Label x={10} y={26} width={box.w - 100} text={card.title} size={14} bold color={C.title} font={font} />
+        <Group x={box.w - 86} y={24}>
+          <Rect width={76} height={20} cornerRadius={10} fill={TONE[card.chip.tone].fill} stroke={TONE[card.chip.tone].stroke} />
+          <Label x={0} y={0} width={76} text={card.chip.text} size={11} bold color={TONE[card.chip.tone].text} align="center" font={font} lineHeight={20} />
+        </Group>
+        {card.lines.map((line, index) => <Label key={index} x={10} y={52 + index * 20} width={box.w - 20} text={line.text} size={11} bold={index > 0} color={index === 0 ? C.muted : TONE[line.tone].text} font={font} />)}
+      </>}
   </Group>;
 }
 
@@ -383,18 +412,20 @@ function TransferDot({ transfer, view, font }: { transfer: GitTransferAnimation;
   </Group>;
 }
 
-const TITLES: Record<GitView, string> = {
+const titleOf = (view: GitView, host: string, hostId?: HostId): string => ({
   local: "Git ในเครื่องเดียว: แก้ไฟล์ → Add → Commit",
-  remote: "Git: เครื่อง A → GitHub",
-  full: "Git: เครื่อง A ↔ GitHub ↔ เครื่อง B",
+  remote: `Git: เครื่อง A → ${host}`,
+  full: `Git: เครื่อง A ↔ ${host} ↔ เครื่อง B`,
   branch: "Git: Branch (ทางแยก) บนเครื่อง A",
-};
-const FOOTERS: Record<GitView, string> = {
+  review: `Git: ${hostOf(hostId).mergeRequest} (ทีม) เครื่อง A + B ผ่าน ${host}`,
+})[view];
+const footerOf = (view: GitView, host: string, hostId?: HostId): string => ({
   local: "แบบจำลอง • main เท่านั้น • C1/C2 เป็นหมายเลขจำลอง • ซ้าย = ไฟล์ที่แก้อยู่ • ขวา = สิ่งที่ Git เก็บไว้",
-  remote: "แบบจำลอง • main เท่านั้น • สีเดียวกัน = commit เดียวกัน • ↑↓ เทียบกับ GitHub ล่าสุดที่เครื่องนั้นรู้",
-  full: "แบบจำลอง • main เท่านั้น • สีเดียวกัน = commit เดียวกัน • ↑↓ เทียบกับ GitHub ล่าสุดที่เครื่องนั้นรู้",
+  remote: `แบบจำลอง • main เท่านั้น • สีเดียวกัน = commit เดียวกัน • ↑↓ เทียบกับ ${host} ล่าสุดที่เครื่องนั้นรู้`,
+  full: `แบบจำลอง • main เท่านั้น • สีเดียวกัน = commit เดียวกัน • ↑↓ เทียบกับ ${host} ล่าสุดที่เครื่องนั้นรู้`,
   branch: "แบบจำลอง • หนึ่งแถว = หนึ่ง branch • HEAD = branch ที่คุณอยู่ • commit ใหม่ต่อท้าย branch ที่อยู่ • สีเดียวกัน = commit เดียวกัน",
-};
+  review: `แบบจำลอง • main ถูกป้องกัน Push ตรงไม่ได้ • branch → ${hostOf(hostId).mergeRequestShort} → เพื่อนอนุมัติ → Merge • pipeline จำลอง ผ่านเสมอ`,
+})[view];
 
 /**
  * Canvas rendering of a Git simulator node (plan 04 §5). Draw inside a Group already translated to node.x/node.y.
@@ -413,18 +444,19 @@ export function GitWidgetView({ node, activeTab, transfer, preview = null, fontF
 }): JSX.Element {
   const { scale, state } = node;
   const view = gitViewOf(node);
+  const hostName = hostOf(node.host).name;
   const layout = useMemo(() => widgetLayout(view), [view]);
   const width = widgetWidth(view);
   // A preview of a commit the repository no longer knows (e.g. after Undo) falls back to the working file.
   const validPreview = preview && (preview.repository === "remote" ? state.remote.knownCommitIds : state.machines[preview.repository].knownCommitIds).includes(preview.commitId) ? preview : null;
   return <Group scaleX={scale} scaleY={scale} clipX={0} clipY={0} clipWidth={width} clipHeight={WIDGET_H}>
     <Rect x={1} y={1} width={width - 2} height={WIDGET_H - 2} cornerRadius={18} fill={C.frame} stroke={C.frameStroke} strokeWidth={2} />
-    <Label x={24} y={18} width={width - 48} text={TITLES[view]} size={24} bold color={C.title} font={fontFamily} />
+    <Label x={24} y={18} width={width - 48} text={titleOf(view, hostName, node.host)} size={24} bold color={C.title} font={fontFamily} />
     <ConnectorArrows layout={layout} bCloned={state.machines.B.initialized} font={fontFamily} />
-    <MachineCard layout={layout} machine="A" state={state} active={activeTab === "A" && view === "full"} preview={validPreview} font={fontFamily} />
-    {layout.remote && <RemoteCard layout={layout} state={state} active={false} preview={validPreview} font={fontFamily} />}
-    {layout.B && <MachineCard layout={layout} machine="B" state={state} active={activeTab === "B"} preview={validPreview} font={fontFamily} />}
-    <Label x={24} y={WIDGET_H - 34} width={width - 48} size={13} color={C.muted} font={fontFamily} text={FOOTERS[view]} />
+    <MachineCard layout={layout} machine="A" state={state} active={activeTab === "A" && gitHasMachineB(view)} preview={validPreview} font={fontFamily} host={node.host} />
+    {layout.remote && <RemoteCard layout={layout} state={state} active={false} preview={validPreview} font={fontFamily} host={node.host} />}
+    {layout.B && <MachineCard layout={layout} machine="B" state={state} active={activeTab === "B"} preview={validPreview} font={fontFamily} host={node.host} />}
+    <Label x={24} y={WIDGET_H - 34} width={width - 48} size={13} color={C.muted} font={fontFamily} text={footerOf(view, hostName, node.host)} />
     {transfer && <TransferDot key={transfer.key} transfer={transfer} view={view} font={fontFamily} />}
   </Group>;
 }

@@ -225,3 +225,61 @@ describe("document schema", () => {
     expect(normalizeSshView("others")).toBe("others");
   });
 });
+
+describe("SSH-HOST — the same lesson on GitHub or GitLab", () => {
+  const texts = (host?: "github" | "gitlab") => {
+    const run = (state: SshState, action: SshAction, view: SshView = "setup") => applySshAction(state, action, view, host);
+    const keys = run(createInitialSshState(), { type: "keygen", machine: A }).nextState;
+    const reg = run(keys, { type: "register", machine: A });
+    const test = run(reg.nextState, { type: "test", machine: A });
+    const push = run(reg.nextState, { type: "push", machine: A });
+    const denied = run(createInitialSshState(), { type: "test", machine: A });
+    const lines = [...reg.frames, ...test.frames, ...push.frames, ...denied.frames].map((frame) => frame.caption);
+    return { reg, test, push, denied, all: [...lines, reg.message, test.message, push.message, denied.message, ...test.nextState.a.out, ...push.nextState.a.out, ...denied.nextState.a.out, test.nextState.a.cmd, push.nextState.a.cmd].join("\n") };
+  };
+
+  it("GitHub is the default: omitting the host equals github and names no GitLab", () => {
+    const def = texts(), gh = texts("github");
+    expect(def.all).toBe(gh.all);
+    expect(def.all).toContain("GitHub");
+    expect(def.all).not.toMatch(/GitLab|gitlab/);
+    expect(def.test.nextState.a.cmd).toBe("ssh -T git@github.com");
+    expect(def.test.nextState.a.out).toEqual(["Hi you! You've successfully authenticated,", "but GitHub does not provide shell access."]);
+    expect(def.reg.frames[1].caption).toContain("GitHub → Settings → SSH keys");
+    expect(def.push.nextState.a.out[0]).toBe("To github.com:you/coffee-shop.git");
+    expect(def.denied.nextState.a.out).toEqual(["git@github.com: Permission denied (publickey)."]);
+  });
+
+  it("GitLab: captions, commands, outputs and messages name GitLab and never GitHub", () => {
+    const lab = texts("gitlab");
+    expect(lab.all).toContain("GitLab");
+    expect(lab.all).not.toMatch(/GitHub|github/);
+    expect(lab.test.nextState.a.cmd).toBe("ssh -T git@gitlab.com");
+    expect(lab.test.nextState.a.out).toEqual(["Welcome to GitLab, @you!"]);
+    expect(lab.test.frames.at(-1)!.caption).toContain("Welcome to GitLab, @you!");
+    expect(lab.test.message).toContain("GitLab ทักว่า Welcome to GitLab, @you!");
+    expect(lab.reg.frames[1].caption).toContain("GitLab → Preferences → SSH Keys");
+    expect(lab.reg.message).toBe("ลงทะเบียนกุญแจสาธารณะของเครื่อง A กับ GitLab แล้ว");
+    expect(lab.push.nextState.a.out[0]).toBe("To gitlab.com:you/coffee-shop.git");
+    expect(lab.denied.nextState.a.out).toEqual(["git@gitlab.com: Permission denied (publickey)."]);
+  });
+
+  it("the host changes only wording: states, outcomes and hops are identical; frames stay deterministic", () => {
+    const route = (host: "github" | "gitlab") => {
+      const t = applySshAction(registered(), { type: "test", machine: A }, "setup", host);
+      return { outcome: t.outcome, hops: t.frames.map((f) => f.hop && `${f.hop.from}→${f.hop.to}`), marks: t.frames.map((f) => f.marks), pushes: t.nextState.pushes };
+    };
+    expect(route("gitlab")).toEqual(route("github"));
+    const again = () => JSON.stringify(applySshAction(registered(), { type: "thief.try" }, "others", "gitlab"));
+    expect(again()).toBe(again());
+  });
+
+  it("the schema accepts github, gitlab and a missing host, and rejects anything else", async () => {
+    const { canvasNodeSchema } = await import("../document/schema");
+    const node = (extra: object) => ({ id: "00000000-0000-4000-8000-000000000005", type: "ssh-simulator", x: 0, y: 0, rotation: 0, opacity: 1, locked: false, scale: 1, view: "setup", state: createInitialSshState(), ...extra });
+    expect(canvasNodeSchema.safeParse(node({})).success).toBe(true);
+    expect(canvasNodeSchema.parse(node({ host: "gitlab" }))).toMatchObject({ host: "gitlab" });
+    expect(canvasNodeSchema.parse(node({ host: "github" }))).toMatchObject({ host: "github" });
+    expect(canvasNodeSchema.safeParse(node({ host: "bitbucket" })).success).toBe(false);
+  });
+});

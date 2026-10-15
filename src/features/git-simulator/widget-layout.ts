@@ -1,4 +1,5 @@
 import { gitBaseSize, type GitView } from "../../domain/document/model";
+import { hostOf, type HostId } from "../../domain/hosting";
 
 // Pure geometry of the Git widget per lesson step (plan 04 §5). Steps 1–2 draw in a 1120×680 base frame;
 // the two-machine step is 1600×680 so every machine keeps the full-size layout. The domain's
@@ -67,15 +68,21 @@ export function viewRepositories(view: GitView): ("A" | "remote" | "B")[] {
   return view === "local" || view === "branch" ? ["A"] : view === "remote" ? ["A", "remote"] : ["A", "remote", "B"];
 }
 
-export const GIT_VIEWS: { id: GitView; label: string; description: string }[] = [
-  { id: "local", label: "A → Git", description: "แก้ไฟล์ แล้ว Add และ Commit ในเครื่องเดียว" },
-  { id: "remote", label: "A → Git → GitHub", description: "ส่ง commit ขึ้น GitHub ด้วย Push และรับด้วย Pull" },
-  { id: "full", label: "A+Git → GitHub → B+Git", description: "สองเครื่องทำงานร่วมกันผ่าน GitHub (Clone / Push / Pull)" },
-  { id: "branch", label: "Branch (ทางแยก)", description: "แตกทางแยกลองของใหม่โดย main ไม่โดนกระทบ แล้ว Merge กลับ (สร้าง / สลับ / Merge)" },
-];
+/** Lesson steps as the dropdown lists them; `host` is the remote's name (GitHub / GitLab). */
+export function gitViewList(hostId?: HostId): { id: GitView; label: string; description: string }[] {
+  const { name: host, mergeRequest } = hostOf(hostId);
+  return [
+    { id: "local", label: "A → Git", description: "แก้ไฟล์ แล้ว Add และ Commit ในเครื่องเดียว" },
+    { id: "remote", label: `A → Git → ${host}`, description: `ส่ง commit ขึ้น ${host} ด้วย Push และรับด้วย Pull` },
+    { id: "full", label: `A+Git → ${host} → B+Git`, description: `สองเครื่องทำงานร่วมกันผ่าน ${host} (Clone / Push / Pull)` },
+    { id: "branch", label: "Branch (ทางแยก)", description: "แตกทางแยกลองของใหม่โดย main ไม่โดนกระทบ แล้ว Merge กลับ (สร้าง / สลับ / Merge)" },
+    { id: "review", label: `${mergeRequest} (ทีม)`, description: `main ถูกป้องกัน: แตก branch → Push branch → เปิด ${mergeRequest} → เพื่อนอนุมัติ → Merge บน ${host} (โบนัส)` },
+  ];
+}
+export const GIT_VIEWS = gitViewList();
 
 /** Steps that show GitHub (and so Push / Pull / tracking tags). The Branch step is machine A only. */
-export const viewHasRemote = (view: GitView) => view === "remote" || view === "full";
+export const viewHasRemote = (view: GitView) => view === "remote" || view === "full" || view === "review";
 
 // ---------------------------------------------------------------------------
 // Shared geometry for drawing AND for the DOM overlay (edit / commit buttons).
@@ -125,13 +132,20 @@ export function fileCodeBox(layout: WidgetLayout, machine: "A" | "B"): Box | nul
 }
 
 /** GitHub card internals, relative to the card's content top (`remote.y + 52`). */
-export const REMOTE_COLUMN = { subtitleY: 10, pillY: 34, fileY: 72, fileH: 150, listGap: 12, tabH: 26, tabHCompact: 22 } as const;
+export const REMOTE_COLUMN = { subtitleY: 10, pillY: 34, fileY: 72, fileH: 150, listGap: 12, tabH: 26, tabHCompact: 22, reviewFileH: 96, requestH: 118 } as const;
 
 /** Read-only file of a GitHub commit (tab bar + code) on the GitHub card. */
 export function remoteFileBox(layout: WidgetLayout): Box | null {
   const remote = layout.remote;
   if (!remote) return null;
-  return { x: remote.x + 10, y: remote.y + 52 + REMOTE_COLUMN.fileY, w: remote.w - 20, h: REMOTE_COLUMN.fileH };
+  return { x: remote.x + 10, y: remote.y + 52 + REMOTE_COLUMN.fileY, w: remote.w - 20, h: layout.view === "review" ? REMOTE_COLUMN.reviewFileH : REMOTE_COLUMN.fileH };
+}
+
+/** The Merge Request card under the remote's file (review lesson only). */
+export function remoteRequestBox(layout: WidgetLayout): Box | null {
+  const file = remoteFileBox(layout);
+  if (!file || layout.view !== "review") return null;
+  return { x: file.x, y: file.y + file.h + 8, w: file.w, h: REMOTE_COLUMN.requestH };
 }
 
 /** Code area of the GitHub file (below its tab bar). */
@@ -154,7 +168,8 @@ export function commitListBox(layout: WidgetLayout, repository: "A" | "B" | "rem
     const remote = layout.remote;
     const file = remoteFileBox(layout);
     if (!remote || !file) return null;
-    const y = file.y + file.h + REMOTE_COLUMN.listGap;
+    const request = remoteRequestBox(layout);
+    const y = (request ? request.y + request.h : file.y + file.h) + REMOTE_COLUMN.listGap;
     return { x: remote.x + 10, y, w: remote.w - 20, h: remote.y + remote.h - y - 18 };
   }
   const target = machineOf(layout, repository);

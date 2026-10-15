@@ -1,11 +1,13 @@
 "use client";
 
 import { useRef, type CSSProperties, type KeyboardEvent } from "react";
-import { gitViewOf, type GitSimulatorNode } from "@/domain/document/model";
+import { gitHasMachineB, gitViewOf, type GitSimulatorNode } from "@/domain/document/model";
 import type { Camera } from "@/domain/document/session";
 import { worldToScreen } from "@/domain/document/camera";
 import type { MachineId, RepositoryId } from "@/domain/git/model";
 import { repositoryLabel } from "@/domain/git/messages";
+import { conflictLineRoles, hasConflictMarkers } from "@/domain/git/merge3";
+import { hostOf } from "@/domain/hosting";
 import { validateFileSnapshot } from "@/domain/git/selectors";
 import { useEditorStore } from "@/features/editor/store";
 import { commitGraph } from "@/features/git-simulator/diagram-model";
@@ -13,7 +15,7 @@ import { applyTextEdit, indentEdit, newlineEdit } from "@/features/git-simulator
 import { cancelGitDraft, flushGitDraft, gitDraftComposition, gitDraftFor, gitFieldKey, updateGitDraft } from "@/features/git-simulator/git-draft";
 import { useGitSessionStore } from "@/features/git-simulator/session-store";
 import { draftErrorMessage } from "@/features/git-simulator/view-model";
-import { EDITOR } from "@/features/git-simulator/git-widget-view";
+import { CONFLICT_FILL, EDITOR } from "@/features/git-simulator/git-widget-view";
 import {
   codeText, commitRowBox, commitRowLimit, fileCodeBox, fileEditorBox, fileNameBox, machineOf, remoteCodeBox, remoteCodeText, viewRepositories,
   widgetLayout, widgetWidth, WIDGET_H,
@@ -43,7 +45,10 @@ function FileEditor({ node, slideId, machine, layout }: { node: GitSimulatorNode
   const column = machineOf(layout, machine)!.file;
   const metrics = codeText(layout);
   const gutterRef = useRef<HTMLDivElement>(null);
+  const stripesRef = useRef<HTMLDivElement>(null);
   const lineCount = file.content.split("\n").length;
+  // Conflict markers: marker lines amber, our half green, their half blue — painted under the transparent textarea.
+  const roles = hasConflictMarkers(file.content) ? conflictLineRoles(file.content) : null;
   const errorId = `git-file-error-${node.id}-${machine}`;
   const where = repositoryLabel(machine);
 
@@ -63,7 +68,7 @@ function FileEditor({ node, slideId, machine, layout }: { node: GitSimulatorNode
       if (blurWhileComposing.current) { blurWhileComposing.current = false; finish(); }
     },
     // In the two-machine step the panel follows the machine being edited, so Add/Commit act on it.
-    onFocus: () => { if (gitViewOf(node) === "full") useGitSessionStore.getState().setTab(node.id, machine); },
+    onFocus: () => { if (gitHasMachineB(gitViewOf(node))) useGitSessionStore.getState().setTab(node.id, machine); },
     onBlur: () => {
       if (gitDraftComposition.active) blurWhileComposing.current = true;
       else finish();
@@ -109,11 +114,20 @@ function FileEditor({ node, slideId, machine, layout }: { node: GitSimulatorNode
             style={{ height: metrics.lineH, lineHeight: `${metrics.lineH}px`, paddingRight: 6, fontSize: metrics.gutterSize, fontFamily: font, color: EDITOR.gutter }}>{index + 1}</div>)}
         </div>
       </div>}
+      {roles && <div aria-hidden data-testid={`git-conflict-stripes-${machine}`} className="pointer-events-none absolute left-0 top-0 h-full w-full overflow-hidden">
+        <div ref={stripesRef} style={{ paddingTop: metrics.pad }}>
+          {roles.map((role, index) => <div key={index} data-role={role} style={{ height: metrics.lineH, background: role === "text" ? "transparent" : CONFLICT_FILL[role] }} />)}
+        </div>
+      </div>}
       <textarea {...common} data-git-field={gitFieldKey(machine, "content")} aria-label={`แก้ไฟล์บน${where}`} value={file.content}
         placeholder="พิมพ์โค้ดที่นี่" wrap="off"
         className="absolute top-0 h-full select-text resize-none overflow-auto border-0 bg-transparent outline-none placeholder:text-slate-500 selection:bg-blue-500/40"
         style={{ left: metrics.gutter, width: code.w - metrics.gutter, padding: metrics.pad, fontFamily: font, fontSize: metrics.size, lineHeight: `${metrics.lineH}px`, whiteSpace: "pre", tabSize: 4, color: EDITOR.text, caretColor: "#F8FAFC" }}
-        onScroll={(event) => { if (gutterRef.current) gutterRef.current.style.transform = `translateY(${-event.currentTarget.scrollTop}px)`; }}
+        onScroll={(event) => {
+          const shift = `translateY(${-event.currentTarget.scrollTop}px)`;
+          if (gutterRef.current) gutterRef.current.style.transform = shift;
+          if (stripesRef.current) stripesRef.current.style.transform = shift;
+        }}
         onChange={(event) => change({ content: event.target.value })} />
     </div>
     {error && <div className="pointer-events-auto flex items-center gap-2 rounded-md bg-red-50 px-2 text-red-700"
@@ -146,7 +160,7 @@ function RemoteFileViewer({ node, layout }: { node: GitSimulatorNode; layout: Wi
           style={{ height: metrics.lineH, lineHeight: `${metrics.lineH}px`, paddingRight: 6, fontSize: metrics.gutterSize, fontFamily: font, color: EDITOR.gutter }}>{index + 1}</div>)}
       </div>
     </div>}
-    <textarea readOnly wrap="off" spellCheck={false} value={file.content} aria-label={`โค้ดบน GitHub (${commitId}) อ่านอย่างเดียว`}
+    <textarea readOnly wrap="off" spellCheck={false} value={file.content} aria-label={`โค้ดบน ${hostOf(node.host).name} (${commitId}) อ่านอย่างเดียว`}
       className="absolute top-0 h-full cursor-default select-text resize-none overflow-auto border-0 bg-transparent outline-none selection:bg-blue-500/40"
       style={{ left: metrics.gutter, width: code.w - metrics.gutter, padding: metrics.pad, fontFamily: font, fontSize: metrics.size, lineHeight: `${metrics.lineH}px`, whiteSpace: "pre", tabSize: 4, color: EDITOR.text }}
       onScroll={(event) => { if (gutterRef.current) gutterRef.current.style.transform = `translateY(${-event.currentTarget.scrollTop}px)`; }} />
@@ -170,7 +184,7 @@ export function GitCanvasOverlay({ node, slideId, camera, writable }: { node: Gi
     if (!useEditorStore.getState().flushPendingEdits()) return;
     const same = preview?.repository === repository && preview.commitId === commitId;
     setPreview(node.id, same ? undefined : { repository, commitId });
-    if (repository !== "remote" && view === "full") useGitSessionStore.getState().setTab(node.id, repository);
+    if (repository !== "remote" && gitHasMachineB(view)) useGitSessionStore.getState().setTab(node.id, repository);
   };
 
   return <div data-testid="git-overlay" className="pointer-events-none absolute left-0 top-0 z-10"
@@ -183,7 +197,7 @@ export function GitCanvasOverlay({ node, slideId, camera, writable }: { node: Gi
     {layout.remote && <RemoteFileViewer node={node} layout={layout} />}
     {viewRepositories(view).flatMap((repository) => commitGraph(node.state, repository, commitRowLimit(layout, repository)).rows.map((row, index) => {
       const selected = preview?.repository === repository && preview.commitId === row.id;
-      const label = `${selected ? "เลิกดู" : "ดู"}โค้ดของ ${row.id} (${repositoryLabel(repository)})`;
+      const label = `${selected ? "เลิกดู" : "ดู"}โค้ดของ ${row.id} (${repositoryLabel(repository, node.host)})`;
       return <button key={`${repository}-${row.id}`} type="button" aria-label={label} title={label} aria-pressed={selected}
         className="pointer-events-auto cursor-pointer rounded-lg hover:bg-blue-500/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
         style={at(commitRowBox(layout, repository, index)!)} onClick={() => togglePreview(repository, row.id)} />;

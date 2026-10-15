@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createInitialGitState } from "../../domain/git/initial";
 import { applyGitAction } from "../../domain/git/reducer";
 import type { FileSnapshot, GitAction, GitSimulationState } from "../../domain/git/model";
-import { branchPill, commitColor, commitGraph, commitLanes, laneMetrics, machineDiagram, remoteDiagram, shortSyncText } from "./diagram-model";
+import { requestDiagram, branchPill, commitColor, commitGraph, commitLanes, laneMetrics, machineDiagram, remoteDiagram, shortSyncText } from "./diagram-model";
 
 const file = (content: string): FileSnapshot => ({ name: "index.html", content });
 function play(state: GitSimulationState, ...actions: GitAction[]): GitSimulationState {
@@ -35,8 +35,10 @@ describe("Git diagram model", () => {
     let state = play(createInitialGitState(), ...commitOn("A", "1", "first"), { type: "push", machine: "A" }, { type: "clone", machine: "B" });
     state = play(state, ...commitOn("A", "A2", "A change"), ...commitOn("B", "B2", "B change"), { type: "push", machine: "B" });
     expect(machineDiagram(state, "A").sync.text).toBe("↑ 1 commit ยังไม่ Push");
-    state = play(state, { type: "pull", machine: "A" }); // DIVERGED: fetch kept
+    state = play(state, { type: "pull", machine: "A" }); // same line changed on both sides: fetch kept, merge stops on a conflict
     expect(machineDiagram(state, "A").sync.text).toBe("↕ ประวัติแยกกับ GitHub");
+    expect(machineDiagram(state, "A", "gitlab").sync.text).toBe("↕ ประวัติแยกกับ GitLab");
+    expect(machineDiagram(state, "A")).toMatchObject({ working: { tone: "pending", text: "⚠ ไฟล์ชนกัน ต้องแก้" }, staged: { tone: "pending", text: "⚠ ยังมี conflict" } });
     const graph = commitGraph(state, "A");
     expect(graph.rows.map((row) => [row.id, row.lane, row.tags])).toEqual([
       ["C3", 1, ["origin/main"]],
@@ -45,8 +47,8 @@ describe("Git diagram model", () => {
     ]);
     expect(commitGraph(state, "remote").rows.map((row) => row.id)).toEqual(["C3", "C1"]);
 
-    // Merge joins the fork: main stays on its own line, GitHub's commit is the merge's second parent.
-    state = play(state, { type: "merge", machine: "A", keep: "ours" });
+    // Resolving and committing joins the fork: main stays on its own line, GitHub's commit is the merge's second parent.
+    state = play(state, { type: "mergeTake", machine: "A", side: "ours" }, { type: "stage", machine: "A" }, { type: "commit", machine: "A", message: "merged" });
     expect(machineDiagram(state, "A").sync.text).toBe("↑ 2 commit ยังไม่ Push");
     expect(commitGraph(state, "A").rows.map((row) => [row.id, row.lane, row.parentId, row.mergeParentId])).toEqual([
       ["C4", 0, "C2", "C3"],
@@ -77,6 +79,8 @@ describe("short sync texts for narrow columns", () => {
   it("keeps the meaning in fewer characters", () => {
     expect(shortSyncText("↑ 1 commit ยังไม่ Push")).toBe("↑ 1 ยังไม่ Push");
     expect(shortSyncText("↓ ตามหลัง GitHub 2 commit")).toBe("↓ ตามหลัง 2");
+    expect(shortSyncText("↓ ตามหลัง GitLab 2 commit")).toBe("↓ ตามหลัง 2");
+    expect(shortSyncText("↕ ประวัติแยกกับ GitLab")).toBe("↕ ประวัติแยก");
     expect(shortSyncText("↕ ประวัติแยกกับ GitHub")).toBe("↕ ประวัติแยก");
     expect(shortSyncText("✓ ตรงกับ GitHub")).toBe("✓ ตรงกับ GitHub");
   });
@@ -86,7 +90,7 @@ describe("branch lanes", () => {
   const onMain = (content: string, message: string) => commitOn("A", content, message);
   const named = (name: string): GitAction => ({ type: "branchCreate", machine: "A", name });
   const to = (name: string): GitAction => ({ type: "branchSwitch", machine: "A", name });
-  const mergeOf = (name: string, keep?: "ours" | "theirs"): GitAction => ({ type: "branchMerge", machine: "A", name, ...(keep ? { keep } : {}) });
+  const mergeOf = (name: string): GitAction => ({ type: "branchMerge", machine: "A", name });
 
   it("puts main on lane 0 and each branch with its own commits on its own lane, branching off the commit it started at", () => {
     // main: C1 C2; feature: C3 C4 (from C2); main: C5 (from C2)
@@ -103,14 +107,16 @@ describe("branch lanes", () => {
   });
 
   it("shows HEAD on the current branch's tip and joins a real merge back as two parents", () => {
-    let state = play(createInitialGitState(), ...onMain("1", "one"), named("feature"), ...onMain("f1", "f1"), to("main"), ...onMain("m2", "m2"));
+    // Different lines changed on each side, so Git merges by itself.
+    let state = play(createInitialGitState(), ...onMain("a\nb\nc\nd\ne\n", "one"), named("feature"), ...onMain("A\nb\nc\nd\ne\n", "f1"), to("main"), ...onMain("a\nb\nc\nd\nE\n", "m2"));
     expect(commitGraph(state, "A").rows.find((row) => row.id === "C2")).toMatchObject({ lane: 1, tags: ["feature"], headTag: null });
-    state = play(state, mergeOf("feature", "ours"));
+    state = play(state, mergeOf("feature"));
     const rows = commitGraph(state, "A").rows;
     expect(rows[0]).toMatchObject({ id: "C4", lane: 0, parentId: "C3", mergeParentId: "C2", tags: ["main"], headTag: "main" });
     expect(rows.map((row) => [row.id, row.lane])).toEqual([["C4", 0], ["C3", 0], ["C2", 1], ["C1", 0]]);
     expect(branchPill(state, "A")).toEqual({ tone: "info", text: "คุณอยู่ที่ branch: main (HEAD)" });
     expect(branchPill(play(state, named("next")), "A")).toEqual({ tone: "ready", text: "คุณอยู่ที่ branch: next (HEAD)" });
+    expect(branchPill(play(state, named("next")), "A", true)).toEqual({ tone: "ready", text: "HEAD → next" });
   });
 
   it("a fast-forwarded branch has no lane of its own and shares the tip with main", () => {
@@ -128,7 +134,7 @@ describe("branch lanes", () => {
   });
 
   it("commits of a deleted branch keep a lane after the named branches; old states keep lane 1 for the fork", () => {
-    let state = play(createInitialGitState(), ...onMain("1", "one"), named("gone"), ...onMain("g1", "g1"), to("main"), ...onMain("m2", "m2"), mergeOf("gone", "ours"));
+    let state = play(createInitialGitState(), ...onMain("a\nb\nc\nd\ne\n", "one"), named("gone"), ...onMain("A\nb\nc\nd\ne\n", "g1"), to("main"), ...onMain("a\nb\nc\nd\nE\n", "m2"), mergeOf("gone"));
     state = play(state, { type: "branchDelete", machine: "A", name: "gone" });
     const { lanes, count } = commitLanes(state, "A");
     expect(lanes.get("C2")).toBe(1);
@@ -148,5 +154,38 @@ describe("branch lanes", () => {
       const m = laneMetrics(lanes, false);
       expect(m.x0 + (lanes - 1) * m.gap + m.radius).toBeLessThan(m.textX); // the last lane never reaches the message
     }
+  });
+});
+
+describe("Merge Request card and remote branches", () => {
+  const f = (content: string) => ({ name: "a.txt", content });
+  const commit = (machine: "A" | "B", content: string): GitAction[] => [{ type: "edit", machine, file: f(content) }, { type: "stage", machine }, { type: "commit", machine, message: "work" }];
+  const pushR = (machine: "A" | "B"): GitAction => ({ type: "push", machine, review: true });
+  let state = play(createInitialGitState(), ...commit("A", "a\nb\nc\n"), pushR("A"), { type: "clone", machine: "B" });
+
+  it("shows an empty card, then open → approved → merged with the host's own word", () => {
+    expect(requestDiagram(state)).toEqual({ empty: true, text: "ยังไม่มี Pull Request" });
+    expect(requestDiagram(state, "gitlab")).toEqual({ empty: true, text: "ยังไม่มี Merge Request" });
+    state = play(state, { type: "branchCreate", machine: "A", name: "feature" }, ...commit("A", "A\nb\nc\n"), pushR("A"), { type: "mrOpen", machine: "A" });
+    expect(requestDiagram(state)).toMatchObject({ empty: false, title: "!1 feature → main", chip: { text: "เปิดอยู่", tone: "pending" } });
+    const open = requestDiagram(state);
+    expect(!open.empty && open.lines.map((line) => line.text)).toEqual(["เปิดโดย เครื่อง A • ยังไม่มีคนอนุมัติ", "✓ pipeline ผ่าน", "… รอเพื่อนอนุมัติ"]);
+    state = play(state, { type: "mrApprove", machine: "B", id: 1 });
+    const approved = requestDiagram(state);
+    expect(approved).toMatchObject({ chip: { text: "อนุมัติแล้ว" } });
+    expect(!approved.empty && approved.lines.map((line) => line.text)).toEqual(["เปิดโดย เครื่อง A • อนุมัติโดย เครื่อง B", "✓ pipeline ผ่าน", "✓ Merge ได้ (fast-forward)"]);
+    state = play(state, { type: "mrMerge", machine: "B", id: 1 });
+    const merged = requestDiagram(state);
+    expect(merged).toMatchObject({ chip: { text: "รวมแล้ว", tone: "clean" } });
+    expect(!merged.empty && merged.lines.at(-1)?.text).toBe("✓ รวมเข้า main แล้ว • ลบ branch feature แล้ว");
+  });
+
+  it("the remote's commit list tags a pushed branch and gives it its own lane", () => {
+    let pushed = play(createInitialGitState(), ...commit("A", "a\nb\nc\n"), pushR("A"), { type: "branchCreate", machine: "A", name: "feature" }, ...commit("A", "A\nb\nc\n"), pushR("A"));
+    const graph = commitGraph(pushed, "remote");
+    expect(graph.rows.map((row) => [row.id, row.lane, row.tags])).toEqual([["C2", 1, ["feature"]], ["C1", 0, ["main"]]]);
+    expect(commitLanes(pushed, "remote").count).toBe(2);
+    pushed = play(pushed, { type: "branchSwitch", machine: "A", name: "main" });
+    expect(commitGraph(pushed, "remote").rows[0].tags).toEqual(["feature"]);
   });
 });

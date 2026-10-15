@@ -86,8 +86,19 @@ const machine = z.strictObject({
   initialized: z.boolean(), working: fileSnapshot.nullable(), index: fileSnapshot.nullable(),
   mainHead: commitId.nullable(), originMainHead: commitId.nullable(), knownCommitIds: z.array(commitId),
   branches: z.record(branchName, commitId).optional(), head: branchName.optional(),
+  // A merge stopped on conflicts; `label` is a branch name or the fetched "origin/main".
+  merging: z.strictObject({ theirs: commitId, label: z.string().regex(/^[A-Za-z0-9._/-]{1,40}$/) }).optional(),
 });
-const remote = z.strictObject({ mainHead: commitId.nullable(), knownCommitIds: z.array(commitId) });
+const mergeRequest = z.strictObject({
+  id: z.number().int().positive(), source: branchName, target: z.literal("main"),
+  title: z.string().refine((v) => codePoints(v) >= 1 && codePoints(v) <= 200 && !/[\r\n\u2028\u2029]/.test(v)),
+  status: z.enum(["open", "merged", "closed"]), author: z.enum(["A", "B"]), approvedBy: z.array(z.enum(["A", "B"])).max(2),
+});
+const remote = z.strictObject({
+  mainHead: commitId.nullable(), knownCommitIds: z.array(commitId),
+  // Branches pushed to the remote and the Merge Requests opened on it (the review lesson); absent in older documents.
+  branches: z.record(branchName, commitId).optional(), requests: z.array(mergeRequest).max(20).optional(),
+});
 const gitState = z.strictObject({
   version: z.literal(1), commits: z.record(commitId, commit),
   machines: z.strictObject({ A: machine, B: machine }), remote,
@@ -118,6 +129,15 @@ const gitState = z.strictObject({
     }
   };
   checkKnown(state.remote.knownCommitIds, state.remote.mainHead, "remote");
+  const remoteKnown = new Set(state.remote.knownCommitIds);
+  const remoteBranches = Object.entries(state.remote.branches ?? {});
+  if (remoteBranches.length > 20) fail("remote has too many branches");
+  for (const [name, tip] of remoteBranches) if (!remoteKnown.has(tip)) fail(`remote branch ${name} tip is unknown`);
+  (state.remote.requests ?? []).forEach((request, index) => {
+    if (request.id !== index + 1) fail(`Merge Request ids must be 1, 2, 3…: !${request.id}`);
+    if (new Set(request.approvedBy).size !== request.approvedBy.length || request.approvedBy.includes(request.author)) fail(`Merge Request !${request.id} approvals invalid`);
+    if (request.status === "open" && !(state.remote.branches && Object.prototype.hasOwnProperty.call(state.remote.branches, request.source))) fail(`Merge Request !${request.id} source branch is gone`);
+  });
   for (const id of ["A", "B"] as const) {
     const repo = state.machines[id];
     checkKnown(repo.knownCommitIds, repo.mainHead, id);
@@ -126,6 +146,8 @@ const gitState = z.strictObject({
     if (branches.length > 20) fail(`${id} has too many branches`);
     for (const [name, tip] of branches) if (!repo.knownCommitIds.includes(tip)) fail(`${id} branch ${name} tip is unknown`);
     if (repo.head !== undefined && !(repo.branches && Object.prototype.hasOwnProperty.call(repo.branches, repo.head))) fail(`${id} HEAD is on a missing branch`);
+    if (repo.merging && (!repo.initialized || !repo.working || !repo.index || !repo.knownCommitIds.includes(repo.merging.theirs)
+      || !(repo.head === undefined ? repo.mainHead : repo.branches?.[repo.head]))) fail(`${id} merge state invalid`);
     if (!repo.initialized && (repo.working || repo.index || repo.mainHead || repo.originMainHead || repo.knownCommitIds.length || branches.length)) fail(`${id} uninitialized state invalid`);
     if (repo.initialized && (!repo.working || (repo.mainHead && !repo.index))) fail(`${id} initialized state invalid`);
   }
@@ -133,7 +155,9 @@ const gitState = z.strictObject({
 });
 const gitSimulator = z.strictObject({
   ...base, type: z.literal("git-simulator"), rotation: z.literal(0),
-  scale: z.number().finite().min(0.5).max(4), view: z.enum(["local", "remote", "full", "branch"]).optional(), state: gitState,
+  scale: z.number().finite().min(0.5).max(4), view: z.enum(["local", "remote", "full", "branch", "review"]).optional(),
+  // Where the class keeps its code; missing = GitHub (documents made before the switch).
+  host: z.enum(["github", "gitlab"]).optional(), state: gitState,
 });
 
 // Data-storage simulator (plan 07 §3): small coffee-shop tables with referential integrity.
@@ -259,7 +283,7 @@ const sshState = z.strictObject({
 });
 const sshSimulator = z.strictObject({
   ...base, type: z.literal("ssh-simulator"), rotation: z.literal(0),
-  scale: z.number().finite().min(0.5).max(4), view: sshView, state: sshState,
+  scale: z.number().finite().min(0.5).max(4), view: sshView, host: z.enum(["github", "gitlab"]).optional(), state: sshState,
 });
 
 export const canvasNodeSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, arrow, pen, highlighter, text, image, stencil, table, code, gitSimulator, dataSimulator, deploySimulator, aiSimulator, sshSimulator]);

@@ -3,6 +3,7 @@
 import type { JSX, ReactNode } from "react";
 import { Group, Line, Rect, Text } from "react-konva";
 import type { CarriedLine, MarkTone } from "@/domain/data/model";
+import { hostOf, type Host } from "@/domain/hosting";
 import type { SshSimulatorNode } from "@/domain/document/model";
 import { KEYGEN_COMMAND, normalizeSshView, type Machine, type SshMachine, type SshState, type SshView } from "@/domain/ssh/model";
 import { NAME, hasKeys } from "@/domain/ssh/reducer";
@@ -10,23 +11,23 @@ import { CaptionBar, Gate, Icon, IconLabel, Label, MARK_STYLE, Packet, Pipe, TON
 import type { IconName } from "@/features/flow/icon-paths";
 import type { FlowPlay } from "@/features/flow/flow-session";
 import { useFlowPlayback } from "@/features/flow/use-flow-playback";
-import { CAPTION_BOX, SSH_H, SSH_VIEWS, SSH_W, hopPath, keySlot, sceneOf, type Box, type MachineBox, type Scene } from "./ssh-layout";
+import { CAPTION_BOX, SSH_H, SSH_W, hopPath, keySlot, sceneOf, sshViews, type Box, type MachineBox, type Scene } from "./ssh-layout";
 
 // Canvas rendering of the SSH simulator (plan 07 §4c). Draw inside a Group already translated to node.x/node.y.
 // Deterministic for export: without a play it draws the stored state only.
 
 const C = { frame: "#FFFFFF", frameStroke: "#CBD5E1", card: "#FFFFFF", cardStroke: "#E2E8F0", title: "#0F172A", text: "#1E293B", muted: "#64748B", dark: "#0F172A", ok: "#15803D", bad: "#B91C1C", github: "#F6F8FA" };
 /** Hint under the board while nothing is playing: follows the state, like the panel's “ทำต่อ” card. */
-function idleCaption(view: SshView, state: SshState): string {
-  if (view === "others") return "ลองให้เครื่องอื่นหรือคนที่คัดลอก .pub เข้า GitHub แล้วดูว่าทำไมประตูไม่เปิด";
-  if (!hasKeys(state, "a")) return "GitHub ต้องรู้ว่าเป็นเราจริงก่อนให้แก้ repo: ลองส่งโค้ดดู หรือสร้างคู่กุญแจ (กุญแจลับ = นิ้วจริง, .pub = ลายนิ้วมือ)";
-  if (!state.registered.includes("a")) return "มีคู่กุญแจแล้ว: ต่อไปนำ .pub (ลายนิ้วมือ) ไปลงทะเบียนที่ประตูของ GitHub ครั้งเดียว";
+function idleCaption(view: SshView, state: SshState, host: Host): string {
+  if (view === "others") return `ลองให้เครื่องอื่นหรือคนที่คัดลอก .pub เข้า ${host.name} แล้วดูว่าทำไมประตูไม่เปิด`;
+  if (!hasKeys(state, "a")) return `${host.name} ต้องรู้ว่าเป็นเราจริงก่อนให้แก้ repo: ลองส่งโค้ดดู หรือสร้างคู่กุญแจ (กุญแจลับ = นิ้วจริง, .pub = ลายนิ้วมือ)`;
+  if (!state.registered.includes("a")) return `มีคู่กุญแจแล้ว: ต่อไปนำ .pub (ลายนิ้วมือ) ไปลงทะเบียนที่ประตูของ ${host.name} ครั้งเดียว`;
   return "ลงทะเบียนแล้ว: ลองทดสอบการเชื่อมต่อหรือ git push แล้วดูว่าประตูตรวจอะไรบ้าง";
 }
 /** Dim command shown in the terminal before anything ran: the next thing to type. */
-function hintCommand(state: SshState): string {
+function hintCommand(state: SshState, host: Host): string {
   if (!hasKeys(state, "a")) return `$ ${KEYGEN_COMMAND}`;
-  return state.registered.includes("a") ? "$ ssh -T git@github.com" : "$ cat ~/.ssh/id_ed25519.pub";
+  return state.registered.includes("a") ? `$ ssh -T git@${host.sshHost}` : "$ cat ~/.ssh/id_ed25519.pub";
 }
 const KIND_ICON: Record<CarriedLine["kind"], IconName> = { file: "file", memory: "brain", user: "user", ai: "bot", tool: "wrench", edit: "pencil", note: "note", code: "key", pass: "check", fail: "fail", empty: "empty" };
 
@@ -91,7 +92,7 @@ function Terminal({ box, compact, machine, hint, font }: { box: Box; compact: bo
     {machine.out.map((line, index) => <Label key={index} x={box.x + 14} y={box.y + 28 + index * 18} width={box.w - 28} text={line} size={12} color={lineColor(line, true)} font={font} />)}
   </Group>;
 }
-const lineColor = (line: string, ran: boolean) => !ran ? "#64748B" : /denied|fatal/i.test(line) ? "#FCA5A5" : /Hi you|main ->|saved|Permanently/.test(line) ? "#86EFAC" : "#CBD5E1";
+const lineColor = (line: string, ran: boolean) => !ran ? "#64748B" : /denied|fatal/i.test(line) ? "#FCA5A5" : /Hi you|Welcome to|main ->|saved|Permanently/.test(line) ? "#86EFAC" : "#CBD5E1";
 
 function Laptop({ box, title, font }: { box: Box; title: string; font: string }) {
   const base = box.y + box.h;
@@ -113,11 +114,11 @@ function OneWayLink({ box, compact, made, font }: { box: Box; compact: boolean; 
   </Group>;
 }
 
-function MachineView({ machine, state, compact, marks, layout, font }: {
-  machine: Machine; state: SshState; compact: boolean; marks: Marks; layout: MachineBox; font: string;
+function MachineView({ machine, state, compact, marks, layout, host, font }: {
+  machine: Machine; state: SshState; compact: boolean; marks: Marks; layout: MachineBox; host: Host; font: string;
 }) {
   const me = state[machine];
-  const hint = hintCommand(state);
+  const hint = hintCommand(state, host);
   const suffix = machine === "a" ? "" : ":b";
   const folderMark = toneOf(marks, `ssh${suffix}`);
   const folder = layout.folder;
@@ -135,9 +136,9 @@ function MachineView({ machine, state, compact, marks, layout, font }: {
   </Group>;
 }
 
-function KeysList({ scene, state, marks, font }: { scene: Scene; state: SshState; marks: Marks; font: string }) {
+function KeysList({ scene, state, marks, host, font }: { scene: Scene; state: SshState; marks: Marks; host: Host; font: string }) {
   const keys = scene.keys;
-  return <Card box={keys} title="Settings → SSH keys" icon="key" mark={toneOf(marks, "keys")} fill="#FFFFFF" font={font}>
+  return <Card box={keys} title={host.keysPage} icon="key" mark={toneOf(marks, "keys")} fill="#FFFFFF" font={font}>
     {state.registered.length === 0 && !toneOf(marks, "key:a") && !toneOf(marks, "key:b") && <>
       <Icon name="empty" x={keys.x + keys.w / 2 - 14} y={keys.y + 56} size={28} color="#CBD5E1" />
       <Para x={keys.x + 16} y={keys.y + 94} width={keys.w - 32} height={40} text="ยังไม่มีลายนิ้วมือที่ลงทะเบียน: ประตูไม่รู้จักใครเลย" size={13} color="#94A3B8" align="center" font={font} />
@@ -182,32 +183,33 @@ function Payload({ title, color, lines, font }: { title: string; color: string; 
 /** Canvas rendering of an SSH simulator node. `play` (editor only) animates the last action. */
 export function SshWidgetView({ node, play, fontFamily: font }: { node: SshSimulatorNode; play: FlowPlay | null; fontFamily: string }): JSX.Element {
   const view = normalizeSshView(node.view);
+  const host = hostOf(node.host);
   const scene = sceneOf(view);
   const flow = useFlowPlayback<SshState, Pt>(node.id, play, node.state, (_before, _after, move) => hopPath(view, move));
   const { state, marks } = flow;
   const onPath = (point: Pt) => Boolean(flow.path?.some((item) => Math.abs(item.x - point.x) < 1 && Math.abs(item.y - point.y) < 1));
   const gateTone = toneOf(marks, "scanner") === "blocked" ? "blocked" : toneOf(marks, "scanner") === "allowed" ? "ok" : "idle";
-  const title = SSH_VIEWS.find((item) => item.id === view)!;
+  const title = sshViews(node.host).find((item) => item.id === view)!;
   const repo = scene.repo, github = scene.github;
   const move = flow.moving;
   return <Group scaleX={node.scale} scaleY={node.scale} clipX={0} clipY={0} clipWidth={SSH_W} clipHeight={SSH_H}>
     <Rect x={1} y={1} width={SSH_W - 2} height={SSH_H - 2} cornerRadius={18} fill={C.frame} stroke={C.frameStroke} strokeWidth={2} />
     <Label x={24} y={18} width={SSH_W - 48} text={`SSH: ${title.label}`} size={24} bold color={C.title} font={font} />
-    <MachineView machine="a" state={state} compact={scene.compact} marks={marks} layout={scene.machines.a} font={font} />
-    {scene.machines.b && <MachineView machine="b" state={state} compact marks={marks} layout={scene.machines.b} font={font} />}
+    <MachineView machine="a" state={state} compact={scene.compact} marks={marks} layout={scene.machines.a} host={host} font={font} />
+    {scene.machines.b && <MachineView machine="b" state={state} compact marks={marks} layout={scene.machines.b} host={host} font={font} />}
     {scene.pipes.map((pipe, index) => <Pipe key={index} from={pipe.from} to={pipe.to}
       active={move && onPath(pipe.from) && onPath(pipe.to) ? move.tone : null} font={font} />)}
-    <Gate at={scene.scanner} label="ด่านสแกนนิ้ว" sub={scene.compact ? undefined : "ประตูของ GitHub"} tone={gateTone} font={font} />
+    <Gate at={scene.scanner} label="ด่านสแกนนิ้ว" sub={scene.compact ? undefined : `ประตูของ ${host.name}`} tone={gateTone} font={font} />
     {scene.thief && <Thief box={scene.thief} state={state} mark={toneOf(marks, "thief")} font={font} />}
 
-    <Card box={github} title="GitHub" icon="cloud" fill={C.github} font={font} />
+    <Card box={github} title={host.name} icon="cloud" fill={C.github} font={font} />
     <Card box={repo} mark={toneOf(marks, "repo")} fill="#FFFFFF" font={font}>
       <IconLabel x={repo.x + 12} y={repo.y + 10} width={repo.w - 24} icon="gitBranch" text="repo: coffee-shop" size={14} bold color={C.text} font={font} />
       <Label x={repo.x + 34} y={repo.y + 38} width={repo.w - 46} text={state.pushes ? `โค้ดของเรา · ส่งขึ้นแล้ว ${state.pushes} ครั้ง ✓` : "โค้ดของเรา · ยังไม่ได้ส่งขึ้น"} size={12} color={state.pushes ? C.ok : C.muted} font={font} />
     </Card>
-    <KeysList scene={scene} state={state} marks={marks} font={font} />
+    <KeysList scene={scene} state={state} marks={marks} host={host} font={font} />
 
-    <CaptionBar box={CAPTION_BOX} text={flow.frame ? flow.frame.caption : idleCaption(view, state)} step={flow.step} font={font} />
+    <CaptionBar box={CAPTION_BOX} text={flow.frame ? flow.frame.caption : idleCaption(view, state, host)} step={flow.step} font={font} />
     {move && flow.path && <Packet key={flow.runKey} runKey={flow.runKey} path={flow.path} label={move.label} tone={move.tone}
       duration={flow.travel} font={font} onLanded={flow.onLanded}
       body={move.detail ? <Payload title={move.label} color={TONE_COLOR[move.tone]} lines={move.detail} font={font} /> : undefined} />}

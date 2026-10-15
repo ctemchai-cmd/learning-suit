@@ -1,4 +1,5 @@
 import type { Hop, Spot } from "@/domain/data/model";
+import { hostOf, type HostId } from "@/domain/hosting";
 import { normalizeSshView, type Machine, type SshView } from "@/domain/ssh/model";
 
 // Pure geometry of the SSH widget (plan 07 §4c), widget base coordinates 1120×680.
@@ -11,8 +12,9 @@ export const SSH_W = 1120;
 export const SSH_H = 680;
 export const CAPTION_BOX: Box = { x: 24, y: 620, w: 1072, h: 46 };
 
-export const SSH_VIEWS: { id: SshView; label: string; description: string }[] = [
-  { id: "setup", label: "เชื่อม GitHub ด้วย SSH", description: "ลองส่งโค้ด → สร้างคู่กุญแจ → ลงทะเบียน .pub → เชื่อมต่อ" },
+/** Lesson steps; the first one names the site (GitHub when `host` is missing). */
+export const sshViews = (host?: HostId): { id: SshView; label: string; description: string }[] => [
+  { id: "setup", label: `เชื่อม ${hostOf(host).name} ด้วย SSH`, description: "ลองส่งโค้ด → สร้างคู่กุญแจ → ลงทะเบียน .pub → เชื่อมต่อ" },
   { id: "others", label: "เครื่องอื่น / กุญแจหาย", description: "เครื่องอื่นเข้าไม่ได้, คนคัดลอก .pub ก็เข้าไม่ได้, โน้ตบุ๊กหายให้ลบกุญแจออก" },
 ];
 

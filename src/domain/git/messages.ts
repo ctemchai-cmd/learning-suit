@@ -1,9 +1,12 @@
+import { hostOf, type HostId } from "../hosting";
 import type { CommitId, GitAction, GitTransition, RepositoryId } from "./model";
-import { currentBranch, type BranchNameError, type FileValidationError, type MessageValidationError } from "./selectors";
+import { currentBranch, headCommitId, type BranchNameError, type FileValidationError, type MessageValidationError } from "./selectors";
 
 /** Thai UI copy for simulator results. Commit / Push / Pull are simulated lesson actions, not the app's cloud save. */
 
-export const DIVERGED_MESSAGE = "รับข้อมูลจาก GitHub แล้ว แต่ประวัติแยกกัน (ต่างคนต่าง Commit) เลือก Merge เพื่อรวมประวัติ หรือใช้เวอร์ชันของ GitHub";
+export const MERGE_HINT = "แก้ในไฟล์ให้เหลือแบบที่ต้องการ ลบเครื่องหมาย <<<<<<< ======= >>>>>>> แล้ว Add + Commit";
+export const MERGING_BLOCKED_MESSAGE = "กำลัง merge อยู่: แก้ไฟล์ให้เสร็จแล้ว Add + Commit หรือกด “ยกเลิก merge” ก่อน";
+export const UNRESOLVED_CONFLICT_MESSAGE = "ยังมีเครื่องหมาย conflict เหลืออยู่ (<<<<<<< ======= >>>>>>>) ลบให้หมดแล้ว Add ก่อน Commit";
 export const DIRTY_WORKTREE_MESSAGE = "โหมดจำลองนี้ให้ Commit งานที่ค้างก่อน Pull";
 export const BRANCH_IDEA = "branch คือทางแยกให้ลองของใหม่ โดย main ไม่โดนกระทบ";
 export const DIRTY_SWITCH_MESSAGE = "Commit งานที่ค้างก่อนสลับ branch (ไม่เช่นนั้นงานที่ยังไม่ Commit จะหาย)";
@@ -11,8 +14,8 @@ export const NOT_ON_MAIN_MESSAGE = "ตอนนี้ไม่ได้อย�
 export const NEED_COMMIT_FOR_BRANCH_MESSAGE = "ต้อง commit อย่างน้อยหนึ่งครั้งก่อนแตก branch";
 export const RESET_TOOLTIP = "เริ่มตัวอย่างใหม่ ย้อนกลับด้วย Undo ได้";
 
-export function repositoryLabel(repository: RepositoryId): string {
-  return repository === "remote" ? "GitHub" : `เครื่อง ${repository}`;
+export function repositoryLabel(repository: RepositoryId, host?: HostId): string {
+  return repository === "remote" ? hostOf(host).name : `เครื่อง ${repository}`;
 }
 
 function commitList(ids: CommitId[]): string {
@@ -48,7 +51,9 @@ export function describeBranchNameError(error: BranchNameError): string {
 }
 
 /** Human readable Thai result for one reducer transition. Pure: derived only from the action and transition. */
-export function describeGitTransition(action: GitAction, transition: GitTransition): string {
+export function describeGitTransition(action: GitAction, transition: GitTransition, hostId?: HostId): string {
+  const H = hostOf(hostId).name;
+  const MR = hostOf(hostId).mergeRequest;
   const machine = action.type === "reset" ? null : action.machine;
   const where = machine ? repositoryLabel(machine) : "";
   const state = transition.nextState;
@@ -67,21 +72,66 @@ export function describeGitTransition(action: GitAction, transition: GitTransiti
     }
     case "PUSHED": {
       const sent = transition.transfer?.commitIds ?? [];
-      if (!sent.length) return `GitHub มี ${repo?.mainHead ?? ""} อยู่แล้ว อัปเดต origin/main ของ${where} ให้ตรงกัน`;
-      return `ส่ง ${commitList(sent)} ขึ้น GitHub แล้ว เครื่องอื่นจะได้รับเมื่อ Clone หรือ Pull`;
+      if (!sent.length) return `${H} มี ${repo?.mainHead ?? ""} อยู่แล้ว อัปเดต origin/main ของ${where} ให้ตรงกัน`;
+      return `ส่ง ${commitList(sent)} ขึ้น ${H} แล้ว เครื่องอื่นจะได้รับเมื่อ Clone หรือ Pull`;
     }
     case "CLONED":
-      return `Clone จาก GitHub มาที่${where} แล้ว (main = ${repo?.mainHead ?? ""})`;
+      return `Clone จาก ${H} มาที่${where} แล้ว (main = ${repo?.mainHead ?? ""})`;
     case "PULLED":
-      return `Pull แล้ว: ${where} เลื่อน main ไป ${repo?.mainHead ?? ""} และได้ไฟล์ตาม commit นั้น`;
+      return `Pull แล้ว: ${where} เลื่อน ${repo ? currentBranch(repo) : "main"} ไป ${repo ? headCommitId(repo) ?? "" : ""} และได้ไฟล์ตาม commit นั้น`;
     case "FETCHED_UP_TO_DATE":
-      return `รับข้อมูลจาก GitHub แล้ว origin/main = ${repo?.originMainHead ?? ""} ${where} ไม่ต้องเลื่อน main`;
+      return `รับข้อมูลจาก ${H} แล้ว origin/main = ${repo?.originMainHead ?? ""} ${where} ไม่ต้องเลื่อน main`;
     case "MERGED": {
-      const id = transition.affectedCommitIds[0] ?? repo?.mainHead ?? "";
-      const merged = id ? state.commits[id]?.mergeParentId ?? "" : "";
-      const side = action.type === "merge" && action.keep === "theirs" ? "ไฟล์จาก GitHub" : "ไฟล์ของเรา";
-      return `สร้าง ${id} รวมประวัติกับ ${merged} ของ GitHub แล้ว (เก็บ${side}) กด Push ได้เลย`;
+      // The learner's Commit finished a conflicted merge.
+      const commit = state.commits[transition.affectedCommitIds[0] ?? ""];
+      const pushHint = commit?.mergeParentId && commit.mergeParentId === repo?.originMainHead ? " กด Push ได้เลย" : "";
+      return `สร้าง ${commit?.id ?? ""} จบการ merge แล้ว (รวม ${commit?.parentId ?? ""} กับ ${commit?.mergeParentId ?? ""} เป็น merge commit สองพ่อแม่)${pushHint}`;
     }
+    case "AUTO_MERGED": {
+      const commit = state.commits[transition.affectedCommitIds.at(-1) ?? ""];
+      return `Git รวมให้เอง: แก้คนละบรรทัด ไม่ชนกัน สร้าง ${commit?.id ?? ""} รวมกับ ${commit?.mergeParentId ?? ""} ของ ${H} แล้ว กด Push ได้เลย`;
+    }
+    case "MERGE_CONFLICT": {
+      const from = action.type === "branchMerge" ? action.name : "origin/main";
+      return `ไฟล์ชนกัน: แก้บรรทัดเดียวกันกับ ${from} Git ใส่เครื่องหมายไว้ในไฟล์ให้แล้ว แต่ยังไม่ Commit ให้ ทำตามกรอบ “กำลัง merge” ด้านบน`;
+    }
+    case "MERGE_ABORTED":
+      return `ยกเลิก merge แล้ว ไฟล์และ Staging กลับเป็นเหมือนก่อน merge (git merge --abort)`;
+    case "MERGE_TAKEN":
+      return `ใส่ไฟล์ของ${action.type === "mergeTake" && action.side === "theirs" ? "อีกฝั่ง" : "เรา"}ลงในไฟล์แล้ว (ยังไม่ได้ Add) ต่อไป Add แล้ว Commit`;
+    case "MERGE_IN_PROGRESS": return MERGING_BLOCKED_MESSAGE;
+    case "NOT_MERGING": return "ตอนนี้ไม่ได้อยู่ระหว่าง merge";
+    case "UNRESOLVED_CONFLICT": return UNRESOLVED_CONFLICT_MESSAGE;
+    case "BRANCH_PUSHED": {
+      const name = repo ? currentBranch(repo) : "";
+      const sent = transition.transfer?.commitIds ?? [];
+      return `ส่ง branch ${name} ขึ้น ${H} แล้ว${sent.length ? ` (${commitList(sent)})` : ""} ${H} เก็บ branch นี้ไว้ข้าง main ต่อไปเปิด ${MR} ให้เพื่อนร่วมทีมตรวจ`;
+    }
+    case "MAIN_PROTECTED": return `main ถูกป้องกัน: ต้องแตก branch แล้วเปิด ${MR} (${H} ไม่ให้ Push เข้า main ตรง ๆ)`;
+    case "MR_OPENED": {
+      const request = state.remote.requests?.at(-1);
+      return `เปิด ${MR} !${request?.id ?? ""}: ${request?.source ?? ""} → main แล้ว รอเพื่อนร่วมทีมดูการเปลี่ยนแปลงและอนุมัติ (Approve)`;
+    }
+    case "MR_APPROVED": return `${where} อนุมัติ !${action.type === "mrApprove" ? action.id : ""} แล้ว ตอนนี้ Merge เข้า main ได้`;
+    case "MR_MERGED": {
+      const id = action.type === "mrMerge" ? action.id : 0;
+      const source = state.remote.requests?.find((request) => request.id === id)?.source ?? "";
+      return `Merge !${id} แล้ว: ${H} สร้าง merge commit ${transition.affectedCommitIds[0] ?? ""} บน main และลบ branch ${source} บน ${H} ให้ (main เปลี่ยนแล้ว: ทั้งสองเครื่อง git switch main แล้ว git pull)`;
+    }
+    case "MR_FAST_FORWARDED": {
+      const id = action.type === "mrMerge" ? action.id : 0;
+      const source = state.remote.requests?.find((request) => request.id === id)?.source ?? "";
+      return `Merge !${id} แล้ว (fast-forward: main ยังไม่ขยับจึงแค่เลื่อนไป ${transition.affectedCommitIds[0] ?? ""} ไม่สร้าง commit ใหม่) และลบ branch ${source} บน ${H} ให้ (ทั้งสองเครื่อง git switch main แล้ว git pull)`;
+    }
+    case "MR_NEED_BRANCH": return `ต้องอยู่ที่ branch ที่แตกจาก main (ไม่ใช่ main) จึงเปิด ${MR} ได้`;
+    case "MR_NOT_PUSHED": return `ต้อง Push branch ขึ้น ${H} ก่อนเปิด ${MR}`;
+    case "MR_NOTHING_NEW": return `branch นี้ยังไม่มีงานที่ main ไม่มี ต้อง Commit งานใหม่แล้ว Push ก่อนเปิด ${MR}`;
+    case "MR_EXISTS": return `branch นี้มี ${MR} ที่เปิดอยู่แล้ว`;
+    case "MR_LIMIT": return `เปิด ${MR} ได้ไม่เกิน 20 อัน กด Reset demo เพื่อเริ่มใหม่`;
+    case "MR_NOT_FOUND": return `ไม่พบ ${MR} ที่เปิดอยู่`;
+    case "MR_SELF_APPROVE": return `อนุมัติ ${MR} ของตัวเองไม่ได้: ต้องให้เพื่อนร่วมทีม (อีกเครื่อง) ตรวจแล้วกด อนุมัติ`;
+    case "MR_NOT_APPROVED": return `ต้องมีคนอนุมัติ (Approve) ก่อนจึง Merge ได้`;
+    case "MR_CONFLICT": return "ชนกับ main: ดึง main มา merge ใน branch แก้ conflict แล้ว Push ใหม่ (git switch <branch> แล้ว git pull origin main)";
     case "BRANCH_CREATED": {
       const name = action.type === "branchCreate" ? action.name.trim() : "";
       return `สร้าง branch ${name} จาก ${transition.affectedCommitIds[0] ?? ""} แล้วสลับไปอยู่ที่นั่น (HEAD → ${name}) ${BRANCH_IDEA}`;
@@ -99,32 +149,32 @@ export function describeGitTransition(action: GitAction, transition: GitTransiti
       const id = transition.affectedCommitIds[0] ?? "";
       const name = action.type === "branchMerge" ? action.name : "";
       const here = repo ? currentBranch(repo) : "";
-      const side = action.type === "branchMerge" && action.keep ? ` (ไฟล์ชนกัน เก็บไฟล์${action.keep === "theirs" ? `ของ ${name}` : `ของ ${here}`})` : "";
-      return `สร้าง ${id} รวม ${name} เข้า ${here} แล้ว${side} เป็น merge commit ที่มีสองพ่อแม่`;
+      return `Git รวมให้เอง: แก้คนละบรรทัด ไม่ชนกัน สร้าง ${id} รวม ${name} เข้า ${here} แล้ว เป็น merge commit ที่มีสองพ่อแม่`;
     }
     case "BRANCH_DELETED": {
       const name = action.type === "branchDelete" ? action.name : "";
       return `ลบ branch ${name} แล้ว (commit ของมันยังอยู่ในประวัติ เพราะรวมเข้า ${repo ? currentBranch(repo) : "main"} แล้ว)`;
     }
     case "RESET_TO_REMOTE":
-      return `${where} ทิ้งงานของตัวเองแล้ว ใช้เวอร์ชันของ GitHub (main = ${repo?.mainHead ?? ""}) ย้อนกลับด้วย Undo ได้`;
+      return `${where} ทิ้งงานของตัวเองแล้ว ใช้เวอร์ชันของ ${H} (main = ${repo?.mainHead ?? ""}) ย้อนกลับด้วย Undo ได้`;
     case "RESET":
       return `เริ่มตัวอย่างใหม่แล้ว ย้อนกลับด้วย Undo ได้`;
     case "NO_CHANGE":
       switch (action.type) {
         case "edit": return "ไฟล์เหมือนเดิม ไม่มีการเปลี่ยนแปลง";
         case "stage": return "ไฟล์ตรงกับที่ Add ไว้แล้ว ไม่มีอะไรใหม่ให้ Add";
-        case "push": return `GitHub มีประวัติล่าสุดของ${where} อยู่แล้ว ไม่มีอะไรต้องส่ง`;
-        case "pull": return `${where} ทันกับ GitHub ล่าสุดแล้ว ไม่มีอะไรใหม่`;
-        case "merge": return `${where} ไม่ได้แยกกับ GitHub ไม่ต้อง Merge`;
-        case "resetToRemote": return `${where} ตรงกับเวอร์ชันของ GitHub อยู่แล้ว`;
+        case "push": return `${H} มีประวัติล่าสุดของ${where} อยู่แล้ว ไม่มีอะไรต้องส่ง`;
+        case "pull": return `${where} ทันกับ ${H} ล่าสุดแล้ว ไม่มีอะไรใหม่`;
+        case "mergeTake": return "ไฟล์เหมือนกับฝั่งนั้นอยู่แล้ว";
+        case "mrApprove": return `${where} อนุมัติ ${MR} นี้ไปแล้ว`;
+        case "resetToRemote": return `${where} ตรงกับเวอร์ชันของ ${H} อยู่แล้ว`;
         case "reset": return "ตัวอย่างอยู่ในสถานะเริ่มต้นอยู่แล้ว";
         case "branchSwitch": return `คุณอยู่ที่ branch ${action.name} อยู่แล้ว`;
         case "branchMerge": return `Already up to date: ${repo ? currentBranch(repo) : "branch นี้"} มีงานของ ${action.name} ครบแล้ว ไม่ต้อง Merge`;
         default: return "ไม่มีการเปลี่ยนแปลง";
       }
     case "NOT_INITIALIZED":
-      return `${where} ยังไม่มี repository ให้ Clone จาก GitHub ก่อน`;
+      return `${where} ยังไม่มี repository ให้ Clone จาก ${H} ก่อน`;
     case "INVALID_FILE":
       return action.type === "edit" ? "ชื่อไฟล์หรือเนื้อหาไม่ถูกต้อง ยังไม่ได้แก้ไฟล์" : "ไฟล์ไม่ถูกต้อง";
     case "INVALID_MESSAGE":
@@ -136,28 +186,23 @@ export function describeGitTransition(action: GitAction, transition: GitTransiti
     case "NO_LOCAL_COMMITS":
       return `${where} ยังไม่มี commit ให้ Push`;
     case "REMOTE_EMPTY":
-      if (action.type === "clone") return "GitHub ยังไม่มี commit ให้ Clone ให้เครื่อง A Push ก่อน";
-      if (action.type === "merge" || action.type === "resetToRemote") return `${where} ยังไม่รู้เวอร์ชันของ GitHub ให้ Pull ก่อน`;
-      return "GitHub ยังไม่มี commit ให้ Pull";
+      if (action.type === "clone") return `${H} ยังไม่มี commit ให้ Clone ให้เครื่อง A Push ก่อน`;
+      if (action.type === "push") return `ต้อง Push main ขึ้น ${H} ก่อน (ตอนนี้ ${H} ยังว่าง) แล้วค่อย Push branch`;
+      if (action.type === "resetToRemote") return `${where} ยังไม่รู้เวอร์ชันของ ${H} ให้ Pull ก่อน`;
+      return `${H} ยังไม่มี commit ให้ Pull`;
     case "ALREADY_INITIALIZED":
       return `${where} มี repository แล้ว ไม่ต้อง Clone ซ้ำ`;
     case "DIRTY_WORKTREE":
       if (action.type === "branchSwitch") return DIRTY_SWITCH_MESSAGE;
-      return action.type === "merge" || action.type === "branchMerge" ? "Commit งานที่ค้างก่อน Merge" : DIRTY_WORKTREE_MESSAGE;
+      return action.type === "branchMerge" ? "Commit งานที่ค้างก่อน Merge" : DIRTY_WORKTREE_MESSAGE;
     case "NON_FAST_FORWARD":
-      return `GitHub ปฏิเสธ Push: GitHub มี commit ที่${where} ยังไม่มี ให้ Pull เพื่อรับข้อมูลก่อน (ไม่มี force push)`;
-    case "DIVERGED":
-      return DIVERGED_MESSAGE;
+      return `${H} ปฏิเสธ Push: ${H} มี commit ที่${where} ยังไม่มี ให้ Pull เพื่อรับข้อมูลก่อน (ไม่มี force push)`;
     case "INVALID_BRANCH_NAME": return "ชื่อ branch ต้องยาว 1–40 ตัวอักษร ใช้ได้เฉพาะ A–Z a–z 0–9 . _ / - และห้ามใช้ชื่อ HEAD";
     case "BRANCH_EXISTS": return "มี branch ชื่อนี้อยู่แล้ว ลองชื่ออื่น";
     case "BRANCH_NOT_FOUND": return "ไม่พบ branch นี้";
     case "BRANCH_LIMIT": return "สร้าง branch ได้ไม่เกิน 20 อัน (ไม่นับ main) ลบอันที่รวมแล้วก่อน";
     case "NEED_COMMIT_FOR_BRANCH": return NEED_COMMIT_FOR_BRANCH_MESSAGE;
     case "SAME_BRANCH": return "เลือก branch อื่นมา Merge เข้า branch ที่อยู่";
-    case "MERGE_CONFLICT": {
-      const name = action.type === "branchMerge" ? action.name : "";
-      return `ไฟล์ถูกแก้ไม่เหมือนกันทั้งสองฝั่ง (ชนกัน) เลือกเก็บไฟล์ของฝั่งเรา หรือใช้ไฟล์จาก ${name}`;
-    }
     case "BRANCH_NOT_MERGED": {
       const name = action.type === "branchDelete" ? action.name : "";
       return `ลบ branch ${name} ไม่ได้: ยังมีงานที่ยังไม่ได้ Merge เข้า branch ที่อยู่ (git branch -d ปฏิเสธ)`;

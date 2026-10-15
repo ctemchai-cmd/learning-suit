@@ -123,3 +123,39 @@ test("SSH-E2E-04/05: other machines — B is rejected, a copied .pub is rejected
   expect(node.state).toMatchObject({ registered: [], pushes: 0, thief: "idle", a: { priv: false }, b: { priv: false } });
   expect(node.view).toBe("others");
 });
+
+test("SSH-E2E-06: GitHub ↔ GitLab switch renames the site everywhere, undoably; GitHub stays the default", async ({ page }) => {
+  await createProject(page, "SSH GitLab");
+  await page.getByRole("button", { name: "เพิ่มตัวจำลอง SSH" }).first().click();
+  const site = panel(page).getByRole("group", { name: "เว็บที่เก็บโค้ด" });
+  await expect(site.getByRole("button", { name: "GitHub" })).toHaveAttribute("aria-pressed", "true");
+  expect(((await sshNode(page)) as unknown as { host?: string }).host).toBeUndefined();
+
+  await site.getByRole("button", { name: "GitLab" }).click();
+  await expect(site.getByRole("button", { name: "GitLab" })).toHaveAttribute("aria-pressed", "true");
+  expect(((await sshNode(page)) as unknown as { host?: string }).host).toBe("gitlab");
+  await expect(panel(page).getByRole("list", { name: "ขั้นตอนเชื่อม GitLab ด้วย SSH" }).getByRole("listitem")).toHaveCount(4);
+  await expect(panel(page).getByRole("combobox", { name: "ขั้นของบทเรียน" }).locator("option").first()).toHaveText("1 · เชื่อม GitLab ด้วย SSH");
+  await expect(button(page, "ใส่ .pub ใน GitLab")).toBeVisible();
+  await expect(button(page, "ssh -T git@gitlab.com")).toBeVisible();
+
+  await button(page, "สร้างกุญแจ").click();
+  await skip(page);
+  await button(page, "ใส่ .pub ใน GitLab").click();
+  await expect(panel(page)).toContainText("ลงทะเบียนกุญแจสาธารณะของเครื่อง A กับ GitLab แล้ว");
+  await skip(page);
+  await button(page, "ssh -T git@gitlab.com").click();
+  await expect(panel(page)).toContainText("ทดสอบผ่าน: GitLab ทักว่า Welcome to GitLab, @you!");
+  await skip(page);
+  const node = await sshNode(page);
+  expect(node.state.a.cmd).toBe("ssh -T git@gitlab.com");
+  expect(node.state.a.out).toEqual(["Welcome to GitLab, @you!"]);
+
+  // Switching clears the terminals (they still show the old site's answer) and is one undo step.
+  await site.getByRole("button", { name: "GitHub" }).click();
+  expect((await sshNode(page)).state.a).toMatchObject({ cmd: "", out: [] });
+  await expect(button(page, "ใส่ .pub ใน GitHub")).toBeVisible();
+  await page.getByRole("button", { name: "เลิกทำ" }).click();
+  expect(((await sshNode(page)) as unknown as { host?: string }).host).toBe("gitlab");
+  expect((await sshNode(page)).state.a.out).toEqual(["Welcome to GitLab, @you!"]);
+});

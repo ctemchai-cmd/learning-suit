@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { gitBaseSize } from "../../domain/document/model";
-import { GIT_VIEWS, viewHasRemote, viewRepositories, widgetLayout, widgetWidth, WIDGET_H, type Box } from "./widget-layout";
+import { remoteRequestBox, GIT_VIEWS, gitViewList, viewHasRemote, viewRepositories, widgetLayout, widgetWidth, WIDGET_H, type Box } from "./widget-layout";
 
 const inside = (box: Box, outer: Box) => box.x >= outer.x && box.y >= outer.y && box.x + box.w <= outer.x + outer.w && box.y + box.h <= outer.y + outer.h;
 const frameOf = (view: "local" | "remote" | "full" | "branch"): Box => ({ x: 0, y: 0, w: widgetWidth(view), h: WIDGET_H });
@@ -34,8 +34,18 @@ describe("Git widget layout per lesson step", () => {
     expect(viewHasRemote("branch")).toBe(false);
     expect(viewHasRemote("local")).toBe(false);
     expect(viewHasRemote("remote") && viewHasRemote("full")).toBe(true);
-    expect(GIT_VIEWS.map((item) => item.id)).toEqual(["local", "remote", "full", "branch"]);
-    expect(GIT_VIEWS.at(-1)?.label).toBe("Branch (ทางแยก)");
+    expect(GIT_VIEWS.map((item) => item.id)).toEqual(["local", "remote", "full", "branch", "review"]);
+    expect(GIT_VIEWS[3].label).toBe("Branch (ทางแยก)");
+    expect(GIT_VIEWS[4].label).toBe("Pull Request (ทีม)");
+    expect(gitViewList("gitlab")[4].label).toBe("Merge Request (ทีม)");
+    expect(viewRepositories("review")).toEqual(["A", "remote", "B"]);
+    expect(viewHasRemote("review")).toBe(true);
+    expect(gitBaseSize("review")).toEqual({ width: 1600, height: 680 });
+    // The remote's name follows the GitHub / GitLab switch.
+    expect(GIT_VIEWS[1].label).toBe("A → Git → GitHub");
+    expect(gitViewList("gitlab").map((item) => item.label)).toEqual(["A → Git", "A → Git → GitLab", "A+Git → GitLab → B+Git", "Branch (ทางแยก)", "Merge Request (ทีม)"]);
+    expect(gitViewList("gitlab")[1].description).toContain("GitLab");
+    expect(gitViewList("gitlab").some((item) => item.label.includes("GitHub") || item.description.includes("GitHub"))).toBe(false);
     expect(gitBaseSize("branch")).toEqual({ width: 1120, height: 680 });
     expect(widgetLayout("local")).toMatchObject({ remote: null, B: null, left: null, right: null, compact: false });
     expect(widgetLayout("remote").right).toBeNull();
@@ -89,6 +99,14 @@ describe("overlay geometry", () => {
         expect(commitRowLimit(layout, "remote")).toBeGreaterThanOrEqual(5);
       }
     }
+    // Review lesson: the Merge Request card sits between the remote's file and its commit list, all inside the card.
+    const review = widgetLayout("review");
+    const request = remoteRequestBox(review)!;
+    expect(inside(request, review.remote!)).toBe(true);
+    expect(remoteFileBox(review)!.y + remoteFileBox(review)!.h).toBeLessThan(request.y);
+    expect(request.y + request.h).toBeLessThan(commitListBox(review, "remote")!.y);
+    expect(commitRowLimit(review, "remote")).toBeGreaterThanOrEqual(3);
+    expect(remoteRequestBox(widgetLayout("full"))).toBeNull();
     expect(fileCodeBox(widgetLayout("local"), "B")).toBeNull();
     expect(commitListBox(widgetLayout("local"), "remote")).toBeNull();
   });

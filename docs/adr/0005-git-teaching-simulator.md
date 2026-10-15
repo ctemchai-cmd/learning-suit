@@ -52,6 +52,10 @@ Pull เลือกโหมด **fast-forward only** อย่างชัด�
 
 ผู้สอนขอบทเรียน Branch จึงเพิ่มขั้นบทเรียนที่ 4 "Branch (ทางแยก)" ให้สร้าง สลับ Merge และลบ branch ได้ (เฉพาะเครื่อง A, ไฟล์เดียวเหมือนเดิม) ข้อห้ามเรื่อง branch ก่อนหน้านี้จึงไม่ใช้กับขั้นนี้ ส่วน Push/Pull/Clone ยังทำงานกับ `main` เท่านั้น (ปฏิเสธเมื่อ HEAD อยู่ branch อื่น) และไม่มี remote branch รายละเอียดดู [สเปก §Branch](../plan/04-git-simulator.md)
 
+## อัปเดต 2026-10-15: conflict จริง, GitHub/GitLab และบทเรียน Merge Request
+
+ผู้สอนต้องสอน conflict แบบ Git จริง จึงเพิ่ม merge แบบ 3-way ระดับบรรทัด (Pull ที่ประวัติแยกและ `git merge` ของ branch รวมให้เองเมื่อแก้คนละบรรทัด, ชนเมื่อแก้บรรทัดเดียวกัน แล้วให้แก้ไฟล์เองและ Commit) แทนการเลือกไฟล์ของฝั่งใดฝั่งหนึ่ง ตัวจำลองยังมีไฟล์เดียวต่อ commit; เพิ่มสถานะ `merging` ต่อเครื่อง และสวิตช์ GitHub/GitLab ที่เปลี่ยนเฉพาะชื่อ. ขั้นบทเรียนที่ 5 (โบนัส) จำลอง Merge/Pull Request: remote เก็บ branch และ request (ทั้งสอง optional ใน schema), main ถูกป้องกันเฉพาะขั้นนี้ และไม่มีการ Push branch ในขั้น 2–4 ยังไม่มี remote-tracking ของ branch อื่น, review comment, CI จริง หรือสิทธิ์ผู้ใช้ — การอนุมัติใช้ “อีกเครื่องหนึ่ง” แทนเพื่อนร่วมทีม รายละเอียดใน [สเปก](../plan/04-git-simulator.md)
+
 ## เงื่อนไขทบทวน
 
 ทบทวน ADR ก่อนเพิ่มหลายไฟล์หรือหลาย parent ของ commit เพราะกระทบ snapshot, ancestry, UI และ archive schema หากต้องเชื่อม GitHub จริง ให้ทำ ADR แยกสำหรับสิทธิ์และขอบเขตการแก้ repository โดยไม่เปลี่ยนความหมายของ simulator เดิมเงียบ ๆ

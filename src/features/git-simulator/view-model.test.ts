@@ -3,7 +3,7 @@ import { createInitialGitState } from "../../domain/git/initial";
 import { applyGitAction } from "../../domain/git/reducer";
 import type { FileSnapshot, GitAction, GitSimulationState } from "../../domain/git/model";
 import {
-  INVALID_DRAFT_REASON, READ_ONLY_REASON, codeLines, getActionAvailability, getBranchAvailability, nextBranchStep, nextGitStep, previewLines, projectState, truncateCodePoints,
+  INVALID_DRAFT_REASON, READ_ONLY_REASON, codeLines, getActionAvailability, getBranchAvailability, getRequestAvailability, nextReviewStep, nextBranchStep, nextGitStep, previewLines, projectState, truncateCodePoints,
 } from "./view-model";
 
 const S1: FileSnapshot = { name: "index.html", content: "<h1>รุ่นหนึ่ง</h1>\n" };
@@ -184,5 +184,138 @@ describe("Branch step", () => {
     const back = play(worked, switchTo("main"));
     expect(next(back)).toEqual({ step: "mergeBranch", branch: "feature" });
     expect(next(play(back, merge("feature")))).toBeNull();
+  });
+});
+
+describe("merging (conflict) state and the GitHub / GitLab switch", () => {
+  const base = "a\nb\nc\nd\ne\n";
+  const edit = (machine: "A" | "B", content: string): GitAction[] => [
+    { type: "edit", machine, file: { name: "f.txt", content } }, { type: "stage", machine }, { type: "commit", machine, message: "m" },
+  ];
+  /** B and A change the same line: A's Pull stops on a conflict. */
+  function conflicted(): GitSimulationState {
+    let state = play(createInitialGitState(), ...edit("A", base), { type: "push", machine: "A" }, { type: "clone", machine: "B" });
+    state = play(state, ...edit("B", "a\nB\nc\nd\ne\n"), { type: "push", machine: "B" }, ...edit("A", "a\nA\nc\nd\ne\n"));
+    return play(state, { type: "pull", machine: "A" });
+  }
+  const input = (state: GitSimulationState, extra: Partial<Parameters<typeof getActionAvailability>[0]> = {}) =>
+    ({ state, machine: "A" as const, draft: null, message: "Merge origin/main", writable: true, ...extra });
+
+  it("Push / Pull are blocked while merging, the merge buttons are enabled, and Commit says why it cannot run yet", () => {
+    const availability = getActionAvailability(input(conflicted()));
+    expect(availability.push.reasons).toContain("กำลัง merge อยู่: แก้ไฟล์ให้เสร็จแล้ว Add + Commit หรือกด “ยกเลิก merge” ก่อน");
+    expect(availability.pull.enabled).toBe(false);
+    expect(availability.mergeAbort).toEqual({ enabled: true, reasons: [] });
+    expect(availability.mergeTake.enabled).toBe(true);
+    expect(availability.commit.enabled).toBe(false);
+    expect(availability.commit.reasons.join(" ")).toContain("ยังมีเครื่องหมาย conflict เหลืออยู่");
+    // Not merging: the merge buttons explain themselves.
+    expect(getActionAvailability(input(committedA())).mergeAbort.reasons).toContain("ตอนนี้ไม่ได้อยู่ระหว่าง merge");
+  });
+
+  it("a fixed file that is not added yet asks for Add; once added Commit is enabled even if the file equals HEAD", () => {
+    let state = conflicted();
+    const fixedDraft = { name: "f.txt", content: "a\nA\nc\nd\ne\n" };
+    expect(getActionAvailability(input(state, { draft: fixedDraft })).commit.reasons.join(" ")).toContain("กด Add ก่อน Commit");
+    expect(nextGitStep(projectState(state, "A", fixedDraft).state, "A", getActionAvailability(input(state, { draft: fixedDraft })), true)).toBe("stage");
+    state = play(state, { type: "mergeTake", machine: "A", side: "ours" }, { type: "stage", machine: "A" });
+    const availability = getActionAvailability(input(state));
+    expect(availability.commit).toEqual({ enabled: true, reasons: [] });
+    expect(nextGitStep(state, "A", availability, true)).toBe("commit");
+  });
+
+  it("ทำต่อ guidance: edit the file while markers remain, then Add, then Commit", () => {
+    let state = conflicted();
+    expect(nextGitStep(state, "A", getActionAvailability(input(state)), true)).toBe("resolve");
+    expect(nextBranchStep(state, "A", getActionAvailability(input(state)))).toEqual({ step: "resolve", branch: null });
+    state = play(state, { type: "mergeTake", machine: "A", side: "theirs" });
+    expect(nextGitStep(state, "A", getActionAvailability(input(state)), true)).toBe("stage");
+  });
+
+  it("branch buttons are blocked while merging", () => {
+    const state = conflicted();
+    const branches = getBranchAvailability({ state, machine: "A", draft: null, name: "other", writable: true });
+    expect(branches.create.enabled).toBe(false);
+    expect(branches.create.reasons).toContain("กำลัง merge อยู่: แก้ไฟล์ให้เสร็จแล้ว Add + Commit หรือกด “ยกเลิก merge” ก่อน");
+  });
+
+  it("reasons name the chosen site", () => {
+    const empty = createInitialGitState();
+    const clone = (host?: "github" | "gitlab") => getActionAvailability({ state: empty, machine: "B", draft: null, message: "", writable: true, host }).clone.reasons.join(" ");
+    expect(clone()).toContain("GitHub ยังไม่มี commit ให้ Clone");
+    expect(clone("github")).toContain("GitHub ยังไม่มี commit ให้ Clone");
+    expect(clone("gitlab")).toContain("GitLab ยังไม่มี commit ให้ Clone");
+    expect(clone("gitlab")).not.toContain("GitHub");
+    const pull = (host?: "github" | "gitlab") => getActionAvailability({ state: committedA(), machine: "A", draft: null, message: "", writable: true, host }).pull.reasons.join(" ");
+    expect(pull("gitlab")).toBe("GitLab ยังไม่มี commit ให้ Pull");
+  });
+});
+
+describe("Merge Request lesson guidance", () => {
+  const f = (content: string): FileSnapshot => ({ name: "f.txt", content });
+  const base = "a\nb\nc\nd\ne\n";
+  const edit = (machine: "A" | "B", content: string): GitAction[] => [{ type: "edit", machine, file: f(content) }, { type: "stage", machine }, { type: "commit", machine, message: "m" }];
+  const pushR = (machine: "A" | "B"): GitAction => ({ type: "push", machine, review: true });
+  const next = (state: GitSimulationState, machine: "A" | "B") =>
+    nextReviewStep(state, machine, getActionAvailability({ state, machine, draft: null, message: "m", writable: true, review: true }));
+  const sw = (name: string): GitAction => ({ type: "branchSwitch", machine: "A", name });
+
+  it("walks the whole loop: first push → branch → commit → push branch → open → approve → merge → switch main → pull", () => {
+    let state = play(createInitialGitState(), ...edit("A", base));
+    expect(next(state, "A")).toEqual({ step: "push", branch: null }); // the project's first push
+    state = play(state, pushR("A"), { type: "clone", machine: "B" });
+    expect(next(state, "A")).toEqual({ step: "create", branch: null });
+    state = play(state, { type: "branchCreate", machine: "A", name: "feature" });
+    expect(next(state, "A")).toBeNull(); // on the branch with nothing of its own: edit the file
+    state = play(state, ...edit("A", "A\nb\nc\nd\ne\n"));
+    expect(next(state, "A")).toEqual({ step: "push", branch: null });
+    state = play(state, pushR("A"));
+    expect(next(state, "A")).toEqual({ step: "openMr", branch: null });
+    state = play(state, { type: "mrOpen", machine: "A" });
+    expect(next(state, "A")).toBeNull(); // waiting for the teammate
+    expect(next(state, "B")).toEqual({ step: "approve", branch: null, id: 1 });
+    state = play(state, { type: "mrApprove", machine: "B", id: 1 });
+    expect(next(state, "B")).toEqual({ step: "mergeMr", branch: null, id: 1 });
+    expect(next(state, "A")).toEqual({ step: "mergeMr", branch: null, id: 1 });
+    state = play(state, { type: "mrMerge", machine: "A", id: 1 });
+    expect(next(state, "A")).toEqual({ step: "switch", branch: "main" });
+    state = play(state, sw("main"));
+    expect(next(state, "A")).toEqual({ step: "pull", branch: null });
+    expect(next(state, "B")).toEqual({ step: "pull", branch: null });
+    state = play(state, { type: "pull", machine: "A", review: true }, { type: "pull", machine: "B", review: true });
+    expect(next(state, "A")).toEqual({ step: "create", branch: null }); // ready for the next change
+  });
+
+  it("a conflicting request sends its author back to the branch to pull main in", () => {
+    let state = play(createInitialGitState(), ...edit("A", base), pushR("A"), { type: "clone", machine: "B" });
+    state = play(state, { type: "branchCreate", machine: "A", name: "one" }, ...edit("A", "X\nb\nc\nd\ne\n"), pushR("A"), sw("main"));
+    state = play(state, { type: "branchCreate", machine: "A", name: "two" }, ...edit("A", "Y\nb\nc\nd\ne\n"), pushR("A"), { type: "mrOpen", machine: "A" });
+    state = play(state, sw("one"), { type: "mrOpen", machine: "A" }, { type: "mrApprove", machine: "B", id: 1 }, { type: "mrApprove", machine: "B", id: 2 }, { type: "mrMerge", machine: "B", id: 1 });
+    // !2 (branch "one") now conflicts with main; A is on "one" and pulls main in
+    expect(next(state, "A")).toEqual({ step: "pull", branch: null });
+    expect(next(state, "B")).toBeNull();
+    state = play(state, sw("two"));
+    expect(next(state, "A")).toEqual({ step: "switch", branch: "one" });
+    state = play(state, sw("one"), { type: "pull", machine: "A", review: true });
+    expect(next(state, "A")).toEqual({ step: "resolve", branch: null });
+  });
+
+  it("request buttons carry the reducer's reason, and Push / Pull are not blocked on a branch in the review lesson", () => {
+    let state = play(createInitialGitState(), ...edit("A", base), pushR("A"), { type: "clone", machine: "B" });
+    state = play(state, { type: "branchCreate", machine: "A", name: "feature" }, ...edit("A", "A\nb\nc\nd\ne\n"));
+    const on = { state, machine: "A" as const, draft: null, message: "m", writable: true };
+    expect(getActionAvailability({ ...on, review: true }).push.enabled).toBe(true);
+    expect(getActionAvailability({ ...on, review: true }).pull.enabled).toBe(true);
+    expect(getActionAvailability(on).push.reasons.join(" ")).toContain("ไม่ได้อยู่ที่ main");
+    expect(getRequestAvailability({ ...on, id: null }).open.reasons.join(" ")).toContain("ต้อง Push branch ขึ้น GitHub ก่อนเปิด Pull Request");
+    expect(getRequestAvailability({ ...on, id: null, host: "gitlab" }).open.reasons.join(" ")).toContain("เปิด Merge Request");
+    state = play(state, pushR("A"), { type: "mrOpen", machine: "A" });
+    const mine = getRequestAvailability({ state, machine: "A", writable: true, id: 1 });
+    expect(mine.open.enabled).toBe(false);
+    expect(mine.approve.reasons.join(" ")).toContain("อนุมัติ Pull Request ของตัวเองไม่ได้");
+    expect(mine.merge.reasons.join(" ")).toContain("ต้องมีคนอนุมัติ");
+    const theirs = getRequestAvailability({ state, machine: "B", writable: true, id: 1 });
+    expect(theirs.approve).toEqual({ enabled: true, reasons: [] });
+    expect(getRequestAvailability({ state, machine: "B", writable: false, id: 1 }).approve.enabled).toBe(false);
   });
 });

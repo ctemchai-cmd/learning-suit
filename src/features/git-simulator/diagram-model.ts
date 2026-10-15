@@ -1,5 +1,7 @@
-import { aheadBehind, branchNames, branchTip, commitNumber, currentBranch, headCommitId, headSnapshot, knownCommitsNewestFirst, repositoryKnownIds, snapshotsEqual } from "../../domain/git/selectors";
+import { currentRequest, requestInfo, aheadBehind, branchNames, branchTip, commitNumber, currentBranch, headCommitId, headSnapshot, knownCommitsNewestFirst, repositoryKnownIds, snapshotsEqual } from "../../domain/git/selectors";
 import type { GitSimulationState, MachineId, RepositoryId } from "../../domain/git/model";
+import { hostOf, type HostId } from "../../domain/hosting";
+import { hasConflictMarkers } from "../../domain/git/merge3";
 import { previewLines, truncateCodePoints, type PreviewText } from "./view-model";
 
 // Pure model of the simplified Git diagram (plan 04 §5): one pipeline per machine
@@ -37,7 +39,7 @@ export const GRAPH_ROWS = 6;
 export function commitLanes(state: GitSimulationState, repository: RepositoryId): { lanes: Map<string, number>; count: number } {
   const known = new Set(repositoryKnownIds(state, repository));
   const tips: [string, string | null][] = repository === "remote"
-    ? [["main", state.remote.mainHead]]
+    ? [["main", state.remote.mainHead], ...Object.entries(state.remote.branches ?? {})]
     : branchNames(state.machines[repository]).map((name) => [name, branchTip(state.machines[repository], name)]);
   const lanes = new Map<string, number>();
   let next = 1;
@@ -61,8 +63,8 @@ export function commitGraph(state: GitSimulationState, repository: RepositoryId,
   const headBranch = repo ? currentBranch(repo) : null;
   const { lanes } = commitLanes(state, repository);
   const tipTags = new Map<string, string[]>();
-  for (const name of repo ? branchNames(repo) : ["main"]) {
-    const tip = repo ? branchTip(repo, name) : main;
+  for (const name of repo ? branchNames(repo) : ["main", ...Object.keys(state.remote.branches ?? {})]) {
+    const tip = repo ? branchTip(repo, name) : name === "main" ? main : state.remote.branches?.[name] ?? null;
     if (tip) tipTags.set(tip, [...tipTags.get(tip) ?? [], name]);
   }
   const commits = knownCommitsNewestFirst(state, repository);
@@ -105,8 +107,9 @@ export type MachineDiagram = {
 };
 
 /** Short status texts (symbol + words, never colour alone). */
-export function machineDiagram(state: GitSimulationState, machine: MachineId): MachineDiagram {
+export function machineDiagram(state: GitSimulationState, machine: MachineId, hostId?: HostId): MachineDiagram {
   const repo = state.machines[machine];
+  const host = hostOf(hostId).name;
   if (!repo.initialized) {
     return {
       initialized: false, sync: { tone: "empty", text: "ยังไม่มี repository" }, fileName: "",
@@ -117,17 +120,21 @@ export function machineDiagram(state: GitSimulationState, machine: MachineId): M
   const counts = aheadBehind(state, machine);
   let sync: ZoneLine;
   if (repo.mainHead === null) sync = { tone: "empty", text: "ยังไม่มี commit" };
-  else if (!counts) sync = { tone: "info", text: "? ยังไม่รู้สถานะ GitHub" };
-  else if (counts.ahead && counts.behind) sync = { tone: "pending", text: "↕ ประวัติแยกกับ GitHub" };
+  else if (!counts) sync = { tone: "info", text: `? ยังไม่รู้สถานะ ${host}` };
+  else if (counts.ahead && counts.behind) sync = { tone: "pending", text: `↕ ประวัติแยกกับ ${host}` };
   else if (counts.ahead) sync = { tone: "ready", text: `↑ ${counts.ahead} commit ยังไม่ Push` };
-  else if (counts.behind) sync = { tone: "pending", text: `↓ ตามหลัง GitHub ${counts.behind} commit` };
-  else sync = { tone: "clean", text: "✓ ตรงกับ GitHub" };
+  else if (counts.behind) sync = { tone: "pending", text: `↓ ตามหลัง ${host} ${counts.behind} commit` };
+  else sync = { tone: "clean", text: `✓ ตรงกับ ${host}` };
 
   const workingChanged = !snapshotsEqual(repo.working, repo.index ?? head);
-  const working: ZoneLine = repo.index === null && repo.mainHead === null
-    ? { tone: "pending", text: "✎ ไฟล์ใหม่ ยังไม่ Add" }
-    : workingChanged ? { tone: "pending", text: "✎ แก้แล้ว ยังไม่ Add" } : { tone: "clean", text: "✓ ไม่มีการแก้ใหม่" };
-  const staged: ZoneLine = repo.index === null
+  const working: ZoneLine = repo.merging && repo.working && hasConflictMarkers(repo.working.content)
+    ? { tone: "pending", text: "⚠ ไฟล์ชนกัน ต้องแก้" }
+    : repo.index === null && repo.mainHead === null
+      ? { tone: "pending", text: "✎ ไฟล์ใหม่ ยังไม่ Add" }
+      : workingChanged ? { tone: "pending", text: "✎ แก้แล้ว ยังไม่ Add" } : { tone: "clean", text: "✓ ไม่มีการแก้ใหม่" };
+  const staged: ZoneLine = repo.merging
+    ? repo.index && hasConflictMarkers(repo.index.content) ? { tone: "pending", text: "⚠ ยังมี conflict" } : { tone: "ready", text: "● แก้แล้ว รอ Commit" }
+    : repo.index === null
     ? { tone: "empty", text: "○ ยังว่าง" }
     : !snapshotsEqual(repo.index, head) ? { tone: "ready", text: "● มีไฟล์รอ Commit" } : { tone: "clean", text: "✓ ตรงกับ commit ล่าสุด" };
   return {
@@ -137,10 +144,10 @@ export function machineDiagram(state: GitSimulationState, machine: MachineId): M
   };
 }
 
-/** Branch step: the pill that says which branch HEAD is on. */
-export function branchPill(state: GitSimulationState, machine: MachineId): ZoneLine {
+/** Branch step: the pill that says which branch HEAD is on (`compact` = the narrow columns of the team view). */
+export function branchPill(state: GitSimulationState, machine: MachineId, compact = false): ZoneLine {
   const name = currentBranch(state.machines[machine]);
-  return { tone: name === "main" ? "info" : "ready", text: `คุณอยู่ที่ branch: ${name} (HEAD)` };
+  return { tone: name === "main" ? "info" : "ready", text: compact ? `HEAD → ${name}` : `คุณอยู่ที่ branch: ${name} (HEAD)` };
 }
 
 export function remoteDiagram(state: GitSimulationState): { sync: ZoneLine; fileLabel: string; fileName: string; preview: PreviewText } {
@@ -155,11 +162,34 @@ export function remoteDiagram(state: GitSimulationState): { sync: ZoneLine; file
   };
 }
 
+export type RequestCard =
+  | { empty: true; text: string }
+  | { empty: false; title: string; chip: ZoneLine; lines: ZoneLine[] };
+
+/** The Merge Request card in the remote box (review lesson): newest open request, else the newest one. */
+export function requestDiagram(state: GitSimulationState, hostId?: HostId): RequestCard {
+  const host = hostOf(hostId);
+  const request = currentRequest(state);
+  if (!request) return { empty: true, text: `ยังไม่มี ${host.mergeRequest}` };
+  const info = requestInfo(state, request);
+  const chip: ZoneLine = request.status === "merged" ? { tone: "clean", text: "รวมแล้ว" } : request.status === "closed" ? { tone: "empty", text: "ปิดแล้ว" }
+    : info?.approved ? { tone: "ready", text: "อนุมัติแล้ว" } : { tone: "pending", text: "เปิดอยู่" };
+  const people = (ids: string[]) => ids.map((id) => `เครื่อง ${id}`).join(", ");
+  const lines: ZoneLine[] = [{ tone: "info", text: `เปิดโดย ${people([request.author])} • ${request.approvedBy.length ? `อนุมัติโดย ${people(request.approvedBy)}` : "ยังไม่มีคนอนุมัติ"}` }];
+  if (request.status === "merged") lines.push({ tone: "clean", text: `✓ รวมเข้า main แล้ว • ลบ branch ${request.source} แล้ว` });
+  else if (info) {
+    lines.push({ tone: "clean", text: "✓ pipeline ผ่าน" });
+    lines.push(info.conflict ? { tone: "pending", text: "✗ ชนกับ main: ต้องแก้ใน branch" }
+      : info.approved ? { tone: "ready", text: `✓ Merge ได้ (${info.fastForward ? "fast-forward" : "สร้าง merge commit"})` } : { tone: "empty", text: "… รอเพื่อนอนุมัติ" });
+  }
+  return { empty: false, title: `!${request.id} ${request.source} → main`, chip, lines };
+}
+
 /** Narrow columns use the short form of the sync status so it never gets cut. */
 export function shortSyncText(text: string): string {
   return text
     .replace(/^↑ (\d+) commit ยังไม่ Push$/, "↑ $1 ยังไม่ Push")
-    .replace(/^↓ ตามหลัง GitHub (\d+) commit$/, "↓ ตามหลัง $1")
-    .replace("↕ ประวัติแยกกับ GitHub", "↕ ประวัติแยก")
-    .replace("? ยังไม่รู้สถานะ GitHub", "? ยังไม่รู้สถานะ");
+    .replace(/^↓ ตามหลัง Git(?:Hub|Lab) (\d+) commit$/, "↓ ตามหลัง $1")
+    .replace(/^↕ ประวัติแยกกับ Git(?:Hub|Lab)$/, "↕ ประวัติแยก")
+    .replace(/^\? ยังไม่รู้สถานะ Git(?:Hub|Lab)$/, "? ยังไม่รู้สถานะ");
 }

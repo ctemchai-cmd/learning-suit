@@ -1,5 +1,6 @@
 import type { DataState, DataView } from "../data/model";
 import type { DeployState, DeployView } from "../deploy/model";
+import type { HostId } from "../hosting";
 import type { SshState, SshView } from "../ssh/model";
 import type { AiState, AiView } from "../ai/model";
 import type { GitSimulationState } from "../git/model";
@@ -137,12 +138,16 @@ export type TableNode = NodeBase & {
  * `local` = A → Git, `remote` = A → Git → GitHub, `full` = A+Git → GitHub → B+Git, `branch` = A + Git with lanes.
  * Missing in older documents means `full`.
  */
-export type GitView = "local" | "remote" | "full" | "branch";
+export type GitView = "local" | "remote" | "full" | "branch" | "review";
+/** Steps with machine B (and the A/B tabs): the two-machine step and the Merge Request lesson. */
+export const gitHasMachineB = (view: GitView) => view === "full" || view === "review";
 export type GitSimulatorNode = NodeBase & {
   type: "git-simulator";
   rotation: 0;
   scale: number;
   view?: GitView;
+  /** GitHub or GitLab names on the board and in messages. Missing = GitHub. */
+  host?: HostId;
   state: GitSimulationState;
 };
 export const gitViewOf = (node: GitSimulatorNode): GitView => node.view ?? "full";
@@ -152,7 +157,7 @@ export const gitViewOf = (node: GitSimulatorNode): GitView => node.view ?? "full
  */
 export const GIT_BASE_SIZE = { width: 1120, fullWidth: 1600, height: 680 } as const;
 export function gitBaseSize(view: GitView): { width: number; height: number } {
-  return { width: view === "full" ? GIT_BASE_SIZE.fullWidth : GIT_BASE_SIZE.width, height: GIT_BASE_SIZE.height };
+  return { width: gitHasMachineB(view) ? GIT_BASE_SIZE.fullWidth : GIT_BASE_SIZE.width, height: GIT_BASE_SIZE.height };
 }
 export const gitNodeSize = (node: GitSimulatorNode) => gitBaseSize(gitViewOf(node));
 
@@ -190,6 +195,8 @@ export type SshSimulatorNode = NodeBase & {
   rotation: 0;
   scale: number;
   view: SshView;
+  /** Which site the lesson names; missing = GitHub (documents made before the switch). */
+  host?: HostId;
   state: SshState;
 };
 

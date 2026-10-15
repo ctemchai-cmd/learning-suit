@@ -7,9 +7,10 @@ import type { SshSimulatorNode } from "@/domain/document/model";
 import { KEYGEN_COMMAND, normalizeSshView, type SshAction, type SshState, type SshView } from "@/domain/ssh/model";
 import { applySshAction, hasKeys } from "@/domain/ssh/reducer";
 import { useEditorStore } from "@/features/editor/store";
-import { Action, PanelHeader, PlaybackControls, ResetLink, ResultMessage, Section, StepSelect } from "@/features/flow/flow-panel-parts";
+import { Action, PanelHeader, PlaybackControls, ResetLink, ResultMessage, Section, Segmented, StepSelect } from "@/features/flow/flow-panel-parts";
 import { useFlowSession } from "@/features/flow/flow-session";
-import { SSH_VIEWS } from "./ssh-layout";
+import { hostOf, type Host, type HostId } from "@/domain/hosting";
+import { sshViews } from "./ssh-layout";
 
 /** The node as currently stored, so actions never start from a stale render. */
 function latestNode(slideId: string, nodeId: string): SshSimulatorNode | null {
@@ -20,7 +21,7 @@ function latestNode(slideId: string, nodeId: string): SshSimulatorNode | null {
 
 const ACTION_LABEL: Record<SshAction["type"], string> = {
   keygen: "สร้างกุญแจ", register: "ลงทะเบียนกุญแจ", test: "ทดสอบการเชื่อมต่อ", push: "git push", "thief.try": "คนแอบคัดลอก .pub",
-  revoke: "ลบกุญแจออกจาก GitHub", "b.setup": "เครื่อง B สร้างกุญแจและลงทะเบียน", reset: "เริ่มใหม่",
+  revoke: "ลบกุญแจออกจากเว็บที่เก็บโค้ด", "b.setup": "เครื่อง B สร้างกุญแจและลงทะเบียน", reset: "เริ่มใหม่",
 };
 
 /** Small DOM panel of an SSH widget (plan 07 §4c). Render with `key={node.id}`. */
@@ -39,9 +40,9 @@ export function SshPanel({ node, slideId, writable, transact }: {
   const run = (action: SshAction) => {
     if (!writable || !useEditorStore.getState().flushPendingEdits()) return;
     const latest = latestNode(slideId, nodeId) ?? node;
-    const transition = applySshAction(latest.state, action, latest.view);
+    const transition = applySshAction(latest.state, action, latest.view, latest.host);
     if (transition.changed && !transact({
-      label: `SSH (จำลอง): ${ACTION_LABEL[action.type]}`,
+      label: `SSH (จำลอง): ${action.type === "revoke" ? `ลบกุญแจออกจาก ${hostOf(latest.host).name}` : ACTION_LABEL[action.type]}`,
       affectedSlideId: slideId,
       commands: [{ type: "nodes.replace", slideId, nodes: [{ ...latest, state: transition.nextState }] }],
     })) {
@@ -64,10 +65,23 @@ export function SshPanel({ node, slideId, writable, transact }: {
     }
   };
 
-  const props = { writable, run };
+  const changeHost = (next: HostId) => {
+    const latest = latestNode(slideId, nodeId) ?? node;
+    if (next === (latest.host ?? "github") || !writable || !useEditorStore.getState().flushPendingEdits()) return;
+    // Terminals still show the old site's answer, so they start clean (same as a lesson step change).
+    const cleared: SshState = { ...latest.state, a: { ...latest.state.a, cmd: "", out: [] }, b: { ...latest.state.b, cmd: "", out: [] }, thief: "idle" };
+    if (transact({ label: `เปลี่ยนเป็น ${hostOf(next).name}`, affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes: [{ ...latest, host: next, state: cleared }] }] })) {
+      flow.stop(nodeId);
+      flow.setResult(nodeId, undefined);
+    }
+  };
+
+  const props = { writable, run, host: hostOf(node.host) };
   return <section className="space-y-4 p-4 text-sm" aria-label="ตัวจำลอง SSH">
     <PanelHeader icon={<KeyRound size={16} />} color="bg-slate-900" title="กุญแจ SSH" />
-    <StepSelect id={ids} value={view} steps={SSH_VIEWS} disabled={!writable} onChange={changeView} />
+    <Segmented label="เว็บที่เก็บโค้ด" value={node.host ?? "github"} disabled={!writable} onChange={changeHost}
+      options={[{ value: "github", label: "GitHub" }, { value: "gitlab", label: "GitLab" }]} />
+    <StepSelect id={ids} value={view} steps={sshViews(node.host)} disabled={!writable} onChange={changeView} />
     {view === "setup" && <SetupControls state={node.state} {...props} />}
     {view === "others" && <OthersControls {...props} />}
     <PlaybackControls nodeId={nodeId} />
@@ -76,7 +90,7 @@ export function SshPanel({ node, slideId, writable, transact }: {
   </section>;
 }
 
-type Props = { writable: boolean; run: (action: SshAction) => void };
+type Props = { writable: boolean; run: (action: SshAction) => void; host: Host };
 
 type Next = "try" | "keygen" | "register" | "connect";
 /** The next useful card: nothing done yet → the demo; no key → create; not registered → register; else connect. */
@@ -101,9 +115,9 @@ function StepCard({ number, title, description, active, children }: { number: nu
   </li>;
 }
 
-function SetupControls({ state, writable, run }: Props & { state: SshState }) {
+function SetupControls({ state, writable, run, host }: Props & { state: SshState }) {
   const next = nextCard(state);
-  return <ol className="space-y-3" aria-label="ขั้นตอนเชื่อม GitHub ด้วย SSH">
+  return <ol className="space-y-3" aria-label={`ขั้นตอนเชื่อม ${host.name} ด้วย SSH`}>
     <StepCard number={1} title="ลอง push ก่อน" description="ยังไม่มีกุญแจ → โดนปฏิเสธ" active={next === "try"}>
       <Action primary={next === "try"} icon={<Send size={14} />} disabled={!writable} onClick={() => run({ type: "push", machine: "a" })}>ลอง git push</Action>
     </StepCard>
@@ -112,10 +126,10 @@ function SetupControls({ state, writable, run }: Props & { state: SshState }) {
       <Action primary={next === "keygen"} icon={<KeyRound size={14} />} disabled={!writable} onClick={() => run({ type: "keygen", machine: "a" })}>สร้างกุญแจ</Action>
     </StepCard>
     <StepCard number={3} title="ลงทะเบียน .pub" description="ทำครั้งเดียว" active={next === "register"}>
-      <Action primary={next === "register"} icon={<Fingerprint size={14} />} disabled={!writable} onClick={() => run({ type: "register", machine: "a" })}>ใส่ .pub ใน GitHub</Action>
+      <Action primary={next === "register"} icon={<Fingerprint size={14} />} disabled={!writable} onClick={() => run({ type: "register", machine: "a" })}>ใส่ .pub ใน {host.name}</Action>
     </StepCard>
     <StepCard number={4} title="เชื่อมต่อ" description="แตะนิ้ว → ประตูเปิด" active={next === "connect"}>
-      <Action primary={next === "connect"} icon={<ShieldCheck size={14} />} disabled={!writable} onClick={() => run({ type: "test", machine: "a" })}>ssh -T git@github.com</Action>
+      <Action primary={next === "connect"} icon={<ShieldCheck size={14} />} disabled={!writable} onClick={() => run({ type: "test", machine: "a" })}>ssh -T git@{host.sshHost}</Action>
       <Action icon={<Send size={14} />} disabled={!writable} onClick={() => run({ type: "push", machine: "a" })}>git push</Action>
     </StepCard>
   </ol>;

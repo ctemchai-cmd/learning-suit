@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "playwright/test";
 import { createProject, objectRows, readDraft } from "./helpers";
 
-type GitNode = { id: string; type: string; view?: string; state: { nextCommitNumber: number; commits: Record<string, { parentId: string | null; mergeParentId?: string; snapshot: { name: string; content: string } }>; machines: Record<"A" | "B", { initialized: boolean; mainHead: string | null; originMainHead: string | null; knownCommitIds: string[]; working: { name: string; content: string } | null; index: { content: string } | null }>; remote: { mainHead: string | null; knownCommitIds: string[] } } };
+type GitNode = { id: string; type: string; view?: string; host?: string; state: { nextCommitNumber: number; commits: Record<string, { parentId: string | null; mergeParentId?: string; message: string; snapshot: { name: string; content: string } }>; machines: Record<"A" | "B", { initialized: boolean; mainHead: string | null; originMainHead: string | null; knownCommitIds: string[]; working: { name: string; content: string } | null; index: { content: string } | null; merging?: { theirs: string; label: string } }>; remote: { mainHead: string | null; knownCommitIds: string[]; branches?: Record<string, string>; requests?: { id: number; source: string; status: string; author: string; approvedBy: string[] }[] } } };
 const gitNode = async (page: Page, index = 0) => ((await readDraft(page))!.content.document.slides[0].nodes.filter((node) => node.type === "git-simulator")[index]) as unknown as GitNode;
 
 /** The file editor drawn on the board over the widget's file area. */
@@ -97,7 +97,7 @@ const boardTexts = (page: Page) => page.evaluate(() => {
   return konva.stages.flatMap((stage) => stage.find("Text").map((node) => node.text()));
 });
 
-test("GIT-08: a diverged history is joined with Merge, then Push works; a commit preview shows what changed", async ({ page }) => {
+test("GIT-08: a diverged Pull stops on a conflict; fixing the file and Commit joins the history, then Push works; a commit preview shows what changed", async ({ page }) => {
   await createProject(page, "Merge Git");
   await page.getByRole("button", { name: "เพิ่มตัวจำลอง Git" }).first().click();
   await addAndCommit(page, "hello"); // C1
@@ -109,42 +109,171 @@ test("GIT-08: a diverged history is joined with Merge, then Push works; a commit
   await addAndCommit(page, "B change"); // C2
   await panel(page).getByRole("button", { name: "Push" }).click();
 
-  // A committed too: GitHub refuses the Push, Pull fetches and reports the fork.
+  // A committed too: GitHub refuses the Push; Pull fetches and the same line differs on both sides.
   await panel(page).getByRole("button", { name: "เครื่อง A" }).click();
   await boardFile(page, "A").fill("print(\"from A\")\nprint(\"more\")\n");
   await addAndCommit(page, "A change"); // C3
-  await expect(panel(page).getByRole("heading", { name: "ประวัติแยกกัน" })).toHaveCount(0);
+  await expect(panel(page).getByRole("heading", { name: /กำลัง merge/ })).toHaveCount(0);
   await panel(page).getByRole("button", { name: "Push" }).click();
   await expect(panel(page)).toContainText("GitHub ปฏิเสธ Push");
   await panel(page).getByRole("button", { name: "Pull" }).click();
-  await expect(panel(page)).toContainText("ประวัติแยกกัน (ต่างคนต่าง Commit)");
+  await expect(panel(page).getByRole("heading", { name: "กำลัง merge: ไฟล์ชนกัน" })).toBeVisible();
+  await expect(panel(page)).toContainText("แก้ในไฟล์ให้เหลือแบบที่ต้องการ");
+  expect((await gitNode(page)).state.machines.A.merging).toEqual({ theirs: "C2", label: "origin/main" });
+  expect(Object.keys((await gitNode(page)).state.commits)).toEqual(["C1", "C2", "C3"]); // nothing committed by itself
 
   // The commit preview shows the change against its parent.
   await page.getByRole("button", { name: "ดูโค้ดของ C3 (เครื่อง A)" }).click();
   await expect.poll(async () => (await boardTexts(page)).some((text) => /(^|· )\+2 −1$/.test(text))).toBe(true);
   await page.getByRole("button", { name: "เลิกดูโค้ดของ C3 (เครื่อง A)" }).click();
 
-  await expect(panel(page).getByRole("heading", { name: /ประวัติแยกกัน/ })).toBeVisible();
-  await panel(page).getByRole("button", { name: "Merge: เก็บไฟล์ของเรา" }).click();
-  await expect(panel(page)).toContainText("สร้าง C4 รวมประวัติกับ C2 ของ GitHub แล้ว");
-  await expect(panel(page).getByRole("heading", { name: /ประวัติแยกกัน/ })).toHaveCount(0);
+  // Resolve with the quick button, Add, Commit (the message box already says "Merge origin/main").
+  await panel(page).getByRole("button", { name: "ใช้ของเรา" }).click();
+  await expect(boardFile(page, "A")).toHaveValue("print(\"from A\")\nprint(\"more\")\n");
+  await expect(panel(page).getByRole("textbox", { name: "ข้อความ Commit" })).toHaveValue("Merge origin/main");
+  await panel(page).getByRole("button", { name: "Add", exact: true }).click();
+  await panel(page).getByRole("button", { name: "Commit", exact: true }).click();
+  await expect(panel(page)).toContainText("สร้าง C4 จบการ merge แล้ว");
+  await expect(panel(page).getByRole("heading", { name: /กำลัง merge/ })).toHaveCount(0);
   await panel(page).getByRole("button", { name: "Push" }).click();
   await expect(panel(page)).toContainText("ส่ง C3, C4 ขึ้น GitHub แล้ว");
 
   await panel(page).getByRole("button", { name: "เครื่อง B" }).click();
   await panel(page).getByRole("button", { name: "Pull" }).click();
   const node = await gitNode(page);
-  expect(node.state.commits.C4).toMatchObject({ parentId: "C3", mergeParentId: "C2", snapshot: { content: "print(\"from A\")\nprint(\"more\")\n" } });
+  expect(node.state.commits.C4).toMatchObject({ parentId: "C3", mergeParentId: "C2", message: "Merge origin/main", snapshot: { content: "print(\"from A\")\nprint(\"more\")\n" } });
   expect(node.state.remote).toMatchObject({ mainHead: "C4", knownCommitIds: ["C1", "C2", "C3", "C4"] });
   expect(node.state.machines.B).toMatchObject({ mainHead: "C4", working: { content: "print(\"from A\")\nprint(\"more\")\n" } });
 
-  // Undo the Pull, the Push and the Merge; then take GitHub's version instead.
-  for (let i = 0; i < 3; i++) await page.getByRole("button", { name: "เลิกทำ" }).click();
+  // Undo B's Pull, A's Push, Commit, Add and the quick button; then take GitHub's version instead.
+  for (let i = 0; i < 5; i++) await page.getByRole("button", { name: "เลิกทำ" }).click();
   await panel(page).getByRole("button", { name: "เครื่อง A" }).click();
+  await expect(panel(page).getByRole("heading", { name: /กำลัง merge/ })).toBeVisible();
   await panel(page).getByRole("button", { name: "ทิ้งงานของเรา ใช้เวอร์ชัน GitHub" }).click();
   await expect(panel(page)).toContainText("ใช้เวอร์ชันของ GitHub (main = C2)");
   await expect(boardFile(page, "A")).toHaveValue("print(\"from B\")\n");
   expect((await gitNode(page)).state.machines.A).toMatchObject({ mainHead: "C2", knownCommitIds: ["C1", "C2"] });
+  expect((await gitNode(page)).state.machines.A.merging).toBeUndefined();
+});
+
+test("GIT-11: two machines edit different lines → Pull merges by itself; the same line → markers, fix by hand, Add + Commit, Push", async ({ page }) => {
+  await createProject(page, "Conflict Git");
+  await page.getByRole("button", { name: "เพิ่มตัวจำลอง Git" }).first().click();
+  await panel(page).getByRole("combobox", { name: "ขั้นของบทเรียน" }).selectOption("full");
+  await boardFile(page, "A").fill("line1\nline2\nline3\nline4\nline5\n");
+  await addAndCommit(page, "five lines"); // C1
+  await panel(page).getByRole("button", { name: "Push" }).click();
+  await panel(page).getByRole("button", { name: "เครื่อง B" }).click();
+  await panel(page).getByRole("button", { name: "Clone" }).click();
+
+  // B edits line 1 and pushes; A edits line 5 (a different line) and commits.
+  await boardFile(page, "B").fill("LINE1 from B\nline2\nline3\nline4\nline5\n");
+  await addAndCommit(page, "B edits line 1"); // C2
+  await panel(page).getByRole("button", { name: "Push" }).click();
+  await panel(page).getByRole("button", { name: "เครื่อง A" }).click();
+  await boardFile(page, "A").fill("line1\nline2\nline3\nline4\nLINE5 from A\n");
+  await addAndCommit(page, "A edits line 5"); // C3
+  await panel(page).getByRole("button", { name: "Pull" }).click();
+  await expect(panel(page)).toContainText("Git รวมให้เอง: แก้คนละบรรทัด");
+  await expect(panel(page).getByRole("heading", { name: /กำลัง merge/ })).toHaveCount(0);
+  await expect(boardFile(page, "A")).toHaveValue("LINE1 from B\nline2\nline3\nline4\nLINE5 from A\n");
+  let node = await gitNode(page);
+  expect(node.state.commits.C4).toMatchObject({ parentId: "C3", mergeParentId: "C2", message: "Merge origin/main" });
+  expect(node.state.machines.A.merging).toBeUndefined();
+  await panel(page).getByRole("button", { name: "Push" }).click();
+  await expect(panel(page)).toContainText("ส่ง C3, C4 ขึ้น GitHub แล้ว");
+
+  // Now the SAME line: B and A both change line 3.
+  await panel(page).getByRole("button", { name: "เครื่อง B" }).click();
+  await panel(page).getByRole("button", { name: "Pull" }).click();
+  await boardFile(page, "B").fill("LINE1 from B\nline2\nline3 by B\nline4\nLINE5 from A\n");
+  await addAndCommit(page, "B edits line 3"); // C5
+  await panel(page).getByRole("button", { name: "Push" }).click();
+  await panel(page).getByRole("button", { name: "เครื่อง A" }).click();
+  await boardFile(page, "A").fill("LINE1 from B\nline2\nline3 by A\nline4\nLINE5 from A\n");
+  await addAndCommit(page, "A edits line 3"); // C6
+  await panel(page).getByRole("button", { name: "Pull" }).click();
+
+  // Markers are in the file, highlighted, and the panel explains what to do.
+  const marked = "LINE1 from B\nline2\n<<<<<<< HEAD (ของเรา)\nline3 by A\n=======\nline3 by B\n>>>>>>> origin/main\nline4\nLINE5 from A\n";
+  await expect(boardFile(page, "A")).toHaveValue(marked);
+  await expect(panel(page).getByRole("heading", { name: "กำลัง merge: ไฟล์ชนกัน" })).toBeVisible();
+  await expect(panel(page)).toContainText("ลบเครื่องหมาย <<<<<<< ======= >>>>>>> แล้ว Add + Commit");
+  const stripes = page.getByTestId("git-conflict-stripes-A").locator("[data-role]");
+  await expect(stripes.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-role")))).resolves.toEqual(["text", "text", "marker", "ours", "marker", "theirs", "marker", "text", "text", "text"]);
+  expect((await gitNode(page)).state.machines.A).toMatchObject({ mainHead: "C6", merging: { theirs: "C5", label: "origin/main" } });
+
+  // Commit cannot finish while marker lines are left, and push / pull are blocked.
+  const commitButton = panel(page).getByRole("button", { name: "Commit", exact: true });
+  await expect(commitButton).toHaveAttribute("aria-disabled", "true");
+  await expect(panel(page)).toContainText("ยังมีเครื่องหมาย conflict เหลืออยู่");
+  await expect(panel(page).getByRole("button", { name: "Push" })).toHaveAttribute("aria-disabled", "true");
+  await expect(panel(page).getByRole("button", { name: "Pull" })).toHaveAttribute("aria-disabled", "true");
+
+  // Abort puts the file back; Pull starts the same merge again.
+  await panel(page).getByRole("button", { name: "ยกเลิก merge" }).click();
+  await expect(boardFile(page, "A")).toHaveValue("LINE1 from B\nline2\nline3 by A\nline4\nLINE5 from A\n");
+  await expect(panel(page).getByRole("heading", { name: /กำลัง merge/ })).toHaveCount(0);
+  await panel(page).getByRole("button", { name: "Pull" }).click();
+  await expect(boardFile(page, "A")).toHaveValue(marked);
+
+  // Fix by hand: keep both lines, no markers. Add + Commit makes the merge commit; Push works.
+  await boardFile(page, "A").fill("LINE1 from B\nline2\nline3 by A and B\nline4\nLINE5 from A\n");
+  await expect(panel(page).getByRole("button", { name: "Add", exact: true })).toHaveAttribute("aria-disabled", "false");
+  await panel(page).getByRole("button", { name: "Add", exact: true }).click();
+  await expect(panel(page).getByRole("textbox", { name: "ข้อความ Commit" })).toHaveValue("Merge origin/main");
+  await panel(page).getByRole("button", { name: "Commit", exact: true }).click();
+  await expect(panel(page)).toContainText("สร้าง C7 จบการ merge แล้ว");
+  await panel(page).getByRole("button", { name: "Push" }).click();
+  await expect(panel(page)).toContainText("ส่ง C6, C7 ขึ้น GitHub แล้ว");
+  node = await gitNode(page);
+  expect(node.state.commits.C7).toMatchObject({ parentId: "C6", mergeParentId: "C5", message: "Merge origin/main", snapshot: { content: "LINE1 from B\nline2\nline3 by A and B\nline4\nLINE5 from A\n" } });
+  expect(node.state.remote.mainHead).toBe("C7");
+  expect(node.state.machines.A.merging).toBeUndefined();
+
+  // B pulls the fixed file by fast-forward.
+  await panel(page).getByRole("button", { name: "เครื่อง B" }).click();
+  await panel(page).getByRole("button", { name: "Pull" }).click();
+  await expect(boardFile(page, "B")).toHaveValue("LINE1 from B\nline2\nline3 by A and B\nline4\nLINE5 from A\n");
+});
+
+test("GIT-12: the GitHub | GitLab switch renames the remote on the board, in the steps and in messages; one Undo; reload keeps it", async ({ page }) => {
+  await createProject(page, "GitLab Git");
+  await page.getByRole("button", { name: "เพิ่มตัวจำลอง Git" }).first().click();
+  const stepSelect = panel(page).getByRole("combobox", { name: "ขั้นของบทเรียน" });
+  await stepSelect.selectOption("remote");
+  const host = panel(page).getByRole("group", { name: "ที่เก็บโค้ดออนไลน์" });
+  await expect(host.getByRole("button", { name: "GitHub" })).toHaveAttribute("aria-pressed", "true");
+  await expect(stepSelect.locator("option").nth(1)).toHaveText("2 · A → Git → GitHub");
+  expect((await gitNode(page)).host).toBeUndefined(); // documents made before the switch have no host
+
+  await host.getByRole("button", { name: "GitLab" }).click();
+  await expect(host.getByRole("button", { name: "GitLab" })).toHaveAttribute("aria-pressed", "true");
+  expect((await gitNode(page)).host).toBe("gitlab");
+  await expect(stepSelect.locator("option").nth(1)).toHaveText("2 · A → Git → GitLab");
+  await expect(stepSelect.locator("option").nth(2)).toHaveText("3 · A+Git → GitLab → B+Git");
+  await expect(panel(page).getByRole("heading", { name: "GitLab" })).toBeVisible();
+  await expect.poll(async () => { const texts = await boardTexts(page); return texts.includes("GitLab") && texts.some((text) => text.includes("A → GitLab")) && !texts.some((text) => text.includes("GitHub")); }).toBe(true);
+
+  await addAndCommit(page, "hello");
+  await panel(page).getByRole("button", { name: "Push" }).click();
+  const result = panel(page).locator("[aria-live=polite]");
+  await expect(result).toContainText("ส่ง C1 ขึ้น GitLab แล้ว");
+  await expect(result).not.toContainText("GitHub");
+  await expect(page.getByRole("textbox", { name: "โค้ดบน GitLab (C1) อ่านอย่างเดียว" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ดูโค้ดของ C1 (GitLab)" })).toBeVisible();
+
+  // Switching back is one step, and Undo/Redo move the host with the other actions.
+  await host.getByRole("button", { name: "GitHub" }).click();
+  expect((await gitNode(page)).host).toBe("github");
+  await expect(panel(page).getByRole("heading", { name: "GitHub" })).toBeVisible(); // the step card follows the switch
+  await page.getByRole("button", { name: "เลิกทำ" }).click();
+  expect((await gitNode(page)).host).toBe("gitlab");
+  await page.reload();
+  await (await objectRows(page)).first().click();
+  await page.getByRole("tab", { name: "ตัวจำลอง", exact: true }).click();
+  expect((await gitNode(page)).host).toBe("gitlab");
+  await expect(panel(page).getByRole("group", { name: "ที่เก็บโค้ดออนไลน์" }).getByRole("button", { name: "GitLab" })).toHaveAttribute("aria-pressed", "true");
 });
 
 test("GIT-07: a locked widget exposes no Git actions until unlocked in Objects; clones are independent", async ({ page }) => {
@@ -316,16 +445,23 @@ test("GIT-10: Branch step — create, commit on a branch, switch (file changes),
   expect((await gitNode(page)).state.machines.A).toMatchObject({ mainHead: "C2", branches: { feature: "C2" } });
   await expect(panel(page).getByRole("button", { name: "Merge feature เข้า main" })).toHaveAttribute("aria-disabled", "true");
 
-  // A real merge: both branches get a commit. Both changed the file, so the learner picks a side.
+  // A real merge: both branches get a commit and both changed the same line, so Git stops on a conflict.
   await panel(page).getByRole("button", { name: "สร้าง branch", exact: true }).click(); // feature-2 at C2
   await boardFile(page).fill("print(\"second branch\")\n");
   await addAndCommit(page, "second branch work"); // C3
   await panel(page).getByRole("button", { name: "สลับไป main" }).click();
   await boardFile(page).fill("print(\"main moved on\")\n");
   await addAndCommit(page, "main work"); // C4
-  await expect(panel(page)).toContainText("ไฟล์ชนกัน");
-  await panel(page).getByRole("button", { name: "Merge: ใช้ไฟล์จาก feature-2" }).click();
-  await expect(panel(page)).toContainText("สร้าง C5 รวม feature-2 เข้า main");
+  await expect(panel(page)).toContainText("Git จะหยุดให้คุณแก้ไฟล์เอง");
+  await panel(page).getByRole("button", { name: "Merge feature-2 เข้า main" }).click();
+  await expect(panel(page).getByRole("heading", { name: "กำลัง merge: ไฟล์ชนกัน" })).toBeVisible();
+  await expect(boardFile(page)).toHaveValue("<<<<<<< HEAD (ของเรา)\nprint(\"main moved on\")\n=======\nprint(\"second branch\")\n>>>>>>> feature-2\n");
+  await panel(page).getByRole("button", { name: "ใช้ของอีกฝั่ง" }).click();
+  await expect(boardFile(page)).toHaveValue("print(\"second branch\")\n");
+  await panel(page).getByRole("button", { name: "Add", exact: true }).click();
+  await expect(panel(page).getByRole("textbox", { name: "ข้อความ Commit" })).toHaveValue("Merge branch 'feature-2'");
+  await panel(page).getByRole("button", { name: "Commit", exact: true }).click();
+  await expect(panel(page)).toContainText("สร้าง C5 จบการ merge แล้ว");
   const node = await gitNode(page);
   expect(node.state.commits.C5).toMatchObject({ parentId: "C4", mergeParentId: "C3", snapshot: { content: "print(\"second branch\")\n" } });
   await expect(boardFile(page)).toHaveValue("print(\"second branch\")\n");
@@ -348,4 +484,100 @@ test("GIT-10: Branch step — create, commit on a branch, switch (file changes),
   await expect(panel(page).getByRole("button", { name: "Push" })).toHaveAttribute("aria-disabled", "true");
   await panel(page).getByRole("button", { name: "สลับไป main" }).click();
   await expect(panel(page).getByRole("button", { name: "Push" })).toHaveAttribute("aria-disabled", "false");
+});
+
+async function reviewLesson(page: Page, host: "GitHub" | "GitLab") {
+  await createProject(page, `Review ${host}`);
+  await page.getByRole("button", { name: "เพิ่มตัวจำลอง Git" }).first().click();
+  if (host === "GitLab") await panel(page).getByRole("group", { name: "ที่เก็บโค้ดออนไลน์" }).getByRole("button", { name: "GitLab" }).click();
+  await panel(page).getByRole("combobox", { name: "ขั้นของบทเรียน" }).selectOption("review");
+}
+
+test("GIT-13: Merge Request loop on GitLab — protected main, branch push, open, review, self-approve refused, approve, merge, both machines pull", async ({ page }) => {
+  await reviewLesson(page, "GitLab");
+  await expect(panel(page).getByRole("combobox", { name: "ขั้นของบทเรียน" }).locator("option").nth(4)).toHaveText("5 · Merge Request (ทีม)");
+  await boardFile(page, "A").fill("line1\nline2\nline3\n");
+  await addAndCommit(page, "start"); // C1
+  await panel(page).getByRole("button", { name: "Push", exact: true }).click();
+  await expect(panel(page)).toContainText("ส่ง C1 ขึ้น GitLab แล้ว"); // the project's first push creates main
+  await panel(page).getByRole("button", { name: "เครื่อง B" }).click();
+  await panel(page).getByRole("button", { name: "Clone" }).click();
+  await panel(page).getByRole("button", { name: "เครื่อง A" }).click();
+
+  // "Oops, I committed on main": the push is refused because main is protected.
+  await boardFile(page, "A").fill("LINE1 by A\nline2\nline3\n");
+  await addAndCommit(page, "change line 1"); // C2
+  await panel(page).getByRole("button", { name: "Push", exact: true }).click();
+  await expect(panel(page)).toContainText("main ถูกป้องกัน: ต้องแตก branch แล้วเปิด Merge Request");
+  expect((await gitNode(page)).state.remote.mainHead).toBe("C1");
+
+  // Branch, push the branch (the remote keeps it), open the Merge Request.
+  await panel(page).getByRole("button", { name: "สร้าง branch", exact: true }).click();
+  await expect(panel(page)).toContainText("git push -u origin feature");
+  await panel(page).getByRole("button", { name: "Push", exact: true }).click();
+  await expect(panel(page)).toContainText("ส่ง branch feature ขึ้น GitLab แล้ว");
+  expect((await gitNode(page)).state.remote).toMatchObject({ mainHead: "C1", knownCommitIds: ["C1", "C2"], branches: { feature: "C2" } });
+  await panel(page).getByRole("button", { name: "เปิด Merge Request: feature → main" }).click();
+  await expect(panel(page)).toContainText("เปิด Merge Request !1: feature → main แล้ว");
+  await expect.poll(async () => { const texts = await boardTexts(page); return texts.includes("!1 feature → main") && texts.includes("เปิดอยู่") && texts.some((text) => text.includes("รอเพื่อนอนุมัติ")); }).toBe(true);
+
+  // The author cannot approve; the reason is shown.
+  const request = panel(page).getByRole("group", { name: "Merge Request !1" });
+  await expect(request.getByRole("button", { name: "อนุมัติ (Approve)" })).toHaveAttribute("aria-disabled", "true");
+  await expect(request).toContainText("อนุมัติ Merge Request ของตัวเองไม่ได้");
+
+  // The teammate (machine B) looks at the changes and approves.
+  await panel(page).getByRole("button", { name: "เครื่อง B" }).click();
+  await request.getByRole("button", { name: "ดูการเปลี่ยนแปลง" }).click();
+  const diff = panel(page).getByRole("region", { name: "การเปลี่ยนแปลงใน Merge Request" });
+  await expect(diff).toContainText("+1 −1");
+  await expect(diff.locator("[data-diff=add]")).toHaveText("+ LINE1 by A");
+  await expect(diff.locator("[data-diff=del]")).toHaveText("− line1");
+  await expect(request.getByRole("button", { name: "Merge เข้า main" })).toHaveAttribute("aria-disabled", "true"); // not approved yet
+  await request.getByRole("button", { name: "อนุมัติ (Approve)" }).click();
+  await expect(panel(page)).toContainText("อนุมัติ !1 แล้ว");
+  await expect.poll(async () => (await boardTexts(page)).some((text) => text.includes("Merge ได้ (fast-forward)"))).toBe(true);
+
+  // Merge on the remote: fast-forward, branch deleted there.
+  await request.getByRole("button", { name: "Merge เข้า main" }).click();
+  await expect(panel(page)).toContainText("fast-forward");
+  await expect(panel(page)).toContainText("ลบ branch feature บน GitLab");
+  let node = await gitNode(page);
+  expect(node.state.remote).toMatchObject({ mainHead: "C2", knownCommitIds: ["C1", "C2"] });
+  expect(node.state.remote.branches).toBeUndefined();
+  expect(node.state.remote.requests).toMatchObject([{ id: 1, source: "feature", status: "merged", author: "A", approvedBy: ["B"] }]);
+  await expect.poll(async () => (await boardTexts(page)).includes("รวมแล้ว")).toBe(true);
+
+  // Both machines: git switch main + git pull.
+  await panel(page).getByRole("button", { name: "Pull", exact: true }).click();
+  await expect(boardFile(page, "B")).toHaveValue("LINE1 by A\nline2\nline3\n");
+  await panel(page).getByRole("button", { name: "เครื่อง A" }).click();
+  await panel(page).getByRole("button", { name: "สลับไป main" }).click();
+  await panel(page).getByRole("button", { name: "Pull", exact: true }).click();
+  node = await gitNode(page);
+  expect(node.state.machines.A).toMatchObject({ mainHead: "C2", originMainHead: "C2" });
+  expect(node.state.machines.B).toMatchObject({ mainHead: "C2", working: { content: "LINE1 by A\nline2\nline3\n" } });
+  await page.reload();
+  await (await objectRows(page)).first().click();
+  await page.getByRole("tab", { name: "ตัวจำลอง", exact: true }).click();
+  expect((await gitNode(page)).state.remote.requests?.[0].status).toBe("merged");
+});
+
+test("GIT-13: on GitHub the lesson says Pull Request / PR, never Merge Request", async ({ page }) => {
+  await reviewLesson(page, "GitHub");
+  await expect(panel(page).getByRole("combobox", { name: "ขั้นของบทเรียน" }).locator("option").nth(4)).toHaveText("5 · Pull Request (ทีม)");
+  await expect(panel(page).getByRole("button", { name: /เปิด Pull Request/ })).toBeVisible();
+  await expect(panel(page).getByRole("heading", { name: "Pull Request" })).toBeVisible();
+  await addAndCommit(page, "start");
+  await panel(page).getByRole("button", { name: "Push", exact: true }).click();
+  await boardFile(page, "A").fill("print(\"changed\")\n");
+  await addAndCommit(page, "direct");
+  await panel(page).getByRole("button", { name: "Push", exact: true }).click();
+  await expect(panel(page)).toContainText("main ถูกป้องกัน: ต้องแตก branch แล้วเปิด Pull Request");
+  await expect.poll(async () => {
+    const texts = await boardTexts(page);
+    return texts.includes("Pull Request") && texts.some((text) => text.includes("ยังไม่มี Pull Request")) && texts.some((text) => text.includes("(ทีม)") && text.includes("Pull Request")) && !texts.some((text) => text.includes("Merge Request") || text.includes("GitLab"));
+  }).toBe(true);
+  await expect(page.getByTestId("git-overlay")).toBeVisible();
+  await expect(panel(page)).not.toContainText("Merge Request");
 });

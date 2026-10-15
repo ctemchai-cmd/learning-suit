@@ -1,4 +1,5 @@
-import { GIT_LIMITS, type CommitId, type FileSnapshot, type GitCommit, type GitSimulationState, type MachineId, type MachineRepository, type RepositoryId } from "./model";
+import { mergeFiles } from "./merge3";
+import { GIT_LIMITS, type CommitId, type MergeRequest, type FileSnapshot, type GitCommit, type GitSimulationState, type MachineId, type MachineRepository, type RepositoryId } from "./model";
 
 // ---------------------------------------------------------------------------
 // Snapshots
@@ -76,7 +77,7 @@ export function suggestBranchName(repo: MachineRepository): string {
 }
 
 /** Nearest commit both tips contain (highest number among the common ancestors), or `null`. */
-export function mergeBase(state: GitSimulationState, repo: MachineRepository, a: CommitId, b: CommitId): CommitId | null {
+export function mergeBase(state: GitSimulationState, repo: Pick<MachineRepository, "knownCommitIds">, a: CommitId, b: CommitId): CommitId | null {
   const ofA = new Set(ancestorsOf(a, repo.knownCommitIds, state.commits));
   const common = ancestorsOf(b, repo.knownCommitIds, state.commits).filter((id) => ofA.has(id));
   return common.length ? common[common.length - 1] : null;
@@ -84,10 +85,25 @@ export function mergeBase(state: GitSimulationState, repo: MachineRepository, a:
 
 export type BranchMergePlan = "up-to-date" | "fast-forward" | "merge" | "conflict" | "unavailable";
 
+/** Left-hand marker label in a conflicted file: the side that is already checked out. */
+export const OURS_LABEL = "HEAD (ของเรา)";
+
 /**
- * What `git merge <other>` would do on the current branch. `conflict` = both sides changed the file differently
- * since their common ancestor (the learner then picks ours/theirs). `file` is the merge commit's file when no
- * choice is needed (the side that changed, or ours when both ended up identical).
+ * Three-way merge of two commits' files against their merge base (diff3 line merge, plan 04 §Merge).
+ * `file` carries conflict markers when `conflicts > 0`; `null` when a commit's snapshot is unknown.
+ */
+export function threeWayMerge(state: GitSimulationState, repo: Pick<MachineRepository, "knownCommitIds">, ours: CommitId, theirs: CommitId, theirsLabel: string): { file: FileSnapshot; conflicts: number } | null {
+  const oursSnapshot = state.commits[ours]?.snapshot;
+  const theirsSnapshot = state.commits[theirs]?.snapshot;
+  if (!oursSnapshot || !theirsSnapshot) return null;
+  const base = mergeBase(state, repo, ours, theirs);
+  return mergeFiles(base === null ? null : state.commits[base]?.snapshot ?? null, oursSnapshot, theirsSnapshot, { ours: OURS_LABEL, theirs: theirsLabel });
+}
+
+/**
+ * What `git merge <other>` would do on the current branch. `merge` = Git joins the two files by itself (changes on
+ * different lines, or the same change twice); `conflict` = some lines were changed differently on both sides, so
+ * the learner has to fix the file by hand. `file` is the merged file when the plan is `merge`.
  */
 export function analyzeBranchMerge(state: GitSimulationState, machine: MachineId, other: string): { plan: BranchMergePlan; file: FileSnapshot | null } {
   const repo = state.machines[machine];
@@ -97,15 +113,49 @@ export function analyzeBranchMerge(state: GitSimulationState, machine: MachineId
   if (!repo.initialized || other === currentBranch(repo) || !branchExists(repo, other) || ours === null || theirs === null) return none;
   if (isAncestor(theirs, ours, repo.knownCommitIds, state.commits)) return { plan: "up-to-date", file: null };
   if (isAncestor(ours, theirs, repo.knownCommitIds, state.commits)) return { plan: "fast-forward", file: null };
-  const base = mergeBase(state, repo, ours, theirs);
-  const baseSnapshot = base === null ? null : state.commits[base]?.snapshot ?? null;
-  const oursSnapshot = state.commits[ours]?.snapshot ?? null;
-  const theirsSnapshot = state.commits[theirs]?.snapshot ?? null;
-  if (!oursSnapshot || !theirsSnapshot) return none;
-  const oursChanged = !snapshotsEqual(oursSnapshot, baseSnapshot);
-  const theirsChanged = !snapshotsEqual(theirsSnapshot, baseSnapshot);
-  if (oursChanged && theirsChanged && !snapshotsEqual(oursSnapshot, theirsSnapshot)) return { plan: "conflict", file: null };
-  return { plan: "merge", file: copySnapshot(theirsChanged && !oursChanged ? theirsSnapshot : oursSnapshot) };
+  const merged = threeWayMerge(state, repo, ours, theirs, other);
+  if (!merged) return none;
+  return merged.conflicts ? { plan: "conflict", file: null } : { plan: "merge", file: merged.file };
+}
+
+// ---------------------------------------------------------------------------
+// Merge Requests (review lesson)
+// ---------------------------------------------------------------------------
+
+export function findRequest(state: GitSimulationState, id: number): MergeRequest | undefined {
+  return state.remote.requests?.find((request) => request.id === id);
+}
+
+/** The Merge Request shown on the board and offered first in the panel: the newest open one, else the newest. */
+export function currentRequest(state: GitSimulationState): MergeRequest | undefined {
+  const all = state.remote.requests ?? [];
+  return [...all].reverse().find((request) => request.status === "open") ?? all.at(-1);
+}
+
+export function openRequestFor(state: GitSimulationState, source: string): MergeRequest | undefined {
+  return state.remote.requests?.find((request) => request.status === "open" && request.source === source);
+}
+
+export type RequestInfo = {
+  approved: boolean;
+  /** The source branch and remote main changed the same lines: merging is refused until the branch is fixed. */
+  conflict: boolean;
+  /** Remote main has not moved since the branch started, so merging just moves main forward. */
+  fastForward: boolean;
+  /** Approved, open, and no conflict. */
+  mergeable: boolean;
+};
+
+/** What Merge would do to this request right now (null when it is not open or its branch is gone). */
+export function requestInfo(state: GitSimulationState, request: MergeRequest): RequestInfo | null {
+  const tip = state.remote.branches?.[request.source];
+  const main = state.remote.mainHead;
+  if (request.status !== "open" || !tip || !main) return null;
+  const fastForward = isAncestor(main, tip, state.remote.knownCommitIds, state.commits);
+  const conflict = !fastForward && !isAncestor(tip, main, state.remote.knownCommitIds, state.commits)
+    && (threeWayMerge(state, state.remote, main, tip, request.source)?.conflicts ?? 0) > 0;
+  const approved = request.approvedBy.length > 0;
+  return { approved, conflict, fastForward, mergeable: approved && !conflict };
 }
 
 export const planBranchMerge = (state: GitSimulationState, machine: MachineId, other: string): BranchMergePlan => analyzeBranchMerge(state, machine, other).plan;
