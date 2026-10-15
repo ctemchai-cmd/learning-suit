@@ -157,24 +157,6 @@ function KeysList({ scene, state, marks, font }: { scene: Scene; state: SshState
   </Card>;
 }
 
-function Legend({ box, compact, font }: { box: Box; compact: boolean; font: string }) {
-  const columns: { icon: IconName; title: string; text: string }[] = [
-    { icon: "key", title: "นิ้วจริง = กุญแจลับ", text: "id_ed25519 ใช้ทำผลสแกน อยู่กับเรา ไม่ส่งให้ใคร" },
-    { icon: "fingerprint", title: "ลายนิ้วมือ = กุญแจสาธารณะ", text: "สร้างจากกุญแจลับ ใช้ตรวจผลสแกนได้อย่างเดียว" },
-    { icon: "shield", title: "เครื่องสแกน = GitHub", text: "กุญแจลับทำผลสแกน → .pub ตรวจ ตรงกันถึงเปิดประตู" },
-  ];
-  return <Group listening={false}>
-    <Rect x={box.x} y={box.y} width={box.w} height={box.h} cornerRadius={12} fill="#F8FAFC" stroke="#E2E8F0" strokeWidth={1.5} />
-    <Label x={box.x + 16} y={box.y + 8} width={box.w - 32} text="เปรียบเทียบ: ประตูตึกที่มีเครื่องสแกนลายนิ้วมือ" size={13} bold color={C.title} font={font} />
-    {compact
-      ? <Para x={box.x + 16} y={box.y + 30} width={box.w - 32} height={40} text={"กุญแจลับ (นิ้วจริง) ทำผลสแกน → .pub (ลายนิ้วมือ) ตรวจ\nเครื่องสแกนที่ประตู = GitHub"} size={12} color={C.muted} font={font} />
-      : columns.map((column, index) => <Group key={column.title} x={box.x + 16 + index * 352} y={box.y + 32}>
-        <IconLabel x={0} y={0} width={330} icon={column.icon} text={column.title} size={13} bold color={C.text} font={font} />
-        <Para x={22} y={20} width={308} height={34} text={column.text} size={12} color={C.muted} font={font} />
-      </Group>)}
-  </Group>;
-}
-
 /** What the thief holds: only a picture of our fingerprint. */
 function Thief({ box, state, mark, font }: { box: Box; state: SshState; mark?: MarkTone; font: string }) {
   const lines = state.thief === "idle" ? ["ยังไม่ได้ทำอะไร"] : state.thief === "copied" ? ["ถือ .pub (ภาพลายนิ้วมือ)", "ไม่มีกุญแจลับ ไม่มีนิ้วจริง"] : [".pub ตรวจผลสแกนได้อย่างเดียว", "ทำผลสแกนไม่ได้ → เข้าไม่ได้ ✗"];
@@ -224,7 +206,6 @@ export function SshWidgetView({ node, play, fontFamily: font }: { node: SshSimul
       <Label x={repo.x + 34} y={repo.y + 38} width={repo.w - 46} text={state.pushes ? `โค้ดของเรา · ส่งขึ้นแล้ว ${state.pushes} ครั้ง ✓` : "โค้ดของเรา · ยังไม่ได้ส่งขึ้น"} size={12} color={state.pushes ? C.ok : C.muted} font={font} />
     </Card>
     <KeysList scene={scene} state={state} marks={marks} font={font} />
-    <Legend box={scene.legend} compact={scene.compact} font={font} />
 
     <CaptionBar box={CAPTION_BOX} text={flow.frame ? flow.frame.caption : idleCaption(view, state)} step={flow.step} font={font} />
     {move && flow.path && <Packet key={flow.runKey} runKey={flow.runKey} path={flow.path} label={move.label} tone={move.tone}

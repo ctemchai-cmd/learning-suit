@@ -37,7 +37,6 @@ export type Scene = {
   repo: Box;
   keys: Box;
   thief?: Box;
-  legend: Box;
   pipes: { from: Pt; to: Pt }[];
 };
 
@@ -52,21 +51,20 @@ function machineBox(box: Box, compact: boolean, edgeY: number): MachineBox {
     box, folder,
     rows: { priv, pub },
     link: { x: priv.x, y: priv.y + rowH, w: priv.w, h: gap },
-    term: compact ? { x: box.x + 20, y: box.y + 166, w: box.w - 40, h: 20 } : { x: box.x + 20, y: box.y + 292, w: box.w - 40, h: 84 },
+    term: compact ? { x: box.x + 20, y: box.y + 166, w: box.w - 40, h: 20 } : { x: box.x + 20, y: box.y + 292, w: box.w - 40, h: box.h - 306 },
     edge: { x: box.x + box.w + 4, y: edgeY },
   };
 }
 
 function wideScene(): Scene {
-  const a = machineBox({ x: 24, y: 84, w: 520, h: 390 }, false, 279);
-  const github = { x: 760, y: 84, w: 336, h: 416 };
-  const scanner = { x: 652, y: 279 };
-  const gEdge = { x: github.x, y: 279 };
+  const a = machineBox({ x: 24, y: 84, w: 520, h: 490 }, false, 329);
+  const github = { x: 760, y: 84, w: 336, h: 516 };
+  const scanner = { x: 652, y: 329 };
+  const gEdge = { x: github.x, y: 329 };
   return {
     compact: false, machines: { a }, scanner, github, gEdge,
     repo: { x: 776, y: 126, w: 304, h: 72 },
-    keys: { x: 776, y: 212, w: 304, h: 274 },
-    legend: { x: 24, y: 516, w: 1072, h: 92 },
+    keys: { x: 776, y: 212, w: 304, h: 374 },
     pipes: [{ from: a.edge, to: scanner }, { from: scanner, to: gEdge }],
   };
 }
@@ -74,15 +72,14 @@ function wideScene(): Scene {
 function othersScene(): Scene {
   const a = machineBox({ x: 24, y: 84, w: 400, h: 196 }, true, 182);
   const b = machineBox({ x: 24, y: 326, w: 400, h: 196 }, true, 424);
-  const github = { x: 700, y: 84, w: 396, h: 430 };
+  const github = { x: 700, y: 84, w: 396, h: 516 };
   const scanner = { x: 566, y: 303 };
   const gEdge = { x: github.x, y: 303 };
   const thief = { x: 450, y: 524, w: 232, h: 80 };
   return {
     compact: true, machines: { a, b }, scanner, github, gEdge, thief,
     repo: { x: 716, y: 126, w: 364, h: 72 },
-    keys: { x: 716, y: 212, w: 364, h: 290 },
-    legend: { x: 700, y: 528, w: 396, h: 76 },
+    keys: { x: 716, y: 212, w: 364, h: 374 },
     pipes: [{ from: a.edge, to: scanner }, { from: b.edge, to: scanner }, { from: { x: 566, y: 524 }, to: scanner }, { from: scanner, to: gEdge }],
   };
 }

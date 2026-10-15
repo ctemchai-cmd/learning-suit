@@ -90,7 +90,7 @@ describe("hop paths", () => {
     const b = scene.machines.b!.box, thief = scene.thief!;
     expect(thief.x).toBeGreaterThan(b.x + b.w + 18);
     // Laptops also draw a 18px base under themselves; everything must end above the caption bar (y = 620).
-    for (const box of [scene.github, scene.legend, thief]) expect(box.y + box.h).toBeLessThanOrEqual(620);
+    for (const box of [scene.github, thief]) expect(box.y + box.h).toBeLessThanOrEqual(620);
     for (const box of [scene.machines.a.box, b]) expect(box.y + box.h + 18).toBeLessThanOrEqual(620);
   });
 });
