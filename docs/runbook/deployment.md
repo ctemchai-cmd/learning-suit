@@ -70,7 +70,7 @@ corepack pnpm test:e2e           # chromium + webkit (ไม่ตั้ง Supa
   where email = '<อีเมลเจ้าของ>';
   ```
   พิมพ์รหัสใน SQL Editor เท่านั้น ห้ามบันทึกลงไฟล์ใน repository
-- แนะนำเปิด JWT Signing Keys แบบ asymmetric (Project Settings → JWT Keys) เพื่อให้ `getClaims()` ตรวจ token ได้จาก JWKS ที่ cache ไว้ ไม่ต้องเรียก Auth server ทุก request ใน proxy
+- แนะนำเปิด JWT Signing Keys แบบ asymmetric (Project Settings → JWT Keys) เพื่อให้ `getClaims()` ตรวจ token ได้จาก JWKS ที่ cache ไว้ ไม่ต้องเรียก Auth server ทุก request ใน proxy — **เบราว์เซอร์ก็ได้ประโยชน์ด้วย:** ถ้ายังใช้ legacy HS256 secret `getClaims()` ฝั่ง client จะเรียก Auth server (`getUser`) ทุกครั้งที่ตรวจเจ้าของ แอปจึงช้าลงตอนเปิดรายการ/บทเรียน (ตอนนี้การอ่านใช้ผลที่ตรวจแล้วซ้ำได้ 30 วินาที แต่การเปิดครั้งแรกและทุกการบันทึกยังเรียกอยู่) ถ้าครูบอกว่าช้า ให้ตรวจข้อนี้ก่อน
 - ลำดับทุก release: `supabase db push` (migration) **ก่อน** Vercel deploy แอปที่อ้าง schema ใหม่
 
 ### ตรวจแล้วบนเครื่อง (ไม่ใช่ Vercel จริง)

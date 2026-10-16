@@ -8,6 +8,7 @@ import { BookOpen, Copy, FileUp, FolderOpen, KeyRound, LogOut, MonitorDown, Penc
 import { LIMITS } from "@/domain/document/limits";
 import { useRuntime } from "@/services/runtime";
 import { installApp, useCanInstall } from "@/features/pwa/pwa";
+import { preloadEditor } from "@/features/editor/preload";
 import { matchesQuery } from "./search";
 import ThemeToggle from "@/features/theme/theme-toggle";
 import { Bone, ProjectGridSkeleton } from "@/features/loading/skeletons";
@@ -84,6 +85,18 @@ export default function Dashboard() {
       .catch((cause: unknown) => { if (active) { setError(cause instanceof Error ? cause.message : "โหลดโปรเจกต์ไม่สำเร็จ"); setProjects([]); } });
     return () => { active = false; };
   }, [service]);
+  // The list is on screen: fetch the editor code in the background so opening a lesson does not wait for it.
+  const hasProjects = Boolean(projects?.length);
+  useEffect(() => {
+    if (!hasProjects) return;
+    const start = () => void preloadEditor();
+    if (typeof requestIdleCallback === "function") {
+      const handle = requestIdleCallback(start, { timeout: 3000 });
+      return () => cancelIdleCallback(handle);
+    }
+    const timer = window.setTimeout(start, 500);
+    return () => window.clearTimeout(timer);
+  }, [hasProjects]);
   useEffect(() => {
     if (runtime.status === "signed-out") router.replace("/login");
   }, [runtime.status, router]);

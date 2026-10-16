@@ -146,4 +146,27 @@ describe("decideOnOpen (PST-11)", () => {
       localDraft: foreignDraft, persistedJob: foreignJob, deletionJob: foreignDeletion, cloud: { status: "ok", record: cloudRecord },
     }))).toEqual({ kind: "use-cloud", record: cloudRecord });
   });
+
+  describe("metadata-only open (PERF: no document download when nothing changed)", () => {
+    const unchanged = (revision: number): CloudLoadResult => ({ status: "unchanged", revision });
+
+    it("a clean published draft whose revision still matches opens as is", () => {
+      const local = draft();
+      expect(decideOnOpen(input({ localDraft: local, cloud: unchanged(5) }))).toEqual({ kind: "use-local-clean", local });
+    });
+
+    it("never trusts a metadata-only answer for a dirty draft, a stale revision or a missing draft (asks for the full document)", () => {
+      expect(decideOnOpen(input({ localDraft: draft({ localSequence: 11 }), cloud: unchanged(5) }))).toEqual({ kind: "load-cloud" });
+      expect(decideOnOpen(input({ localDraft: draft({ pendingEdit }), cloud: unchanged(5) }))).toEqual({ kind: "load-cloud" });
+      expect(decideOnOpen(input({ localDraft: draft(), cloud: unchanged(6) }))).toEqual({ kind: "load-cloud" });
+      expect(decideOnOpen(input({ localDraft: null, cloud: unchanged(5) }))).toEqual({ kind: "load-cloud" });
+    });
+
+    it("a pending deletion, a durable job and an unpublished draft still win over the metadata answer", () => {
+      expect(decideOnOpen(input({ deletionJob: deletion, cloud: unchanged(5) }))).toEqual({ kind: "resume-deletion", deletionJob: deletion });
+      expect(decideOnOpen(input({ persistedJob: job, cloud: unchanged(5) })).kind).toBe("resume-job-first");
+      const unpublished = draft({ baseRevision: null });
+      expect(decideOnOpen(input({ localDraft: unpublished, cloud: unchanged(5) }))).toEqual({ kind: "use-local-unpublished", local: unpublished });
+    });
+  });
 });

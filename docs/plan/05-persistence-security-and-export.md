@@ -222,6 +222,13 @@ document transaction
 7. Cloud load ล้มเหลว → ใช้ local พร้อม badge offline; ถ้าไม่มี local แสดง retry ไม่สร้างเอกสารว่างมาทับ cloud
 8. Cloud schema ไม่รองรับ → คง local เดิมแต่ pause cloud writes พร้อมแจ้ง version ไม่พยายามลด schema โดยทิ้ง fields
 
+#### ความเร็วในการเปิด (เพิ่ม 2026-10-16)
+
+- **เปิดโดยไม่โหลด document ซ้ำ (ข้อ 4):** ถ้า draft publish แล้ว, ไม่ dirty, ไม่มี durable save job และมี baseRevision ให้ถาม cloud แค่ `inspectLifecycle()` (revision, is_ready, deleted_at; timeout 8 วินาที ไม่ใช่ 30) — revision ตรงกับ baseRevision และแถว ready/ไม่ถูกลบ → เปิด local draft ทันที (`CloudLoadResult` = `unchanged` → `use-local-clean`; ไม่โหลด `document` jsonb และไม่เขียน draft ทับ) เพราะ draft ที่ไม่ dirty เท่ากับ document ที่ revision นั้นอยู่แล้ว; revision ต่าง → โหลดเต็มเหมือนเดิม; lifecycle ล้มเหลว/timeout → `offline-local` เหมือน load ล้มเหลว; deleted/ไม่ ready/ไม่พบ → `unavailable` เหมือนเดิม; draft dirty, มี job, หรือยังไม่ publish **ไม่ใช้ทางลัดนี้เลย** (ตัดสินด้วย document เต็มเหมือนเดิมทุกข้อ) ตรรกะอยู่ที่ `open-probe.ts` + `decideOnOpen`
+- **Durable save job (ข้อ 2):** ถ้ามี local draft ให้แสดงกระดานทันที (draft มีงานที่ job ถือแล้ว) แล้วให้ coordinator ของ editor resume job เดิมเบื้องหลัง — เหมือนทางออฟไลน์เดิม; save ยังตรวจ expectedRevision ผล conflict/unavailable จึงมาเป็นสถานะของ coordinator และไม่มีทางเขียนทับงานใหม่บน cloud; ไม่มี local draft (มีแต่ job) ยังรอ resolve job ก่อนแสดงเหมือนเดิม
+- **Identity guard:** การอ่าน (list/load/inspect/ดาวน์โหลดรูป/listStates) ใช้ผล `getClaims()` ที่ตรงเจ้าของแล้วซ้ำได้ 30 วินาที และแชร์ request ที่กำลังรันอยู่; ทุกการเขียน (reserve/save/markDeleted/purge/register/upload/markReady/ลบ object) ตรวจใหม่เสมอ; ผลลบไม่ถูก cache; `onAuthStateChange` (รวมที่มาจากแท็บอื่น) ที่ออกจากระบบหรือเป็นบัญชีอื่นล้าง cache ทันที ผลที่ค้างอยู่ระหว่างบัญชีเปลี่ยนไม่ถูกจำ (`identity-guard.ts`)
+- หน้าโปรเจกต์อ่าน IndexedDB กับ cloud list พร้อมกัน; ภาพย่อ (ทั้งของรายการสไลด์และของหน้ารายการโปรเจกต์) รอกระดานนิ่ง ≥ 2 วินาที ทำทีละสไลด์ตอน idle และ **ไม่ดาวน์โหลดรูปเอง** — สไลด์ที่มีรูปซึ่งยังไม่อยู่ใน browser นี้ข้ามไปก่อน
+
 การใช้ cloud หลัง conflict เป็นการยอมทิ้ง draft ที่ยังไม่ sync ต้องมี dialog แสดงชื่อและตัวเลือก Export สำรอง การเก็บ local เป็นสำเนาใช้ project/node/slide/asset IDs ใหม่ และคัดลอก bytes เข้าสังกัดใหม่ตาม import remapping
 
 ## 7. Asset lifecycle, duplication และ project deletion
@@ -334,6 +341,7 @@ Semantic round trip เปรียบเทียบ document หลัง norm
 - หน้าเป็น shell ไม่มีข้อมูลผู้ใช้ (งานโหลดฝั่ง client จาก IndexedDB/Cloud ตามสิทธิ์เดิม) cache ของ service worker จึงไม่เก็บข้อมูลส่วนตัว
 - การเปลี่ยนหน้าแบบ client-side ไม่โหลด HTML เอง หน้าจึงส่ง message `warm` บอก worker ให้เก็บหน้าปัจจุบันและไฟล์ที่โหลดไปแล้ว (เฉพาะ same-origin) ครั้งแรกที่เปิดก็ใช้ออฟไลน์ได้
 - `sw.js` ส่งด้วย `Cache-Control: no-cache, no-store, must-revalidate` และ CSP `default-src 'self'` ; proxy ไม่แตะ `sw.js`/manifest
+- message `warm` ถูกส่งหลังเปิดหน้าไปแล้ว ≥ 3 วินาทีและ idle (ไม่แย่งโหลดกับบทเรียนที่กำลังเปิด; ครั้งแรกที่ worker ต้องดึงหน้านั้นซ้ำ)
 - ปุ่ม “ติดตั้งแอป” แสดงเมื่อ browser ส่ง `beforeinstallprompt` (Chromium) เท่านั้น Safari ติดตั้งจากเมนูแชร์
 
 ## 10. ลำดับ implement และ acceptance

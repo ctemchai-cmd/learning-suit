@@ -20,7 +20,20 @@ export class ImageCache {
   private listeners = new Set<() => void>();
   private disposed = false;
 
-  constructor(private resolve: BlobResolver) {}
+  /**
+   * @param resolve full resolver (may download)
+   * @param hasLocal cheap "is the blob already stored in this browser?" probe; without it only images the board already
+   *   decoded or is loading count as available without a download.
+   */
+  constructor(private resolve: BlobResolver, private hasLocal?: (assetId: string) => Promise<boolean>) {}
+
+  /** For background work (thumbnails): true if drawing this image will not start a download of its own. Never creates an entry. */
+  async canRenderWithoutDownload(assetId: string): Promise<boolean> {
+    const entry = this.entries.get(assetId);
+    if (entry) return entry.status === "ready" || entry.status === "loading";
+    if (!this.hasLocal) return false;
+    try { return await this.hasLocal(assetId); } catch { return false; }
+  }
 
   get(assetId: string): ImageEntry {
     const existing = this.entries.get(assetId);

@@ -47,7 +47,7 @@ export interface ProjectRepository {
   /** Ready, not-deleted document or null. Network failures throw. */
   load(id: string): Promise<ProjectRecord | null>;
   /** Metadata-only lifecycle read (includes reservations/tombstones). null = no visible row; failures throw. */
-  inspectLifecycle(id: string): Promise<CloudProjectLifecycle | null>;
+  inspectLifecycle(id: string, options?: { timeoutMs?: number }): Promise<CloudProjectLifecycle | null>;
   reserve(request: ReserveRequest): Promise<ReservationResult>;
   save(request: SaveRequest): Promise<SaveResult>;
   markDeleted(request: DeleteRequest): Promise<SaveResult>;

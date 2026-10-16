@@ -31,6 +31,26 @@ const recordRow = {
   deleted_at: null,
 };
 
+describe("mapRecordRow validates the whole document (putCleanDraftFromCloud {alreadyValidated} relies on it)", () => {
+  it("accepts a valid row and returns the parsed content", () => {
+    expect(mapRecordRow(recordRow).document).toEqual(VALID_DOCUMENT);
+  });
+
+  it("rejects an unknown node type, a bad nested field and a wrong schema version as schema_unsupported (planted invalid rows)", () => {
+    const slide = VALID_DOCUMENT.slides[0];
+    const node = { id: "20000000-0000-4000-8000-000000000001", type: "rectangle", x: 0, y: 0, rotation: 0, opacity: 1, locked: false, width: 10, height: 10, stroke: "#000000", strokeWidth: 2, strokeStyle: "solid", fill: "transparent" };
+    const withNodes = (nodes: unknown[]) => ({ ...recordRow, document: { ...VALID_DOCUMENT, slides: [{ ...slide, nodes }] } });
+    expect(mapRecordRow(withNodes([node])).document.slides[0].nodes).toHaveLength(1);
+    for (const bad of [
+      withNodes([{ ...node, type: "hologram" }]),
+      withNodes([{ ...node, width: "wide" }]),
+      { ...recordRow, document: { ...VALID_DOCUMENT, schemaVersion: 99 } },
+    ]) {
+      expect(() => mapRecordRow(bad)).toThrow(expect.objectContaining({ reason: "schema_unsupported" }));
+    }
+  });
+});
+
 describe("classifyPostgrestFailure", () => {
   it.each([
     [{ status: 0, code: "", message: "TypeError: Failed to fetch" }, "network", true],
@@ -200,6 +220,19 @@ describe("SupabaseProjectRepository", () => {
     expect(await repository.inspectLifecycle(PROJECT_ID)).toEqual({ revision: 0, isReady: false, deletedAt: null, lastMutationId: null });
     expect(calls.some((call) => call.method === "eq" && call.args[0] === "is_ready")).toBe(false);
     expect(await repository.inspectLifecycle(PROJECT_ID)).toBeNull();
+  });
+
+  it("inspectLifecycle() can use a shorter timeout than the repository default (small metadata read vs 30 s document load)", async () => {
+    const row = { data: { revision: 4, is_ready: true, deleted_at: null, last_mutation_id: "m" }, error: null, status: 200 };
+    const { client, calls } = fakeClient({ from: [row, row] });
+    const repository = new SupabaseProjectRepository(client);
+    await repository.inspectLifecycle(PROJECT_ID, { timeoutMs: 40 });
+    await repository.inspectLifecycle(PROJECT_ID);
+    const signals = calls.filter((call) => call.method === "abortSignal").map((call) => call.args[0] as AbortSignal);
+    expect(signals).toHaveLength(2);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
   });
 
   it("save() calls save_project with the full request and maps the result", async () => {

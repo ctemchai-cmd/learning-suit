@@ -7,12 +7,7 @@ import { ArrowLeft, BetweenHorizontalEnd, Group as GroupIcon, Ungroup, BetweenHo
 import Canvas from "@/features/canvas/canvas";
 import { ImageCache, ImageCacheContext } from "@/features/canvas/image-cache";
 import { konvaFontMetrics } from "@/features/canvas/font-metrics";
-import { DataPanel } from "@/features/data-simulator/data-panel";
-import { DeployPanel } from "@/features/deploy-simulator/deploy-panel";
-import { SshPanel } from "@/features/ssh-simulator/ssh-panel";
-import { AiPanel } from "@/features/ai-simulator/ai-panel";
 import { useFlowSession } from "@/features/flow/flow-session";
-import { GitPanel } from "@/features/git-simulator/git-panel";
 import { flushGitDraft } from "@/features/git-simulator/git-draft";
 import { useGitSessionStore } from "@/features/git-simulator/session-store";
 import { isWidgetNode, widgetNodeSize, type AssetReference, type CanvasNode, type Point, type CodeNode, type SlideDocument, type StencilNode, type TableNode, type TextNode, type WidgetNode } from "@/domain/document/model";
@@ -28,19 +23,20 @@ import { createInitialSshState } from "@/domain/ssh/initial";
 import { createInitialAiState } from "@/domain/ai/initial";
 import { createInitialGitState } from "@/domain/git/initial";
 import { ingestImage } from "@/services/assets/ingest";
-import { getLocalAsset, putLocalAsset, putThumbnail } from "@/services/persistence/local-db";
+import { getLocalAsset, hasLocalAsset, putLocalAsset, putThumbnail } from "@/services/persistence/local-db";
 import { renderSlidePng } from "@/services/export/render";
 import { liveRole, onHistoryNavigate, useEditorStore, type CloudStatusView, type EditorTool, type LocalStatus, type ProjectOpener } from "./store";
 import { DEFAULT_FAVORITES, TOOL_ITEMS, isActionTool } from "./tools";
 import { favoriteForKey } from "./favorites";
+import { slideRenderableWithoutDownload, THUMBNAIL_FIRST_DELAY_MS, whenIdle } from "./thumbnail-policy";
+import type { ArchiveExporter } from "./export-dialog";
+import type { MenuEntry } from "./context-menu";
+import { ContextMenu, DataPanel, DeployPanel, AiPanel, ExportDialog, GitPanel, ShortcutHelp, SshPanel, preloadSecondaryUi, useOnceTrue } from "./lazy-ui";
 import LeftPanel from "./left-panel";
 import type { ToolbarPosition } from "@/features/canvas/favorite-toolbar";
 import ObjectsPanel from "./objects-panel";
 import PropertiesPanel from "./properties-panel";
-import ExportDialog, { type ArchiveExporter } from "./export-dialog";
 import { copyToClipboard, preparePaste } from "./clipboard";
-import ShortcutHelp from "./shortcut-help";
-import ContextMenu, { type MenuEntry } from "./context-menu";
 import { EditorSkeleton } from "@/features/loading/skeletons";
 import ThemeToggle from "@/features/theme/theme-toggle";
 import { LiveButton, LiveDebug, LiveGuestBadge } from "@/features/live/live-ui";
@@ -239,7 +235,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
     const remote = await resolveRemoteAsset(asset);
     if (remote) await putLocalAsset(ownerId, projectId, asset, remote).catch(() => undefined);
     return remote;
-  }), [ownerId, projectId, resolveRemoteAsset, guest]);
+  }, guest ? undefined : (assetId) => hasLocalAsset(ownerId, projectId, assetId)), [ownerId, projectId, resolveRemoteAsset, guest]);
   useEffect(() => { images.retain(); return () => images.release(); }, [images]);
 
   useEffect(() => {
@@ -265,20 +261,38 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
     if (edit?.kind === "git-file") setPendingEdit(edit);
   }, [recoveredEdit, activeSlideId, setSelectedIds, consumeRecoveredEdit, setPendingEdit]);
 
-  // Local-only thumbnails after a transaction settles; never on pointer move (plan01, M3.3).
+  const helpEverOpened = useOnceTrue(helpOpen);
+  // The board is up: fetch the rarely needed chunks (simulator panels, export, shortcuts, menu) while the browser is idle.
+  const boardReady = Boolean(history);
+  useEffect(() => {
+    if (!boardReady) return;
+    if (typeof requestIdleCallback === "function") {
+      const handle = requestIdleCallback(preloadSecondaryUi, { timeout: 6000 });
+      return () => cancelIdleCallback(handle);
+    }
+    const timer = window.setTimeout(preloadSecondaryUi, 2000);
+    return () => window.clearTimeout(timer);
+  }, [boardReady]);
+
+  // Local-only thumbnails once the board has been quiet for a while; never on pointer move (plan01, M3.3). The picture is only
+  // a cache for the project list, so it waits for idle time, never downloads images of its own, and yields between slides.
   const thumbnailSlides = useRef(new WeakSet<object>());
   useEffect(() => {
     if (!history || !writable || guest) return; // a student keeps nothing on their machine
-    let idle: number | null = null;
+    let cancelled = false;
     const timer = setTimeout(() => {
       const slides = history.content.document.slides;
-      const run = () => void (async () => {
+      void (async () => {
         for (const slide of slides.slice(0, 1).concat(slides.filter((item) => item.id === activeSlideId))) {
+          await whenIdle(5000);
+          if (cancelled) return;
           if (thumbnailSlides.current.has(slide)) continue;
-          thumbnailSlides.current.add(slide);
           // Very large slides keep the placeholder: an offscreen render of thousands of nodes would
           // block the main thread during live teaching (PERF-02). The thumbnail is only a cache.
-          if (slide.nodes.length > THUMBNAIL_NODE_LIMIT || useEditorStore.getState().gestureActive) continue;
+          if (slide.nodes.length > THUMBNAIL_NODE_LIMIT || useEditorStore.getState().gestureActive) { thumbnailSlides.current.add(slide); continue; }
+          // An image that is not in this browser yet would be downloaded just for a thumbnail: try again after a later change.
+          if (!await slideRenderableWithoutDownload(slide, (assetId) => images.canRenderWithoutDownload(assetId))) continue;
+          thumbnailSlides.current.add(slide);
           try {
             const bounds = getContentBounds(slide.nodes, konvaFontMetrics);
             const width = (bounds?.width ?? 1280) + 96, height = (bounds?.height ?? 720) + 96;
@@ -288,10 +302,8 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
           } catch { /* Thumbnails are a rebuildable cache. */ }
         }
       })();
-      if (typeof requestIdleCallback === "function") idle = requestIdleCallback(run, { timeout: 5000 });
-      else run();
-    }, 1500);
-    return () => { clearTimeout(timer); if (idle !== null && typeof cancelIdleCallback === "function") cancelIdleCallback(idle); };
+    }, THUMBNAIL_FIRST_DELAY_MS + 500);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [history, activeSlideId, writable, guest, images, ownerId, projectId]);
 
   const content = history?.content;
@@ -863,7 +875,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
       {content && exportRequest && <ExportDialog key={exportRequest.nonce} open onOpenChange={(open) => { if (!open) setExportRequest(null); }} initialKind={exportRequest.kind}
         getSnapshot={() => useEditorStore.getState().history?.content ?? null}
         activeSlideId={activeSlideId} selectedIds={selectedIds} images={images} exportArchive={exportArchive} />}
-      <ShortcutHelp open={helpOpen} onOpenChange={setHelpOpen} />
+      {helpEverOpened && <ShortcutHelp open={helpOpen} onOpenChange={setHelpOpen} />}
       {menuAt && slide && <ContextMenu at={menuAt} onClose={closeMenu} entries={boardMenu(slide, menuAt.world)} />}
       <StencilPicker open={stencilOpen} onOpenChange={setStencilOpen} onPick={insertStencil} onPickTable={insertTable} onPickCode={insertCode} />
       <Dialog.Root open={dialog !== null} onOpenChange={(open) => { if (!open) setDialog(null); }}>

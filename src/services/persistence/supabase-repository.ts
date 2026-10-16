@@ -291,9 +291,9 @@ export class SupabaseProjectRepository implements ProjectRepository {
     return response.data === null ? null : mapRecordRow(response.data);
   }
 
-  async inspectLifecycle(id: string): Promise<CloudProjectLifecycle | null> {
+  async inspectLifecycle(id: string, options: { timeoutMs?: number } = {}): Promise<CloudProjectLifecycle | null> {
     const response = await this.read("inspect project lifecycle", () =>
-      this.client.from("projects").select(PROJECT_LIFECYCLE_COLUMNS).eq("id", id).abortSignal(this.signal()).maybeSingle(),
+      this.client.from("projects").select(PROJECT_LIFECYCLE_COLUMNS).eq("id", id).abortSignal(this.signal(options.timeoutMs)).maybeSingle(),
     );
     return response.data === null ? null : mapLifecycleRow(response.data);
   }
@@ -342,8 +342,8 @@ export class SupabaseProjectRepository implements ProjectRepository {
     }
   }
 
-  private signal(): AbortSignal {
-    return AbortSignal.timeout(this.timeoutMs);
+  private signal(timeoutMs?: number): AbortSignal {
+    return AbortSignal.timeout(timeoutMs ?? this.timeoutMs);
   }
 
   private async read(label: string, run: () => PromiseLike<QueryResponse>): Promise<QueryResponse> {

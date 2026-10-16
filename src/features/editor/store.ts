@@ -6,6 +6,7 @@ import type { DocumentTransaction } from "@/domain/document/commands";
 import type { CanvasNode, ProjectContent, TextNode } from "@/domain/document/model";
 import type { Camera, LocalDraft, PendingEdit } from "@/domain/document/session";
 import { DEFAULTS } from "@/domain/document/limits";
+import { validateOrRecover } from "./open-recovery";
 import { parseProjectContent } from "@/domain/document/schema";
 import { withConnectorUpdates } from "@/domain/document/connectors";
 import { konvaFontMetrics } from "@/features/canvas/font-metrics";
@@ -49,6 +50,8 @@ export type OpenedProject = {
   createCloud?: (draft: LocalDraft) => CloudSync | null;
   /** Message shown when the project opened from local data while the cloud could not be reached. */
   notice?: string | null;
+  /** Set when the draft was opened without being re-written from the cloud: one forced cloud reload to heal an unreadable draft. */
+  recover?: () => Promise<LocalDraft | null>;
 };
 /** Called after the writer lock attempt; a read-only tab must not start network side effects. */
 export type ProjectOpener = (ownerId: string, projectId: string, access: { writer: boolean }) => Promise<OpenedProject>;
@@ -326,14 +329,18 @@ export const useEditorStore = create<EditorState>((set, get) => {
         catch { readOnlyReason = "unsupported"; }
         if (epoch !== openedEpoch) { lock?.release(); return; }
         // The opener runs after the lock attempt so only the writer reconciles with the cloud.
+        // The saved view (active slide, cameras) is a plain local read: do it while the opener reconciles.
+        const sessionRead = getLocalSession(ownerId, projectId).catch(() => null);
         const opened = await opener(ownerId, projectId, { writer: Boolean(lock) });
         openedProject = { ...opened, opener };
-        const session = await getLocalSession(ownerId, projectId).catch(() => null);
+        const session = await sessionRead;
         if (epoch !== openedEpoch) { lock?.release(); return; }
-        const draft = opened.draft;
         // Drafts come from IndexedDB/cloud: validate the whole document once on open (never re-parsed per edit).
-        try { parseProjectContent(draft.content); }
-        catch { throw new Error("เอกสารนี้ไม่ผ่านการตรวจรูปแบบ (อาจเป็นเวอร์ชันใหม่กว่าแอป) จึงไม่เปิดแก้ไขเพื่อไม่เขียนทับข้อมูล"); }
+        const draft = await validateOrRecover(opened.draft, (value) => {
+          try { parseProjectContent(value.content); }
+          catch { throw new Error("เอกสารนี้ไม่ผ่านการตรวจรูปแบบ (อาจเป็นเวอร์ชันใหม่กว่าแอป) จึงไม่เปิดแก้ไขเพื่อไม่เขียนทับข้อมูล"); }
+        }, opened.recover);
+        if (epoch !== openedEpoch) { lock?.release(); return; }
         writerLock = lock;
         sequence = draft.localSequence;
         writeQueue = Promise.resolve();

@@ -1,6 +1,5 @@
 "use client";
 
-import { PDFDocument } from "pdf-lib";
 import type { ProjectContent } from "@/domain/document/model";
 import { DEFAULTS } from "@/domain/document/limits";
 import type { ImageCache } from "@/features/canvas/image-cache";
@@ -15,6 +14,8 @@ import { ExportError, renderSlidePng } from "./render";
 export async function exportPdf(content: ProjectContent, options: {
   images: ImageCache; padding?: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void;
 }): Promise<{ blob: Blob; filename: string; warnings: string[] }> {
+  // pdf-lib is large and only a PDF export needs it: load it on demand, not with the editor.
+  const { PDFDocument } = await import("pdf-lib");
   const pdf = await PDFDocument.create();
   pdf.setTitle(content.title);
   pdf.setCreator("Learning Suit");

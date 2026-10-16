@@ -12,28 +12,33 @@ import { getLocalAsset } from "@/services/persistence/local-db";
 import type { ArchiveExporter } from "./export-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import { LoginFields } from "@/features/auth/login-form";
-import { useEditorStore } from "./store";
 import { EditorSkeleton } from "@/features/loading/skeletons";
+import { preloadEditor } from "./preload";
 
 // Canvas, IndexedDB and export are browser-only: load the editor without SSR.
 const Editor = dynamic(() => import("./editor"), { ssr: false, loading: () => <EditorSkeleton /> });
+// Do not wait for the runtime (cloud client + sign-in check) before fetching the editor code: start now, in parallel.
+if (typeof window !== "undefined") void preloadEditor();
+
+/** The store lives in the editor chunk; it is only needed when an account event or sign-in happens, long after that chunk loaded. */
+const withEditorStore = (run: (store: typeof import("./store").useEditorStore) => void) => void import("./store").then((module) => run(module.useEditorStore));
 
 export default function EditorBoundary({ projectId }: { projectId: string }) {
   const runtime = useRuntime();
   const router = useRouter();
   // Latch the first identity: an expired session later must not unmount the editor (plan01).
   const [ready, setReady] = useState<Extract<typeof runtime, { status: "ready" }> | null>(null);
+  // Latched while rendering (not in an effect): the editor mounts in the same pass the runtime resolves, no extra commit.
+  if (runtime.status === "ready" && !ready) setReady(runtime);
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (runtime.status === "ready" && !ready) setReady(runtime);
     if (runtime.status === "signed-out" && !ready) router.replace(`/login?next=${encodeURIComponent(`/projects/${projectId}`)}`);
-  }, [runtime, ready, router, projectId]);
+  }, [runtime.status, ready, router, projectId]);
 
   // Another account signed in from another tab: stop syncing this owner's work (it stays in this browser
   // for the original account) and leave, like a sign-in with the wrong account in the dialog below.
   useEffect(() => ready?.onAccountChange?.((ownerId) => {
     if (ownerId === null || ownerId === ready.service.ownerId) return; // signed out: the dialog asks on the next save
-    useEditorStore.getState().cloudAuthRestored(ownerId);
+    withEditorStore((store) => store.getState().cloudAuthRestored(ownerId));
     router.replace("/projects");
   }), [ready, router]);
 
@@ -74,11 +79,11 @@ export default function EditorBoundary({ projectId }: { projectId: string }) {
         <Dialog.Description className="muted mt-2 text-sm">งานยังอยู่ในเครื่องและหน้านี้จะไม่ถูกปิด ต้องเป็นบัญชีเดิมเท่านั้นจึงบันทึกต่อได้</Dialog.Description>
         <div className="mt-4"><LoginFields submitLabel="เข้าสู่ระบบและบันทึกต่อ" onSignedIn={(ownerId) => {
           if (ownerId === service.ownerId) {
-            useEditorStore.getState().cloudAuthRestored(ownerId);
+            withEditorStore((store) => store.getState().cloudAuthRestored(ownerId));
             setLoginOpen(false);
           } else {
             // Another account must never receive this owner's drafts or queue.
-            useEditorStore.getState().cloudAuthRestored(ownerId);
+            withEditorStore((store) => store.getState().cloudAuthRestored(ownerId));
             setLoginError("บัญชีนี้ไม่ใช่เจ้าของงาน งานของบัญชีเดิมยังเก็บในเครื่อง กลับไปเข้าสู่ระบบบัญชีเดิมเพื่อบันทึกต่อ");
             router.replace("/projects");
           }

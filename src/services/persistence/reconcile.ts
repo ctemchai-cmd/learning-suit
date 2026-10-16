@@ -19,6 +19,8 @@
  *   8. cloud schema unsupported           → "schema-paused" (keep local, pause cloud writes)
  *   –  cloud missing/deleted/not owned    → "unavailable" (offer local as a new copy; never recreate the UUID)
  *   4. not dirty                          → "use-cloud"
+ *      not dirty && cloud "unchanged" (metadata says same revision, ready, not deleted) → "use-local-clean" (no download)
+ *      "unchanged" in any other situation → "load-cloud" (never trust a metadata-only answer for dirty/missing drafts)
  *   5. dirty && baseRevision === cloud    → "use-local-then-sync" (sync after the pending edit flushes)
  *   6. dirty && baseRevision !== cloud    → "conflict"
  * Drafts/jobs of another owner or project are ignored (never uploaded under another account).
@@ -30,6 +32,11 @@ export type CloudLoadResult =
   /** The caller has not loaded the cloud row yet (decide first to avoid an unnecessary fetch). */
   | { status: "not-loaded" }
   | { status: "ok"; record: ProjectRecord }
+  /**
+   * Metadata-only check (inspectLifecycle): the cloud row is ready, not deleted and still at this revision. No document was
+   * downloaded. Only meaningful for a clean published local draft; for anything else decideOnOpen asks for a full load.
+   */
+  | { status: "unchanged"; revision: number }
   /** repository.load() returned null: missing, deleted or not owned. */
   | { status: "missing" }
   /** Network/timeout/auth failure while loading. */
@@ -54,6 +61,8 @@ export type OpenDecision =
   | { kind: "load-cloud" }
   /** Replace the local draft with the cloud record (baseRevision = acknowledged = record.revision). */
   | { kind: "use-cloud"; record: ProjectRecord }
+  /** Clean local draft whose base revision is still the cloud revision: it already equals the cloud document, open it as is. */
+  | { kind: "use-local-clean"; local: LocalDraft }
   /** Keep local and sync; if `waitForPendingEdit`, block cloud saves until the pending edit is flushed. */
   | { kind: "use-local-then-sync"; local: LocalDraft; record: ProjectRecord; waitForPendingEdit: boolean }
   /** Stop: "ใช้ฉบับ Cloud" (with Export backup) or "เก็บงานนี้เป็นสำเนา". Local includes pendingEdit. */
@@ -95,6 +104,7 @@ export function decideOnOpen(input: OpenInput): OpenDecision {
       case "missing": return { kind: "unavailable", local: null };
       case "error": return { kind: "retry-needed" };
       case "unsupported-schema": return { kind: "schema-paused", local: null, schemaVersion: cloud.schemaVersion };
+      case "unchanged": return { kind: "load-cloud" };
     }
   }
 
@@ -102,6 +112,8 @@ export function decideOnOpen(input: OpenInput): OpenDecision {
     case "error": return { kind: "offline-local", local };
     case "unsupported-schema": return { kind: "schema-paused", local, schemaVersion: cloud.schemaVersion };
     case "missing": return { kind: "unavailable", local };
+    case "unchanged":
+      return !isDraftDirty(local) && local.baseRevision === cloud.revision ? { kind: "use-local-clean", local } : { kind: "load-cloud" };
     case "ok": {
       const { record } = cloud;
       if (!isDraftDirty(local)) return { kind: "use-cloud", record };

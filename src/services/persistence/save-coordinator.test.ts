@@ -1006,6 +1006,31 @@ describe("save coordinator: blockers, saveNow, stop, resume", () => {
     expect(h.coordinator.getStatus()).toMatchObject({ kind: "saved" });
   });
 
+  it("a background-resumed job that conflicts (opened without waiting) halts with the conflict status while the user keeps editing, and never overwrites", async () => {
+    const h = setup({ initial: { baseRevision: 1, localSequence: 3, acknowledgedSequence: 2, content: makeContent("c3") } });
+    h.cloud.seedReady(PROJECT, 2, makeContent("other"), "other-device");
+    const job: SaveJob = {
+      ownerId: OWNER, projectId: PROJECT, mutationId: "persisted-1", expectedRevision: 1,
+      localSequence: 3, content: makeContent("c3"), createdAt: nowIso(),
+    };
+    h.jobs.jobs.set(KEY, job);
+    h.coordinator.resumePersistedJob(job);
+    h.coordinator.start();
+    // The board is already usable: an edit arrives while the job is still being resolved.
+    h.coordinator.localWriteAcknowledged(4, makeContent("c4"));
+    await flush();
+    const status = h.coordinator.getStatus();
+    expect(status).toEqual({ kind: "conflict", currentRevision: 2 });
+    // Same status the editor renders as the conflict banner (keepLocalCopy / useCloudVersion are offered only for it).
+    expect(cloudStatusLabel(status)).toBe("มีงานจากอีกเครื่อง");
+    h.coordinator.localWriteAcknowledged(5, makeContent("c5"));
+    h.coordinator.retry();
+    await advance(120_000);
+    expect(h.cloud.rows.get(PROJECT)!.lastMutationId).toBe("other-device");
+    expect(h.cloud.saveRequests.every((request) => request.mutationId === "persisted-1")).toBe(true);
+    expect(h.coordinator.getLatestLocal()).toMatchObject({ sequence: 5, content: { title: "c5" } });
+  });
+
   it("rejects a persisted job of another owner/project and a second concurrent job", () => {
     const h = setup();
     const job: SaveJob = {

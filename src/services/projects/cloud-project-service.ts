@@ -7,7 +7,6 @@ import { duplicateProjectContent } from "@/domain/document/remap";
 import { parseProjectContent } from "@/domain/document/schema";
 import { DEFAULTS } from "@/domain/document/limits";
 import type { CloudStatusView, CloudSync, OpenedProject, ProjectOpener } from "@/features/editor/store";
-import { useEditorStore } from "@/features/editor/store";
 import type { CloudUi } from "@/features/editor/editor";
 import { importArchiveInWorker } from "@/services/export/archive-client";
 import {
@@ -16,11 +15,17 @@ import {
 } from "@/services/persistence/local-db";
 import { createSaveCoordinator, type CloudStatus, type SaveCoordinator } from "@/services/persistence/save-coordinator";
 import { decideOnOpen, type CloudLoadResult, type OpenDecision } from "@/services/persistence/reconcile";
+import { loadCloudRecord, probeCloudForOpen } from "@/services/persistence/open-probe";
 import { createDeletionJob, deletionGuardFor, runDeletion } from "@/services/persistence/deletion";
-import { CloudRepositoryError, SupabaseProjectRepository } from "@/services/persistence/supabase-repository";
-import type { CloudAssetStore, ProjectRepository } from "@/services/persistence/repository";
+import { SupabaseProjectRepository } from "@/services/persistence/supabase-repository";
 import { SupabaseAssetStore } from "@/services/persistence/supabase-assets";
+import { createIdentityGuard } from "@/services/persistence/identity-guard";
+import { guardedAssets, guardedRepository } from "@/services/persistence/guarded";
+import { readListSources } from "./list-sources";
 import { copyAssetBlobs, type DeleteOutcome, type ProjectCard, type ProjectService } from "./local-project-service";
+
+// The editor store pulls in the canvas stack (konva); only the editor actions below need it, never the project list.
+const editorStore = async () => (await import("@/features/editor/store")).useEditorStore;
 
 const clock = {
   now: () => Date.now(),
@@ -71,53 +76,10 @@ function staticSync(status: CloudStatusView): CloudSync {
   };
 }
 
-/**
- * The Supabase client sends whatever session is in the shared auth cookie, which another tab may
- * have switched to a different account. Every cloud call first re-validates that the current
- * session still belongs to `ownerId`; otherwise it fails as an auth error and nothing is sent
- * (plan05 §2 account isolation, ADR 0003 rule 6).
- */
-function identityGuard(supabase: SupabaseClient, ownerId: string): () => Promise<boolean> {
-  return async () => {
-    try {
-      const { data, error } = await supabase.auth.getClaims();
-      return !error && data?.claims?.sub === ownerId;
-    } catch {
-      return false;
-    }
-  };
-}
-
-const AUTH_ERROR = () => new CloudRepositoryError("Session does not belong to this owner", { code: "auth", retryable: false }, { reason: "owner_mismatch" });
-
-function guardedRepository(inner: ProjectRepository, sameOwner: () => Promise<boolean>): ProjectRepository {
-  return {
-    async list() { if (!await sameOwner()) throw AUTH_ERROR(); return inner.list(); },
-    async load(id) { if (!await sameOwner()) throw AUTH_ERROR(); return inner.load(id); },
-    async inspectLifecycle(id) { if (!await sameOwner()) throw AUTH_ERROR(); return inner.inspectLifecycle(id); },
-    async reserve(request) { if (!await sameOwner()) return { status: "error", code: "auth", retryable: false }; return inner.reserve(request); },
-    async save(request) { if (!await sameOwner()) return { status: "error", code: "auth", retryable: false }; return inner.save(request); },
-    async markDeleted(request) { if (!await sameOwner()) return { status: "error", code: "auth", retryable: false }; return inner.markDeleted(request); },
-    async purge(id) { if (!await sameOwner()) throw AUTH_ERROR(); return inner.purge(id); },
-  };
-}
-
-function guardedAssets(inner: CloudAssetStore, sameOwner: () => Promise<boolean>): CloudAssetStore {
-  const denied = { status: "error", code: "auth", retryable: false } as const;
-  return {
-    async listStates(projectId) { if (!await sameOwner()) throw AUTH_ERROR(); return inner.listStates(projectId); },
-    async register(projectId, asset) { return await sameOwner() ? inner.register(projectId, asset) : denied; },
-    async upload(asset, bytes) { return await sameOwner() ? inner.upload(asset, bytes) : denied; },
-    async markReady(projectId, assetId) { return await sameOwner() ? inner.markReady(projectId, assetId) : denied; },
-    async download(asset) { if (!await sameOwner()) throw AUTH_ERROR(); return inner.download(asset); },
-    async removeProjectObjects(owner, projectId) { if (!await sameOwner()) throw AUTH_ERROR(); return inner.removeProjectObjects(owner, projectId); },
-  };
-}
-
 export function createCloudProjectService(ownerId: string, supabase: SupabaseClient): ProjectService {
-  const sameOwner = identityGuard(supabase, ownerId);
-  const repository = guardedRepository(new SupabaseProjectRepository(supabase), sameOwner);
-  const assets = guardedAssets(new SupabaseAssetStore(supabase, ownerId), sameOwner);
+  const guard = createIdentityGuard(supabase, ownerId);
+  const repository = guardedRepository(new SupabaseProjectRepository(supabase), guard);
+  const assets = guardedAssets(new SupabaseAssetStore(supabase, ownerId), guard);
 
   const makeCoordinator = (projectId: string, draft: LocalDraft) => createSaveCoordinator({
     ownerId, projectId, repository, assets,
@@ -131,15 +93,7 @@ export function createCloudProjectService(ownerId: string, supabase: SupabaseCli
     },
   });
 
-  const loadCloud = async (projectId: string): Promise<CloudLoadResult> => {
-    try {
-      const record = await repository.load(projectId);
-      return record ? { status: "ok", record } : { status: "missing" };
-    } catch (error) {
-      if (error instanceof CloudRepositoryError && error.reason === "schema_unsupported") return { status: "unsupported-schema" };
-      return { status: "error" };
-    }
-  };
+  const loadCloud = (projectId: string): Promise<CloudLoadResult> => loadCloudRecord(repository, projectId);
 
   /** Runs a one-shot sync of the stored draft while the caller holds the writer lock. */
   const syncOnce = async (projectId: string): Promise<CloudStatus> => {
@@ -196,29 +150,38 @@ export function createCloudProjectService(ownerId: string, supabase: SupabaseCli
     let cloud: CloudLoadResult = { status: "not-loaded" };
     let decision: OpenDecision = decideOnOpen({ ownerId: owner, projectId, localDraft, persistedJob, deletionJob, cloud });
     let local = localDraft;
+    let currentJob = persistedJob;
     for (let round = 0; round < 4; round++) {
       if (decision.kind === "load-cloud") {
-        cloud = await loadCloud(projectId);
+        // A clean published draft only asks the cloud for its revision; anything else downloads the document.
+        cloud = await probeCloudForOpen(repository, { projectId, localDraft: local, persistedJob: currentJob, forceFull: cloud.status === "unchanged" });
       } else if (decision.kind === "resume-job-first") {
-        const base = decision.local ?? jobDraft(owner, projectId, decision.job);
+        if (decision.local) {
+          // The local draft already holds every edit the job carries: show the board now and let the editor's
+          // coordinator resolve the job in the background. A conflict/unavailable outcome arrives as its status
+          // (saves are revision-checked, so nothing can overwrite newer cloud work), exactly like the offline path.
+          const resumeLocal = decision.local, resumeJob = decision.job;
+          return { draft: resumeLocal, createCloud: (d) => { const next = makeCoordinator(projectId, d); next.resumePersistedJob(resumeJob); next.start(); return cloudSyncFrom(next); } };
+        }
+        const base = jobDraft(owner, projectId, decision.job);
         const coordinator = makeCoordinator(projectId, base);
         coordinator.resumePersistedJob(decision.job);
         await coordinator.whenIdle();
         const status = coordinator.getStatus();
         if (status.kind === "conflict" || status.kind === "unavailable") {
-          const draft = decision.local ?? base;
-          return { draft, createCloud: () => cloudSyncFrom(coordinator) };
+          return { draft: base, createCloud: () => cloudSyncFrom(coordinator) };
         }
         coordinator.stop();
         local = await getLocalDraft(owner, projectId);
         const job = await idbSaveJobStore.getSaveJob(owner, projectId);
+        currentJob = job;
         if (job) {
           // Still unacknowledged (offline): keep working locally; the editor's coordinator retries it.
           const draft = local ?? base;
           return { draft, notice: "เปิดจากงานในเครื่อง · รอเชื่อมต่อเพื่อบันทึกบน Cloud", createCloud: (d) => { const next = makeCoordinator(projectId, d); next.resumePersistedJob(job); return cloudSyncFrom(next); } };
         }
       } else break;
-      decision = decideOnOpen({ ownerId: owner, projectId, localDraft: local, persistedJob: await idbSaveJobStore.getSaveJob(owner, projectId), deletionJob, cloud });
+      decision = decideOnOpen({ ownerId: owner, projectId, localDraft: local, persistedJob: currentJob, deletionJob, cloud });
     }
     // The editor store sets the pendingEdit blocker once it knows whether the recovery applies.
     const startSync = (draft: LocalDraft) => {
@@ -229,6 +192,17 @@ export function createCloudProjectService(ownerId: string, supabase: SupabaseCli
     switch (decision.kind) {
       case "resume-deletion":
         throw new Error("โปรเจกต์นี้กำลังถูกลบ กลับไปหน้าโปรเจกต์เพื่อลบต่อให้เสร็จ");
+      case "use-local-clean":
+        // Nothing was re-written from the cloud on this path: if the stored copy turns out unreadable the store asks once
+        // for a forced full load, which rewrites the clean draft (what the old always-reload path did on every open).
+        return {
+          draft: decision.local, createCloud: startSync,
+          recover: async () => {
+            const forced = await loadCloud(projectId);
+            if (forced.status !== "ok") return null;
+            return putCleanDraftFromCloud(owner, projectId, { title: forced.record.title, document: forced.record.document }, forced.record.revision, { alreadyValidated: true });
+          },
+        };
       case "use-local-unpublished":
       case "use-local-then-sync":
         return { draft: decision.local, createCloud: startSync };
@@ -236,7 +210,8 @@ export function createCloudProjectService(ownerId: string, supabase: SupabaseCli
         return { draft: decision.local, createCloud: startSync, notice: "เปิดจากงานในเครื่อง · ยังเชื่อมต่อ Cloud ไม่ได้" };
       case "use-cloud": {
         const record = decision.record;
-        const draft = await putCleanDraftFromCloud(owner, projectId, { title: record.title, document: record.document }, record.revision);
+        // record.* was validated by the repository mapper; the editor store validates the draft once more on open.
+        const draft = await putCleanDraftFromCloud(owner, projectId, { title: record.title, document: record.document }, record.revision, { alreadyValidated: true });
         return { draft, createCloud: startSync };
       }
       case "conflict":
@@ -258,13 +233,15 @@ export function createCloudProjectService(ownerId: string, supabase: SupabaseCli
     mode: "cloud",
     ownerId,
     async list() {
-      const [drafts, deletions] = await Promise.all([listLocalDrafts(ownerId), idbDeletionJobStore.list(ownerId)]);
+      // The cloud request (the slow part) runs while IndexedDB is being read, not after it.
+      const { local: [drafts, deletions], cloud: cloudRows } = await readListSources({
+        readLocal: () => Promise.all([listLocalDrafts(ownerId), idbDeletionJobStore.list(ownerId)]),
+        readCloud: () => repository.list(),
+      });
       const deleting = new Set(deletions.map((job) => job.projectId));
       const localById = new Map(drafts.map((draft) => [draft.projectId, draft]));
-      let warning: string | null = null;
-      let cloud: Awaited<ReturnType<typeof repository.list>> = [];
-      try { cloud = await repository.list(); }
-      catch { warning = "โหลดรายการจาก Cloud ไม่สำเร็จ แสดงเฉพาะงานที่อยู่ในเครื่องนี้"; }
+      const cloud = cloudRows ?? [];
+      const warning = cloudRows === null ? "โหลดรายการจาก Cloud ไม่สำเร็จ แสดงเฉพาะงานที่อยู่ในเครื่องนี้" : null;
       const cards = new Map<string, ProjectCard>();
       for (const summary of cloud) {
         const draft = localById.get(summary.id);
@@ -373,7 +350,7 @@ export function createCloudProjectService(ownerId: string, supabase: SupabaseCli
     cloudUi(projectId, router): CloudUi {
       return {
         async keepLocalCopy() {
-          const state = useEditorStore.getState();
+          const state = (await editorStore()).getState();
           if (!state.flushPendingEdits() || !state.history) return;
           const id = crypto.randomUUID();
           const copy = duplicateProjectContent(state.history.content, { ownerId, projectId: id }, " (สำเนาจากเครื่องนี้)");
@@ -386,10 +363,11 @@ export function createCloudProjectService(ownerId: string, supabase: SupabaseCli
         },
         async useCloudVersion() {
           const cloud = await loadCloud(projectId);
-          if (cloud.status !== "ok") { useEditorStore.getState().setNotice("โหลดฉบับ Cloud ไม่สำเร็จ ลองใหม่อีกครั้ง"); return; }
+          const store = await editorStore();
+          if (cloud.status !== "ok") { store.getState().setNotice("โหลดฉบับ Cloud ไม่สำเร็จ ลองใหม่อีกครั้ง"); return; }
           await idbSaveJobStore.deleteSaveJob(ownerId, projectId);
           await putCleanDraftFromCloud(ownerId, projectId, { title: cloud.record.title, document: cloud.record.document }, cloud.record.revision);
-          await useEditorStore.getState().reload();
+          await store.getState().reload();
         },
         openLogin() {
           window.dispatchEvent(new CustomEvent("learning-suit:login-required"));

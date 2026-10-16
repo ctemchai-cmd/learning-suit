@@ -184,8 +184,12 @@ export async function createLocalDraft(ownerId: string, projectId: string, conte
 }
 
 /** Replaces the draft with a cloud snapshot that is known to be acknowledged (no local changes). */
-export async function putCleanDraftFromCloud(ownerId: string, projectId: string, content: ProjectContent, revision: number): Promise<LocalDraft> {
-  parseProjectContent(content);
+export async function putCleanDraftFromCloud(
+  ownerId: string, projectId: string, content: ProjectContent, revision: number,
+  /** Set only when `content` just came out of the cloud mapper (which already ran the full schema parse). */
+  options: { alreadyValidated?: boolean } = {},
+): Promise<LocalDraft> {
+  if (!options.alreadyValidated) parseProjectContent(content);
   try {
     const database = await localDb();
     const tx = database.transaction("drafts", "readwrite");
@@ -269,6 +273,11 @@ export async function putLocalAsset(ownerId: string, projectId: string, asset: A
 export async function getLocalAsset(ownerId: string, projectId: string, assetId: string): Promise<Blob | null> {
   const record = await (await localDb()).get("assets", [ownerId, projectId, assetId]);
   return record ? new Blob([record.bytes], { type: record.asset.mimeType }) : null;
+}
+
+/** Key-only lookup: tells whether the blob is stored without reading its bytes. */
+export async function hasLocalAsset(ownerId: string, projectId: string, assetId: string): Promise<boolean> {
+  return (await (await localDb()).getKey("assets", [ownerId, projectId, assetId])) !== undefined;
 }
 
 // ---------------------------------------------------------------- thumbnails (derived cache)
