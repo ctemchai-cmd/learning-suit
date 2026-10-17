@@ -1,63 +1,66 @@
 // Data-storage teaching simulator (plan 07 §3). Pure types: no React, no Konva, no network.
-// Coffee-shop theme: a menu, customers and their orders, plus the two phones that use the app.
+// Income/expense tracker theme: a table of categories, users and their transactions, plus the two computers that use the app.
 
 /** Lesson steps: where data lives → tables → linking tables → who can see what. */
 export type DataView = "where" | "table" | "relation" | "access";
-export type PhoneId = "A" | "B";
-/** Step 1: where phone A's app keeps an order. */
+export type ComputerId = "A" | "B";
+/** Step 1: where computer A's app keeps a recorded transaction. */
 export type StorageMode = "app" | "device" | "cloud";
 
-export type MenuItem = { id: number; name: string; price: number; available: boolean };
-export type Customer = { id: number; name: string };
+export type CategoryKind = "income" | "expense";
+export type Category = { id: number; name: string; kind: CategoryKind; active: boolean };
+export type AppUser = { id: number; name: string };
 /**
- * `copiedName` is the customer's name copied into the order when it was created. Step 3 shows the
- * two designs side by side: reading `copiedName` (a copy that goes stale) vs following `customerId`.
+ * `amount` is always positive (baht); the category's kind says whether it is income or expense.
+ * `copiedName` is the category's name copied into the transaction when it was created. Step 3 shows the
+ * two designs side by side: reading `copiedName` (a copy that goes stale) vs following `categoryId`.
  */
-export type Order = { id: number; customerId: number; menuId: number; qty: number; copiedName: string };
-export type TableId = "menu" | "customers" | "orders";
+export type Transaction = { id: number; userId: number; categoryId: number; amount: number; copiedName: string };
+export type TableId = "categories" | "users" | "transactions";
 
+/** Version 2 = the income/expense tracker (version 1 was the coffee-shop demo; the document schema replaces it with the initial state). */
 export type DataState = {
-  version: 1;
+  version: 2;
   storage: {
     mode: StorageMode;
-    /** Orders held only in each phone's running app (lost on refresh). */
-    memory: Record<PhoneId, string[]>;
-    /** Orders saved on each phone itself (survive refresh, invisible to other phones). */
-    device: Record<PhoneId, string[]>;
-    /** Orders saved in the shared database. */
+    /** Transactions held only in each computer's running app (lost on refresh). */
+    memory: Record<ComputerId, string[]>;
+    /** Transactions saved on each computer itself (survive refresh, invisible to the other computer). */
+    device: Record<ComputerId, string[]>;
+    /** Transactions saved in the shared database. */
     cloud: string[];
-    /** What each phone's app currently shows. */
-    screen: Record<PhoneId, string[]>;
+    /** What each computer's app currently shows. */
+    screen: Record<ComputerId, string[]>;
   };
-  menu: MenuItem[];
-  customers: Customer[];
-  orders: Order[];
+  categories: Category[];
+  users: AppUser[];
+  transactions: Transaction[];
   nextId: Record<TableId, number>;
-  /** Step 4: the access rule (Supabase: RLS policy) — each customer sees only their own orders. */
+  /** Step 4: the access rule (Supabase: RLS policy) — each user sees only their own transactions. */
   rulesOn: boolean;
-  /** Steps 2–4: the last answer each phone's app received (shown on its screen). */
-  phones: Record<PhoneId, { title: string; lines: string[] }>;
+  /** Steps 2–4: the last answer each computer's app received (shown on its screen). */
+  screens: Record<ComputerId, { title: string; lines: string[] }>;
 };
 
-/** Phone A is logged in as customer 1, phone B as customer 2 (step 4). */
-export const PHONE_USER: Record<PhoneId, number> = { A: 1, B: 2 };
+/** Computer A is logged in as user 1, computer B as user 2 (step 4). */
+export const COMPUTER_USER: Record<ComputerId, number> = { A: 1, B: 2 };
 
 export type DataAction =
   | { type: "storage.mode"; mode: StorageMode }
-  | { type: "storage.order"; item: string }
-  | { type: "storage.refresh"; phone: PhoneId }
-  | { type: "storage.open"; phone: PhoneId }
-  | { type: "menu.create"; name: string; price: string; available: boolean }
-  | { type: "menu.read"; phone: PhoneId }
-  | { type: "menu.update"; id: number; field: "name" | "price" | "available"; value: string }
-  | { type: "menu.delete"; id: number }
-  | { type: "customer.rename"; id: number; name: string }
-  | { type: "orders.fixCopies"; customerId: number }
-  | { type: "customer.delete"; id: number }
-  | { type: "orders.deleteOfCustomer"; customerId: number }
-  | { type: "order.create"; customerId: number; menuId: number }
+  | { type: "storage.record"; item: string }
+  | { type: "storage.refresh"; computer: ComputerId }
+  | { type: "storage.open"; computer: ComputerId }
+  | { type: "category.create"; name: string; kind: string; active: boolean }
+  | { type: "category.read"; computer: ComputerId }
+  | { type: "category.update"; id: number; field: "name" | "kind" | "active"; value: string }
+  | { type: "category.delete"; id: number }
+  | { type: "category.rename"; id: number; name: string }
+  | { type: "transactions.fixCopies"; categoryId: number }
+  | { type: "category.deleteLinked"; id: number }
+  | { type: "transactions.deleteOfCategory"; categoryId: number }
+  | { type: "transaction.create"; userId: number; categoryId: number; amount: string }
   | { type: "access.rules"; on: boolean }
-  | { type: "access.read"; phone: PhoneId; table: "orders" | "menu" }
+  | { type: "access.read"; computer: ComputerId; table: "transactions" | "categories" }
   | { type: "reset" };
 
 // ---------------------------------------------------------------------------
@@ -66,7 +69,7 @@ export type DataAction =
 
 /**
  * Named places on the board a packet can travel between. Rows/cells: `row:<table>:<id>`,
- * `cell:<table>:<id>:<field>`; step 3 prefixes the side: `copy:` or `link:` (e.g. `link:row:customers:1`).
+ * `cell:<table>:<id>:<field>`; step 3 prefixes the side: `copy:` or `link:` (e.g. `link:row:categories:1`).
  */
 export type Spot = string;
 export type FlowTone = "data" | "request" | "ok" | "blocked" | "leak" | "lost";
@@ -74,7 +77,7 @@ export type FlowTone = "data" | "request" | "ok" | "blocked" | "leak" | "lost";
 export type CarriedLine = { kind: "file" | "memory" | "user" | "ai" | "tool" | "edit" | "note" | "code" | "pass" | "fail" | "empty"; text: string };
 /** `detail` = what the packet carries, line by line (drawn as a card instead of a dot where a view supports it). */
 export type Hop = { from: Spot; to: Spot; label: string; tone: FlowTone; detail?: CarriedLine[] };
-/** `refresh` on a phone = its app restarts (the board spins the refresh icon over a blank screen). */
+/** `refresh` on a computer = its app restarts (the board spins the refresh icon over a blank screen). */
 export type MarkTone = "new" | "changed" | "stale" | "blocked" | "allowed" | "leak" | "removed" | "read" | "refresh";
 export type Mark = { spot: Spot; tone: MarkTone; note?: string };
 export type FlowFrame<S> = {
@@ -99,4 +102,4 @@ export type DataTransition = {
   frames: FlowFrame<DataState>[];
 };
 
-export const DATA_LIMITS = { nameCodePoints: 40, price: 100_000, rows: 12, storageItems: 8, screenLines: 12 } as const;
+export const DATA_LIMITS = { nameCodePoints: 40, amount: 10_000_000, rows: 12, storageItems: 8, screenLines: 12 } as const;

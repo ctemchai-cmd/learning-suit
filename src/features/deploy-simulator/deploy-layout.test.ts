@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { FlowFrame } from "../../domain/data/model";
+import { MONITOR_STAND } from "../flow/monitor";
 import { revealForParts } from "../../domain/document/reveal";
 import { createInitialDeployState } from "../../domain/deploy/initial";
 import type { DeployAction, DeployState, DeployView } from "../../domain/deploy/model";
 import { applyDeployAction } from "../../domain/deploy/reducer";
 import { spotsOfFrames, walkFrames } from "../flow/frame-walk";
-import { deployPartOfSpot, deployParts, deployPartsOfFrames, sceneOf, spotPoint } from "./deploy-layout";
+import { CAPTION_BOX, DEPLOY_W, deployPartOfSpot, deployParts, deployPartsOfFrames, sceneOf, spotPoint } from "./deploy-layout";
 
 // Actions the panel offers in each lesson step. The places frames name come from running the reducer, not from the layout.
 const VIEWS: Record<DeployView, DeployAction[]> = {
@@ -81,5 +82,21 @@ describe("deploy reveal parts (plan 07 §2)", () => {
     const live = applyDeployAction(fresh, { type: "push" }, "vercel").nextState;
     expect(need("vercel", { type: "friend.visit" }, live)).toEqual(expect.arrayContaining(["friend", "url"]));
     expect(revealForParts(parts, 0, need("vercel", { type: "friend.visit" }, live))).toBe(6);
+  });
+
+  it("the friend's computer is a desktop monitor (screen inside the bezel, neck and base above the caption bar, clear of the URL box)", () => {
+    const views = Object.keys(VIEWS) as DeployView[];
+    const withFriend = views.filter((view) => sceneOf(view).friend);
+    expect(withFriend.length).toBeGreaterThanOrEqual(4);
+    for (const view of withFriend) {
+      const { frame, screen } = sceneOf(view).friend!;
+      expect(screen.x, view).toBeGreaterThan(frame.x);
+      expect(screen.x + screen.w, view).toBeLessThan(frame.x + frame.w);
+      expect(screen.y + screen.h, view).toBeLessThan(frame.y + frame.h - 20);
+      expect(frame.y + frame.h + MONITOR_STAND, view).toBeLessThanOrEqual(CAPTION_BOX.y);
+      expect(frame.x + frame.w, view).toBeLessThanOrEqual(DEPLOY_W);
+      const url = sceneOf(view).url;
+      if (url) expect(frame.y >= url.y + url.h, view).toBe(true);
+    }
   });
 });

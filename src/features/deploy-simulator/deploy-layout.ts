@@ -1,6 +1,7 @@
 import type { FlowFrame, Hop, Spot } from "@/domain/data/model";
 import { partsOfFrames, type RevealPart } from "@/domain/document/reveal";
 import type { DeployState, DeployView } from "@/domain/deploy/model";
+import { monitorScreen } from "@/features/flow/monitor";
 
 // Pure geometry of the deploy widget (plan 07 §4), widget base coordinates 1120×680.
 
@@ -16,7 +17,7 @@ export const DEPLOY_VIEWS: { id: DeployView; label: string; description: string 
   { id: "localEnv", label: "กุญแจในเครื่อง (.env.local)", description: "เซิร์ฟเวอร์ในเครื่องอ่านกุญแจจาก .env.local เพื่อต่อฐานข้อมูล" },
   { id: "vercel", label: "ขึ้น Vercel", description: "ส่งโค้ด → GitHub → Vercel Build → เว็บจริงที่ทุกคนเปิดได้" },
   { id: "env", label: "กุญแจบน Vercel", description: "กุญแจไม่ขึ้น GitHub ต้องใส่บน Vercel เอง" },
-  { id: "overall", label: "ภาพรวมทั้งระบบ", description: "เครื่องเรา → GitHub → Vercel → ฐานข้อมูล → มือถือเพื่อน" },
+  { id: "overall", label: "ภาพรวมทั้งระบบ", description: "เครื่องเรา → GitHub → Vercel → ฐานข้อมูล → คอมพิวเตอร์เพื่อน" },
 ];
 
 const center = (box: Box): Pt => ({ x: box.x + box.w / 2, y: box.y + box.h / 2 });
@@ -45,14 +46,15 @@ export type Scene = {
   pipes: { from: Pt; to: Pt; label?: string; part: string }[];
 };
 
-const phone = (x: number, y: number, w: number, h: number) => ({ frame: { x, y, w, h }, screen: { x: x + 12, y: y + 36, w: w - 24, h: h - 52 } });
+/** The friend's desktop computer: monitor bezel `frame` (its neck and base hang `MONITOR_STAND` below it) and the screen inside. */
+const computer = (x: number, y: number, w: number, h: number) => ({ frame: { x, y, w, h }, screen: monitorScreen({ x, y, w, h }) });
 
 function localScene(): Scene {
   const laptop = { x: 50, y: 84, w: 660, h: 420 };
   const code = { x: 80, y: 150, w: 190, h: 300 };
   const server = { x: 306, y: 230, w: 150, h: 140 };
   const browser = { x: 490, y: 150, w: 190, h: 300 };
-  const friend = phone(860, 110, 210, 440);
+  const friend = computer(840, 195, 240, 270);
   const gate = { x: 772, y: 330 };
   return {
     laptop, code, server, browser, friend, localhostGate: gate,
@@ -88,7 +90,7 @@ function vercelScene(): Scene {
   const github = { x: 320, y: 140, w: 190, h: 140 };
   const vercel = { x: 556, y: 70, w: 310, h: 530 };
   const url = { x: 900, y: 96, w: 196, h: 116 };
-  const friend = phone(912, 256, 172, 344);
+  const friend = computer(900, 256, 196, 250);
   return {
     laptop, code, github, vercel, url, friend,
     build: { x: 711, y: 150 },
@@ -111,7 +113,7 @@ function envScene(): Scene {
   const github = { x: 372, y: 110, w: 160, h: 120 };
   const vercel = { x: 568, y: 70, w: 300, h: 530 };
   const url = { x: 900, y: 96, w: 196, h: 116 };
-  const friend = phone(912, 256, 172, 344);
+  const friend = computer(900, 256, 196, 250);
   const supabase = { x: 330, y: 400, w: 200, h: 200 };
   const deployments = { x: 588, y: 196, w: 260, h: 250 };
   const vercelEnv = { x: 588, y: 470, w: 260, h: 110 };
@@ -138,7 +140,7 @@ function overallScene(): Scene {
   const github = { x: 296, y: 104, w: 170, h: 120 };
   const vercel = { x: 520, y: 70, w: 290, h: 270 };
   const url = { x: 860, y: 86, w: 236, h: 116 };
-  const friend = phone(890, 250, 190, 350);
+  const friend = computer(860, 250, 236, 260);
   const supabase = { x: 290, y: 380, w: 520, h: 222 };
   return {
     laptop, code, github, vercel, url, friend, supabase,
@@ -197,7 +199,7 @@ export function spotPoint(view: DeployView, state: DeployState, spot: Spot): Pt 
   return null;
 }
 
-/** Polyline for a hop: straight, except packets to/from the friend's phone pass the URL box's bottom edge. */
+/** Polyline for a hop: straight, except packets to/from the friend's computer pass the URL box's bottom edge. */
 export function hopPath(view: DeployView, before: DeployState, after: DeployState, move: Hop): Pt[] | null {
   const start = spotPoint(view, before, move.from) ?? spotPoint(view, after, move.from);
   const end = spotPoint(view, after, move.to) ?? spotPoint(view, before, move.to);
@@ -220,11 +222,11 @@ export function hopPath(view: DeployView, before: DeployState, after: DeployStat
 
 const part = (id: string, label: string): RevealPart => ({ id, label });
 const PARTS: Record<DeployView, RevealPart[]> = {
-  local: [part("code", "เครื่องเรา: โค้ด"), part("server", "เซิร์ฟเวอร์ในเครื่อง"), part("browser", "เบราว์เซอร์ (localhost)"), part("friend", "มือถือเพื่อน และด่าน “นอกเครื่องเรา”")],
+  local: [part("code", "เครื่องเรา: โค้ด"), part("server", "เซิร์ฟเวอร์ในเครื่อง"), part("browser", "เบราว์เซอร์ (localhost)"), part("friend", "คอมพิวเตอร์เพื่อน และด่าน “นอกเครื่องเรา”")],
   localEnv: [part("code", "เครื่องเรา: โค้ด"), part("server", "เซิร์ฟเวอร์ในเครื่อง"), part("envfile", "ไฟล์ .env.local (กุญแจ)"), part("db", "ฐานข้อมูล (Supabase)"), part("browser", "เบราว์เซอร์")],
-  vercel: [part("code", "เครื่องเรา: โค้ด"), part("github", "GitHub"), part("vercel", "Vercel และ Build"), part("deployments", "รายการ Deployments"), part("url", "เว็บจริง (URL)"), part("friend", "มือถือเพื่อน")],
-  env: [part("laptop", "เครื่องเรา (โค้ด + .env.local)"), part("db", "ฐานข้อมูล (Supabase)"), part("github", "GitHub และ .gitignore"), part("vercel", "Vercel: Build + Deployments"), part("vercelEnv", "Environment Variables บน Vercel"), part("web", "เว็บจริงและมือถือเพื่อน")],
-  overall: [part("code", "เครื่องเรา: โค้ด"), part("github", "GitHub"), part("vercel", "Vercel: Build + Deployments"), part("db", "ฐานข้อมูล และกฎสิทธิ์"), part("url", "เว็บจริง (URL)"), part("friend", "มือถือเพื่อน")],
+  vercel: [part("code", "เครื่องเรา: โค้ด"), part("github", "GitHub"), part("vercel", "Vercel และ Build"), part("deployments", "รายการ Deployments"), part("url", "เว็บจริง (URL)"), part("friend", "คอมพิวเตอร์เพื่อน")],
+  env: [part("laptop", "เครื่องเรา (โค้ด + .env.local)"), part("db", "ฐานข้อมูล (Supabase)"), part("github", "GitHub และ .gitignore"), part("vercel", "Vercel: Build + Deployments"), part("vercelEnv", "Environment Variables บน Vercel"), part("web", "เว็บจริงและคอมพิวเตอร์เพื่อน")],
+  overall: [part("code", "เครื่องเรา: โค้ด"), part("github", "GitHub"), part("vercel", "Vercel: Build + Deployments"), part("db", "ฐานข้อมูล และกฎสิทธิ์"), part("url", "เว็บจริง (URL)"), part("friend", "คอมพิวเตอร์เพื่อน")],
 };
 export const deployParts = (view: DeployView): RevealPart[] => PARTS[view];
 
@@ -242,7 +244,7 @@ export function deployPartOfPiece(view: DeployView, piece: string): string | nul
 /** The part that draws a named place; `deploy:N` rows live in the deployments list. */
 export const deployPartOfSpot = (view: DeployView, spot: Spot): string | null => deployPartOfPiece(view, spot.startsWith("deploy:") ? "deployments" : spot);
 
-/** Parts an action needs: those of the places its frames name, plus the URL box when a packet to/from the phone passes it. */
+/** Parts an action needs: those of the places its frames name, plus the URL box when a packet to/from the computer passes it. */
 export function deployPartsOfFrames(view: DeployView, frames: readonly FlowFrame<unknown>[]): string[] {
   return partsOfFrames(frames, (spot) => deployPartOfSpot(view, spot), (move) => {
     const viaUrl = (move.from === "friend" && move.to !== "url") || (move.to === "friend" && move.from !== "url");

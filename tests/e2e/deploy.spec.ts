@@ -22,7 +22,7 @@ test("DEPLOY-01/02: localhost is only on the laptop; push deploys, a failed buil
   await expect(panel(page)).toBeVisible();
   await button(page, "เปิดเว็บในเครื่อง").click();
   await button(page, "เพื่อนเปิด localhost").click();
-  await expect(panel(page)).toContainText("มือถือเพื่อนเปิด localhost ของเราไม่ได้");
+  await expect(panel(page)).toContainText("คอมเพื่อนเปิด localhost ของเราไม่ได้");
   let node = await deployNode(page);
   expect(node.state.local).toEqual({ running: true, showing: 1 });
   expect(node.state.friend.tone).toBe("error");

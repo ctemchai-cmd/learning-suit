@@ -1,7 +1,7 @@
 import type { FlowFrame } from "../data/model";
 
 // Deploy teaching simulator (plan 07 §4). Pure types: no React, no Konva, no network.
-// The coffee-shop website travels: laptop → (local server) → GitHub → Vercel → public URL → a friend's phone,
+// The coffee-shop website travels: laptop → (local server) → GitHub → Vercel → public URL → a friend's computer,
 // and in the last steps the live site talks to the database with a secret key.
 
 /** Lesson steps: open locally → the key in .env.local → deploy on Vercel → the key on Vercel → the whole system. */
@@ -24,7 +24,7 @@ export type DeployState = {
   nextDeployment: number;
   /** The database key: in `.env.local` on the laptop, and (only if the teacher adds it) in Vercel's settings. */
   keys: { local: boolean; vercel: boolean };
-  /** What the friend's phone shows (last result). */
+  /** What the friend's computer shows (last result). */
   friend: { title: string; lines: string[]; tone: "empty" | "ok" | "error" };
   /** What the laptop browser shows when the site talks to the database locally. */
   laptop: { lines: string[] };

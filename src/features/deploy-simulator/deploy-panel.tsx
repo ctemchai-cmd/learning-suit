@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, type JSX } from "react";
-import { Bug, Coffee, Globe, History, KeyRound, Pencil, Power, Rocket, Send, Smartphone, Wand2 } from "lucide-react";
+import { Bug, Coffee, Globe, History, KeyRound, Pencil, Power, Rocket, Monitor, Send, Wand2 } from "lucide-react";
 import type { DocumentTransaction } from "@/domain/document/commands";
 import type { DeploySimulatorNode } from "@/domain/document/model";
 import type { DeployAction, DeployState, DeployView } from "@/domain/deploy/model";
@@ -108,7 +108,7 @@ function LocalControls(props: Props) {
     <div className="space-y-1.5">
       <ServerToggle {...props} />
       <Action icon={<Pencil size={14} />} disabled={!writable} onClick={() => run({ type: "code.edit", title: nextHeadline(state), broken: false })}>แก้โค้ด</Action>
-      <Action icon={<Smartphone size={14} />} disabled={!writable} onClick={() => run({ type: "friend.localhost" })}>เพื่อนเปิด localhost</Action>
+      <Action icon={<Monitor size={14} />} disabled={!writable} onClick={() => run({ type: "friend.localhost" })}>เพื่อนเปิด localhost</Action>
     </div>
   </Section>;
 }

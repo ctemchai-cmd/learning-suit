@@ -192,11 +192,11 @@ test("REVEAL-03: Deploy, Data and AI — toggle, parts one by one, an action rev
   await createProject(page, "Reveal flows");
   const drawnAll = async (texts: string[]) => { const board = await boardTexts(page); return texts.filter((text) => board.includes(text)); };
 
-  // ---- Deploy, step “ขึ้น Vercel”: code → GitHub → Vercel + Build → Deployments → URL → friend's phone.
+  // ---- Deploy, step “ขึ้น Vercel”: code → GitHub → Vercel + Build → Deployments → URL → friend's computer.
   await page.getByRole("button", { name: "เพิ่มตัวจำลอง Deploy" }).first().click();
   const deploy = page.getByRole("region", { name: "ตัวจำลอง Deploy" });
   await deploy.getByRole("combobox", { name: "ขั้นของบทเรียน" }).selectOption("vercel");
-  const deployMarks = ["เครื่องเรา", "GitHub", "▲ Vercel", "Deployments", "เว็บจริง", "มือถือเพื่อน"];
+  const deployMarks = ["เครื่องเรา", "GitHub", "▲ Vercel", "Deployments", "เว็บจริง", "คอมเพื่อน"];
   await deploy.getByRole("switch", { name: "ค่อยๆ แสดงทีละส่วน" }).check();
   expect(await reveal(page, "deploy-simulator")).toBe(0);
   await expect.poll(() => drawnAll(deployMarks)).toEqual([]);
@@ -206,7 +206,7 @@ test("REVEAL-03: Deploy, Data and AI — toggle, parts one by one, an action rev
   await deploy.getByRole("button", { name: /^แสดงส่วนถัดไป/ }).click();
   await expect.poll(() => drawnAll(deployMarks)).toEqual(["เครื่องเรา", "GitHub"]);
   await expect(deploy.getByRole("button", { name: /^แสดงส่วนถัดไป/ })).toHaveText("แสดงส่วนถัดไป: Vercel และ Build (3/6)");
-  // Pushing needs Vercel, its list and the site: they appear with the action; the friend's phone stays hidden.
+  // Pushing needs Vercel, its list and the site: they appear with the action; the friend's computer stays hidden.
   await deploy.getByRole("button", { name: "ส่งโค้ดขึ้น (Deploy)" }).click();
   await expect(deploy).toContainText("Deploy");
   expect(await reveal(page, "deploy-simulator")).toBe(5);
@@ -217,18 +217,18 @@ test("REVEAL-03: Deploy, Data and AI — toggle, parts one by one, an action rev
   await deploy.getByRole("combobox", { name: "ขั้นของบทเรียน" }).selectOption("overall");
   expect(await reveal(page, "deploy-simulator")).toBe(0);
 
-  // ---- Data, step “ตาราง”: phone → check gate → database → the menu table.
+  // ---- Data, step “ตาราง”: computer → check gate → database → the categories table.
   await page.getByRole("button", { name: "เพิ่มตัวจำลองข้อมูล" }).first().click();
   const data = page.getByRole("region", { name: "ตัวจำลองข้อมูล" });
   await data.getByRole("combobox", { name: "ขั้นของบทเรียน" }).selectOption("table");
-  const dataMarks = ["เครื่อง A · แอปร้านกาแฟ", "ตรวจชนิดข้อมูล", "ฐานข้อมูล · ตาราง “เมนู”", "มีขาย"];
+  const dataMarks = ["คอม A · แอปรายรับรายจ่าย", "ตรวจชนิดข้อมูล", "ฐานข้อมูล · ตาราง “หมวด”", "ใช้อยู่"];
   await data.getByRole("switch", { name: "ค่อยๆ แสดงทีละส่วน" }).check();
   await expect.poll(() => drawnAll(dataMarks)).toEqual([]);
-  await expect(data.getByRole("button", { name: /^แสดงส่วนถัดไป/ })).toHaveText("แสดงส่วนถัดไป: แอปบนมือถือ A (1/4)");
+  await expect(data.getByRole("button", { name: /^แสดงส่วนถัดไป/ })).toHaveText("แสดงส่วนถัดไป: แอปบนคอมพิวเตอร์ A (1/4)");
   await data.getByRole("button", { name: /^แสดงส่วนถัดไป/ }).click();
-  await expect.poll(() => drawnAll(dataMarks)).toEqual(["เครื่อง A · แอปร้านกาแฟ"]);
+  await expect.poll(() => drawnAll(dataMarks)).toEqual(["คอม A · แอปรายรับรายจ่าย"]);
   await data.getByRole("group", { name: "สิ่งที่จะทำ" }).getByRole("button", { name: "ดู", exact: true }).click();
-  await data.getByRole("button", { name: "ดูเมนูทั้งหมด" }).click();
+  await data.getByRole("button", { name: "ดูหมวดทั้งหมด" }).click();
   expect(await reveal(page, "data-simulator")).toBe(4);
   await expect.poll(() => drawnAll(dataMarks)).toEqual(dataMarks);
   await page.getByRole("button", { name: "เลิกทำ" }).click();

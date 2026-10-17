@@ -5,6 +5,7 @@ import { Arc, Circle, Group, Line, Path, Rect, Text } from "react-konva";
 import type Konva from "konva";
 import type { FlowTone, MarkTone } from "@/domain/data/model";
 import { ICON_PATHS, type IconName } from "./icon-paths";
+import { MONITOR_STAND } from "./monitor";
 
 // Shared Konva pieces of the flow simulators (plan 07 §2): text that never overflows, pipes,
 // gates, the moving packet and the caption bar. Deterministic for export (the packet only animates
@@ -180,6 +181,22 @@ export function AppSpinner({ box, kind, font }: { box: { x: number; y: number; w
     <Circle x={cx} y={cy} radius={18} stroke="#E2E8F0" strokeWidth={5} />
     <Arc ref={arcRef} x={cx} y={cy} innerRadius={15.5} outerRadius={20.5} angle={110} fill={kind === "refresh" ? "#64748B" : "#2563EB"} />
     <Label x={box.x + 6} y={cy + 28} width={box.w - 12} text={text} size={13} bold color="#334155" align="center" font={font} />
+  </Group>;
+}
+
+/**
+ * A desktop computer monitor: dark bezel with a chin (and a small label on it), a neck and a base below the frame.
+ * The caller draws the screen content over `monitorScreen(frame)`.
+ */
+export function Monitor({ frame, chin = 26, label, font }: { frame: { x: number; y: number; w: number; h: number }; chin?: number; label?: string; font: string }) {
+  const cx = frame.x + frame.w / 2;
+  const base = Math.min(112, frame.w * 0.46);
+  const radius = Math.min(14, frame.h / 4);
+  return <Group listening={false}>
+    <Rect x={cx - 17} y={frame.y + frame.h - 2} width={34} height={MONITOR_STAND - 6} fill="#64748B" />
+    <Rect x={cx - base / 2} y={frame.y + frame.h + MONITOR_STAND - 9} width={base} height={9} cornerRadius={4.5} fill="#475569" />
+    <Rect x={frame.x} y={frame.y} width={frame.w} height={frame.h} cornerRadius={radius} fill="#0F172A" />
+    {label && chin >= 16 && <Label x={frame.x} y={frame.y + frame.h - chin} width={frame.w} text={label} size={11} color="#94A3B8" align="center" font={font} lineHeight={chin} />}
   </Group>;
 }
 

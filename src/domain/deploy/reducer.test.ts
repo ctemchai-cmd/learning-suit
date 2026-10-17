@@ -20,7 +20,7 @@ describe("step 1 — local", () => {
     expect(applyDeployAction(state, { type: "local.start" }, "local").outcome).toBe("noop");
   });
 
-  it("a friend's phone cannot open our localhost", () => {
+  it("a friend's computer cannot open our localhost", () => {
     const result = applyDeployAction(createInitialDeployState(), { type: "friend.localhost" }, "local");
     expect(route(createInitialDeployState(), { type: "friend.localhost" }, "local")).toEqual(["friend→localhostGate:request", "localhostGate→friend:blocked"]);
     expect(result.nextState.friend.tone).toBe("error");
@@ -80,7 +80,7 @@ describe("step 3 — the secret key", () => {
 });
 
 describe("step 4 — the whole system", () => {
-  it("an order travels phone → URL → Vercel → access rule → orders table → phone", () => {
+  it("an order travels computer → URL → Vercel → access rule → orders table → computer", () => {
     const ready = play(createInitialDeployState(), "overall", { type: "env.setVercel", on: true }, { type: "push" });
     expect(route(ready, { type: "friend.order", item: "ลาเต้" }, "overall")).toEqual([
       "friend→url:data", "url→vercel:request", "vercel→rls:request", "rls→orders:ok", "orders→friend:ok",

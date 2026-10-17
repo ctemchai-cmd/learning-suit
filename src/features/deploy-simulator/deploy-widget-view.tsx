@@ -6,7 +6,7 @@ import type { MarkTone } from "@/domain/data/model";
 import type { DeploySimulatorNode } from "@/domain/document/model";
 import { SITE_URL, type DeployState, type DeployView } from "@/domain/deploy/model";
 import { deploymentOf } from "@/domain/deploy/reducer";
-import { AppSpinner, CaptionBar, Gate, Icon, IconLabel, Label, MARK_STYLE, Packet, Pipe, type Pt } from "@/features/flow/flow-bits";
+import { AppSpinner, CaptionBar, Gate, Icon, IconLabel, Label, MARK_STYLE, Monitor, Packet, Pipe, type Pt } from "@/features/flow/flow-bits";
 import type { IconName } from "@/features/flow/icon-paths";
 import { waitingAt, type FlowPlay, type Waiting } from "@/features/flow/flow-session";
 import { useFlowPlayback } from "@/features/flow/use-flow-playback";
@@ -83,15 +83,14 @@ function BrowserCard({ box, state, mark, waiting, font }: { box: Box; state: Dep
   </Group>;
 }
 
-function FriendPhone({ frame, screen, state, mark, waiting, font }: { frame: Box; screen: Box; state: DeployState; mark?: MarkTone; waiting: Waiting | null; font: string }) {
+function FriendComputer({ frame, screen, state, mark, waiting, font }: { frame: Box; screen: Box; state: DeployState; mark?: MarkTone; waiting: Waiting | null; font: string }) {
   const { friend } = state;
   const style = mark ? MARK_STYLE[mark] : null;
   const fill = friend.tone === "error" ? "#FEF2F2" : friend.tone === "ok" ? "#F0FDF4" : "#F8FAFC";
   return <Group listening={false}>
-    <Rect x={frame.x} y={frame.y} width={frame.w} height={frame.h} cornerRadius={28} fill={C.dark} />
-    <Rect x={frame.x + frame.w / 2 - 28} y={frame.y + 12} width={56} height={7} cornerRadius={4} fill="#334155" />
-    <Rect x={screen.x} y={screen.y} width={screen.w} height={screen.h} cornerRadius={12} fill={style?.fill ?? fill} stroke={style?.stroke} strokeWidth={style ? 2.5 : 0} />
-    <IconLabel x={screen.x + 10} y={screen.y + 10} width={screen.w - 20} icon="phone" text="มือถือเพื่อน" size={13} bold color={C.muted} font={font} />
+    <Monitor frame={frame} font={font} />
+    <Rect x={screen.x} y={screen.y} width={screen.w} height={screen.h} cornerRadius={4} fill={style?.fill ?? fill} stroke={style?.stroke} strokeWidth={style ? 2.5 : 0} />
+    <IconLabel x={screen.x + 10} y={screen.y + 10} width={screen.w - 20} icon="monitor" text="คอมเพื่อน" size={13} bold color={C.muted} font={font} />
     {friend.tone === "empty"
       ? <Label x={screen.x + 10} y={screen.y + 40} width={screen.w - 20} text="ยังไม่ได้เปิดเว็บ" size={13} color={C.muted} font={font} />
       : <>
@@ -218,7 +217,7 @@ export function DeployWidgetView({ node, play: playing, fontFamily: font }: { no
     </Card>}
     {scene.rls && show("rls") && <Gate at={scene.rls} label="กฎสิทธิ์" sub="RLS" tone={gate("rls")} font={font} />}
 
-    {scene.friend && show("friend") && <FriendPhone frame={scene.friend.frame} screen={scene.friend.screen} state={state} mark={toneOf(marks, "friend")} waiting={waitingAt(play, "friend")} font={font} />}
+    {scene.friend && show("friend") && <FriendComputer frame={scene.friend.frame} screen={scene.friend.screen} state={state} mark={toneOf(marks, "friend")} waiting={waitingAt(play, "friend")} font={font} />}
     <CaptionBar box={CAPTION_BOX} text={flow.frame ? flow.frame.caption : IDLE[view]} step={flow.step} font={font} />
     {flow.moving && flow.path && <Packet key={flow.runKey} runKey={flow.runKey} path={flow.path} label={flow.moving.label} tone={flow.moving.tone}
       duration={flow.travel} font={font} onLanded={flow.onLanded} />}

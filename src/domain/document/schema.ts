@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createInitialDataState } from "../data/initial";
 import { DATA_LIMITS } from "../data/model";
 import { DEPLOY_LIMITS } from "../deploy/model";
 import { AI_LIMITS } from "../ai/model";
@@ -163,38 +164,41 @@ const gitSimulator = z.strictObject({
   host: z.enum(["github", "gitlab"]).optional(), state: gitState,
 });
 
-// Data-storage simulator (plan 07 §3): small coffee-shop tables with referential integrity.
+// Data-storage simulator (plan 07 §3): small income/expense tables with referential integrity.
 const dataName = z.string().refine((v) => v === v.trim() && codePoints(v) >= 1 && codePoints(v) <= DATA_LIMITS.nameCodePoints);
 const dataLine = z.string().refine((v) => codePoints(v) <= 160);
 const rowId = z.number().int().min(1).max(1_000_000);
-const phones = <T extends z.ZodTypeAny>(item: T) => z.strictObject({ A: item, B: item });
+const computers = <T extends z.ZodTypeAny>(item: T) => z.strictObject({ A: item, B: item });
 const storageList = z.array(dataName).max(DATA_LIMITS.storageItems);
-const dataState = z.strictObject({
-  version: z.literal(1),
+const dataStateV2 = z.strictObject({
+  version: z.literal(2),
   storage: z.strictObject({
     mode: z.enum(["app", "device", "cloud"]),
-    memory: phones(storageList), device: phones(storageList), cloud: storageList, screen: phones(storageList),
+    memory: computers(storageList), device: computers(storageList), cloud: storageList, screen: computers(storageList),
   }),
-  menu: z.array(z.strictObject({ id: rowId, name: dataName, price: z.number().int().min(0).max(DATA_LIMITS.price), available: z.boolean() })).max(DATA_LIMITS.rows),
-  customers: z.array(z.strictObject({ id: rowId, name: dataName })).max(DATA_LIMITS.rows),
-  orders: z.array(z.strictObject({ id: rowId, customerId: rowId, menuId: rowId, qty: z.number().int().min(1).max(99), copiedName: dataName })).max(DATA_LIMITS.rows),
-  nextId: z.strictObject({ menu: rowId, customers: rowId, orders: rowId }),
+  categories: z.array(z.strictObject({ id: rowId, name: dataName, kind: z.enum(["income", "expense"]), active: z.boolean() })).max(DATA_LIMITS.rows),
+  users: z.array(z.strictObject({ id: rowId, name: dataName })).max(DATA_LIMITS.rows),
+  transactions: z.array(z.strictObject({ id: rowId, userId: rowId, categoryId: rowId, amount: z.number().int().min(1).max(DATA_LIMITS.amount), copiedName: dataName })).max(DATA_LIMITS.rows),
+  nextId: z.strictObject({ categories: rowId, users: rowId, transactions: rowId }),
   rulesOn: z.boolean(),
-  phones: phones(z.strictObject({ title: dataLine, lines: z.array(dataLine).max(DATA_LIMITS.screenLines) })),
+  screens: computers(z.strictObject({ title: dataLine, lines: z.array(dataLine).max(DATA_LIMITS.screenLines) })),
 }).superRefine((state, ctx) => {
   const fail = (message: string) => ctx.addIssue({ code: "custom", message });
-  for (const table of ["menu", "customers", "orders"] as const) {
+  for (const table of ["categories", "users", "transactions"] as const) {
     const ids = state[table].map((row) => row.id);
     if (new Set(ids).size !== ids.length) fail(`Duplicate ${table} ID`);
     if (ids.some((id) => id >= state.nextId[table])) fail(`nextId.${table} must exceed existing IDs`);
   }
-  const customers = new Set(state.customers.map((row) => row.id));
-  const menu = new Set(state.menu.map((row) => row.id));
-  for (const order of state.orders) {
-    if (!customers.has(order.customerId)) fail(`Order ${order.id} refers to a missing customer`);
-    if (!menu.has(order.menuId)) fail(`Order ${order.id} refers to a missing menu item`);
+  const users = new Set(state.users.map((row) => row.id));
+  const categories = new Set(state.categories.map((row) => row.id));
+  for (const row of state.transactions) {
+    if (!users.has(row.userId)) fail(`Transaction ${row.id} refers to a missing user`);
+    if (!categories.has(row.categoryId)) fail(`Transaction ${row.id} refers to a missing category`);
   }
 });
+// Version 1 was the coffee-shop demo (menu/customers/orders). It is demo data, so an old document gets the new initial
+// state instead (the node keeps its view, scale, position and reveal); anything else is checked as version 2.
+const dataState = z.preprocess((value) => (typeof value === "object" && value !== null && (value as { version?: unknown }).version === 1 ? createInitialDataState() : value), dataStateV2);
 const dataSimulator = z.strictObject({
   ...base, type: z.literal("data-simulator"), rotation: z.literal(0),
   scale: z.number().finite().min(0.5).max(4), reveal, view: z.enum(["where", "table", "relation", "access"]), state: dataState,

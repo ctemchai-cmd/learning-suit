@@ -69,10 +69,10 @@ function codeEdit(state: DeployState, raw: string, broken: boolean): DeployTrans
 
 function friendLocalhost(state: DeployState): DeployTransition {
   const flow = new Flow(state);
-  flow.step(hop("friend", "localhostGate", "localhost:3000", "request"), "เพื่อนพิมพ์ localhost:3000 ในมือถือของตัวเอง");
-  flow.step(hop("localhostGate", "friend", "ไม่พบเว็บ", "blocked"), "localhost แปลว่า “เครื่องของตัวเอง” มือถือเพื่อนจึงหาเว็บในเครื่องเราไม่เจอ ✗",
+  flow.step(hop("friend", "localhostGate", "localhost:3000", "request"), "เพื่อนพิมพ์ localhost:3000 ในคอมของตัวเอง");
+  flow.step(hop("localhostGate", "friend", "ไม่พบเว็บ", "blocked"), "localhost แปลว่า “เครื่องของตัวเอง” คอมเพื่อนจึงหาเว็บในเครื่องเราไม่เจอ ✗",
     (s) => setFriend(s, "เปิดไม่ได้", ["localhost:3000", "ไม่พบเว็บไซต์"], "error"), [{ spot: "localhostGate", tone: "blocked" }]);
-  return finish(state, flow, "failed", "มือถือเพื่อนเปิด localhost ของเราไม่ได้");
+  return finish(state, flow, "failed", "คอมเพื่อนเปิด localhost ของเราไม่ได้");
 }
 
 // ---------------------------------------------------------------------------
