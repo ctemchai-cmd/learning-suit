@@ -13,6 +13,7 @@ import { branchPill, commitGraph, laneMetrics, machineDiagram, remoteDiagram, re
 import { diffCounts, diffWindow, lineDiff } from "@/domain/git/diff";
 import { partFilter } from "@/domain/document/reveal";
 import { codeLines } from "./view-model";
+import { Icon } from "@/features/flow/flow-bits";
 import {
   COMMIT_LIST, gitMachineParts, gitParts, gitTransferPart, remoteRequestBox, codeText, commitListBox, commitListStyle, commitRowLimit, fileCodeBox, fileEditorBox, fileNameBox, GIT_COLUMN, gitShift, remoteCodeBox,
   remoteCodeText, remoteFileBox, REMOTE_COLUMN, viewHasRemote, widgetLayout, widgetWidth, WIDGET_H,
@@ -26,7 +27,7 @@ import {
 
 const C = {
   frame: "#FFFFFF", frameStroke: "#CBD5E1",
-  card: "#FFFFFF", cardStroke: "#E2E8F0", remoteCard: "#F8F7FF", active: "#2563EB",
+  card: "#FFFFFF", cardStroke: "#E2E8F0", remoteCard: "#F8F7FF", active: "#2563EB", laptop: "#1E293B",
   title: "#0F172A", text: "#1E293B", muted: "#64748B",
   arrow: "#334155", fileCol: "#FFFFFF", gitCol: "#F8FAFC",
   previewFill: "#EFF6FF", previewStroke: "#3B82F6",
@@ -243,6 +244,19 @@ function CardFrame({ box, active, fill }: { box: Box; active: boolean; fill: str
     shadowColor="#0F172A" shadowOpacity={0.06} shadowBlur={12} shadowOffsetY={2} listening={false} />;
 }
 
+/**
+ * A machine is drawn as a laptop (same look as the SSH and Deploy simulators): dark screen bezel and a keyboard
+ * base under it. The chosen machine (Git panel tab) gets a blue bezel.
+ */
+function LaptopFrame({ box, active }: { box: Box; active: boolean }) {
+  const base = box.y + box.h;
+  return <Group listening={false}>
+    <Rect x={box.x} y={box.y} width={box.w} height={box.h} cornerRadius={16} fill={C.card}
+      stroke={active ? C.active : C.laptop} strokeWidth={6} shadowColor="#0F172A" shadowOpacity={0.06} shadowBlur={12} shadowOffsetY={2} />
+    <Rect x={box.x - 8} y={base + 4} width={box.w + 16} height={12} cornerRadius={6} fill="#CBD5E1" stroke="#94A3B8" strokeWidth={1} />
+  </Group>;
+}
+
 function MachineCard({ layout, machine, state, active, preview, font, host, shows }: {
   layout: WidgetLayout; machine: MachineId; state: GitSimulationState; active: boolean; preview: GitPreview | null; font: string; host?: HostId; shows: (partId: string) => boolean;
 }) {
@@ -254,8 +268,9 @@ function MachineCard({ layout, machine, state, active, preview, font, host, show
   const showFile = shows(parts.file), showStage = shows(parts.stage);
   if (!showFile) return null;
   return <Group>
-    <CardFrame box={card} active={active} fill={C.card} />
-    <Label x={card.x + 18} y={card.y + 14} width={card.w - 36} text={machine === "A" ? "เครื่อง A" : "เครื่อง B"} size={22} bold color={C.title} font={font} />
+    <LaptopFrame box={card} active={active} />
+    <Icon name="laptop" x={card.x + 18} y={card.y + 15} size={24} color={C.title} />
+    <Label x={card.x + 50} y={card.y + 14} width={card.w - 68} text={machine === "A" ? "เครื่อง A" : "เครื่อง B"} size={22} bold color={C.title} font={font} />
     {repo.initialized ? <>
       <FileColumn layout={layout} machine={machine} state={state} previewCommit={selected} font={font} host={host} />
       {showStage && <>
