@@ -23,6 +23,7 @@ import { createInitialSshState } from "@/domain/ssh/initial";
 import { createInitialAiState } from "@/domain/ai/initial";
 import { createInitialGitState } from "@/domain/git/initial";
 import { ingestImage } from "@/services/assets/ingest";
+import { imagesFromPaste, LINK_ONLY_NOTICE, markObjectsCopied, readClipboardImages, type ClipboardImages } from "./clipboard-images";
 import { getLocalAsset, hasLocalAsset, putLocalAsset, putThumbnail } from "@/services/persistence/local-db";
 import { renderSlidePng } from "@/services/export/render";
 import { liveRole, onHistoryNavigate, useEditorStore, type CloudStatusView, type EditorTool, type LocalStatus, type ProjectOpener } from "./store";
@@ -515,7 +516,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
     else if (tool === "table") insertTableRef.current("grid");
     else if (tool === "code") insertCodeRef.current();
   }, [setStencilOpen]);
-  const insertImages = useCallback(async (files: File[], world: Point | null) => {
+  const insertImages = useCallback(async (files: Blob[], world: Point | null) => {
     const state = useEditorStore.getState();
     if (!state.writable || !state.activeSlideId) return;
     const target = { projectId, slideId: state.activeSlideId };
@@ -546,6 +547,12 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
       useEditorStore.getState().setNotice(error instanceof Error ? error.message : "วางวัตถุไม่สำเร็จ");
     }
   }, [ownerId, projectId, insertNodes]);
+  /** Paste from the system clipboard when it holds pictures (newest copy wins), else the in-app objects. */
+  const pasteFound = useCallback((found: ClipboardImages | null, world: Point | null) => {
+    if (found && !found.objects && found.images.length) { void insertImages(found.images, world); return; }
+    if (found?.linkOnly) { useEditorStore.getState().setNotice(LINK_ONLY_NOTICE); return; }
+    void pasteInternal();
+  }, [insertImages, pasteInternal]);
 
   const [copied, setCopied] = useState<number | null>(null);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number; world?: Point } | null>(null);
@@ -556,7 +563,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
     if (!current || !state.selectedIds.length) return;
     const count = copyToClipboard(ownerId, projectId, current.nodes.filter((node) => state.selectedIds.includes(node.id) && !node.locked), state.history!.content.document.assets);
     state.setNotice(null);
-    if (count) setCopied(count);
+    if (count) { setCopied(count); markObjectsCopied(count); }
   }, [ownerId, projectId]);
   useEffect(() => {
     if (copied === null) return;
@@ -639,15 +646,14 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
     const onPaste = (event: ClipboardEvent) => {
       if (editable(event.target) || document.querySelector("[role=dialog]")) return;
       if (pasteTimer.current) { clearTimeout(pasteTimer.current); pasteTimer.current = null; }
-      const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith("image/"));
       event.preventDefault();
-      if (files.length) void insertImages(files, null);
-      else void pasteInternal();
+      // Reads the clipboard data synchronously first (it is only readable during the event), then downloads/converts.
+      void imagesFromPaste(event.clipboardData).then((found) => pasteFound(found, null), () => pasteFound(null, null));
     };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("paste", onPaste);
     return () => { window.removeEventListener("keydown", onKeyDown); window.removeEventListener("paste", onPaste); };
-  }, [ownerId, projectId, insertImages, insertNodes, pasteInternal, removeSelected, lockSelected, copySelected, duplicateSelected, runToolAction, groupSelected]);
+  }, [ownerId, projectId, insertImages, insertNodes, pasteInternal, pasteFound, removeSelected, lockSelected, copySelected, duplicateSelected, runToolAction, groupSelected]);
 
 
   // Some browsers keep a navigated-away page alive (bfcache) with its Web Lock; release it explicitly.
@@ -746,7 +752,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
       { kind: "item", label: chosen.length > 1 ? `ลบ ${chosen.length} ชิ้น` : "ลบ", icon: <Trash2 size={15} />, shortcut: "⌫", disabled: edit, danger: true, onSelect: removeSelected },
       { kind: "separator" },
     ] : [
-      { kind: "item", label: "วาง", icon: <ClipboardPaste size={15} />, shortcut: "⌘V", disabled: edit, onSelect: () => void pasteInternal() },
+      { kind: "item", label: "วาง", icon: <ClipboardPaste size={15} />, shortcut: "⌘V", disabled: edit, onSelect: () => void readClipboardImages().then((found) => pasteFound(found, world ?? null), () => pasteFound(null, null)) },
       { kind: "item", label: "เลือกทั้งหมด", icon: <SquareDashedMousePointer size={15} />, shortcut: "⌘A",
         disabled: !current.nodes.some((node) => !node.locked), onSelect: () => state.setSelectedIds(current.nodes.filter((node) => !node.locked).map((node) => node.id)) },
       { kind: "separator" },
