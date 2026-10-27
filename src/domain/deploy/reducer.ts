@@ -8,6 +8,8 @@ import {
 // Pure scenarios of the deploy simulator (plan 07 §4): the final state plus the frames the board plays.
 // Some flows depend on the lesson step (e.g. the secret key is only drawn from step 3 on), so the step is an input.
 
+/** Sample transaction recorded when the action gives no text. */
+export const DEFAULT_ITEM = "ค่ากาแฟ 60 บาท";
 const codePoints = (value: string) => [...value].length;
 const hop = (from: string, to: string, label: string, tone: FlowTone = "data"): Hop => ({ from, to, label, tone });
 
@@ -171,56 +173,56 @@ function setVercelKey(state: DeployState, on: boolean): DeployTransition {
 }
 
 function friendOrder(state: DeployState, raw: string, view: DeployView): DeployTransition {
-  const item = raw.trim() || "ลาเต้";
-  if (state.orders.length >= DEPLOY_LIMITS.orders) return noop(state, `สาธิตได้ไม่เกิน ${DEPLOY_LIMITS.orders} ออเดอร์ กด “เริ่มใหม่”`, "rejected");
+  const item = raw.trim() || DEFAULT_ITEM;
+  if (state.orders.length >= DEPLOY_LIMITS.orders) return noop(state, `สาธิตได้ไม่เกิน ${DEPLOY_LIMITS.orders} รายการ กด “เริ่มใหม่”`, "rejected");
   const flow = new Flow(state);
-  flow.step(hop("friend", "url", `สั่ง${item}`), `เพื่อนสั่ง${item}บนเว็บจริง`);
+  flow.step(hop("friend", "url", item), `เพื่อนบันทึก ${item} บนเว็บจริง`);
   const live = deploymentOf(state, state.production);
   if (!live) {
     flow.step(hop("url", "friend", "ไม่พบเว็บ", "blocked"), "ยังไม่มีเว็บจริง: ต้อง Deploy ก่อน ✗",
       (s) => setFriend(s, "เปิดไม่ได้", [SITE_URL, "ยังไม่มีเว็บไซต์"], "error"), [{ spot: "url", tone: "blocked" }]);
-    return finish(state, flow, "failed", "ยังไม่มีเว็บจริงให้สั่ง");
+    return finish(state, flow, "failed", "ยังไม่มีเว็บจริงให้บันทึกรายการ");
   }
-  flow.step(hop("url", "vercel", "บันทึกออเดอร์", "request"), `เว็บ (D${live.id}) ส่งออเดอร์ไปที่เซิร์ฟเวอร์ของ Vercel`);
+  flow.step(hop("url", "vercel", "บันทึกรายการ", "request"), `เว็บ (D${live.id}) ส่งรายการไปที่เซิร์ฟเวอร์ของ Vercel`);
   if (!live.hasKey) {
     flow.step(hop("vercel", "supabase", "ไม่มีกุญแจ", "blocked"), `ต่อฐานข้อมูลไม่ได้: D${live.id} ไม่มีกุญแจ (ลืมใส่ใน Vercel) ✗`,
       undefined, [{ spot: "supabase", tone: "blocked" }, { spot: "vercelEnv", tone: "blocked" }]);
-    flow.step(hop("vercel", "friend", "เกิดข้อผิดพลาด", "blocked"), "เว็บออนไลน์อยู่ แต่บันทึกออเดอร์ไม่ได้ ✗ ในเครื่องใช้ได้เพราะมี .env.local",
-      (s) => setFriend(s, "เกิดข้อผิดพลาด", ["บันทึกออเดอร์ไม่สำเร็จ", "ต่อฐานข้อมูลไม่ได้"], "error"));
+    flow.step(hop("vercel", "friend", "เกิดข้อผิดพลาด", "blocked"), "เว็บออนไลน์อยู่ แต่บันทึกรายการไม่ได้ ✗ ในเครื่องใช้ได้เพราะมี .env.local",
+      (s) => setFriend(s, "เกิดข้อผิดพลาด", ["บันทึกรายการไม่สำเร็จ", "ต่อฐานข้อมูลไม่ได้"], "error"));
     return finish(state, flow, "failed", "เว็บจริงต่อฐานข้อมูลไม่ได้: ใส่กุญแจบน Vercel แล้ว Deploy ใหม่");
   }
   if (view === "overall") {
     flow.step(hop("vercel", "rls", `${item} + กุญแจ`, "request"), "ใช้กุญแจจากการตั้งค่า Vercel ต่อฐานข้อมูล แล้วผ่านด่านกฎสิทธิ์");
-    flow.step(hop("rls", "orders", item, "ok"), "กฎสิทธิ์อนุญาต: ลูกค้าเพิ่มออเดอร์ของตัวเองได้ ✓ บันทึกลงตาราง",
+    flow.step(hop("rls", "orders", item, "ok"), "กฎสิทธิ์อนุญาต: ผู้ใช้เพิ่มรายการของตัวเองได้ ✓ บันทึกลงตาราง",
       (s) => ({ ...s, orders: [...s.orders, item] }), [{ spot: "rls", tone: "allowed" }, { spot: "orders", tone: "new" }]);
   } else {
-    flow.step(hop("vercel", "supabase", `${item} + กุญแจ`, "ok"), "ใช้กุญแจจากการตั้งค่า Vercel ต่อฐานข้อมูลได้ ✓ บันทึกออเดอร์",
+    flow.step(hop("vercel", "supabase", `${item} + กุญแจ`, "ok"), "ใช้กุญแจจากการตั้งค่า Vercel ต่อฐานข้อมูลได้ ✓ บันทึกรายการ",
       (s) => ({ ...s, orders: [...s.orders, item] }), [{ spot: "supabase", tone: "new" }]);
   }
-  flow.step(hop(view === "overall" ? "orders" : "supabase", "friend", "✓ สั่งแล้ว", "ok"), "ออเดอร์ถูกบันทึกในฐานข้อมูล เพื่อนเห็นว่าสั่งสำเร็จ ✓",
-    (s) => setFriend(s, "สั่งสำเร็จ", [`${item} ✓`, `ออเดอร์ที่ ${s.orders.length}`], "ok"));
-  return finish(state, flow, "success", `บันทึกออเดอร์ “${item}” ผ่านเว็บจริงแล้ว`);
+  flow.step(hop(view === "overall" ? "orders" : "supabase", "friend", "✓ บันทึกแล้ว", "ok"), "รายการถูกบันทึกในฐานข้อมูล เพื่อนเห็นว่าบันทึกสำเร็จ ✓",
+    (s) => setFriend(s, "บันทึกสำเร็จ", [`${item} ✓`, `รายการที่ ${s.orders.length}`], "ok"));
+  return finish(state, flow, "success", `บันทึกรายการ “${item}” ผ่านเว็บจริงแล้ว`);
 }
 
 function localOrder(state: DeployState, raw: string): DeployTransition {
-  const item = raw.trim() || "ลาเต้";
+  const item = raw.trim() || DEFAULT_ITEM;
   if (!state.local.running) return noop(state, "เปิดเว็บในเครื่องก่อน", "rejected");
-  if (state.orders.length >= DEPLOY_LIMITS.orders) return noop(state, `สาธิตได้ไม่เกิน ${DEPLOY_LIMITS.orders} ออเดอร์ กด “เริ่มใหม่”`, "rejected");
+  if (state.orders.length >= DEPLOY_LIMITS.orders) return noop(state, `สาธิตได้ไม่เกิน ${DEPLOY_LIMITS.orders} รายการ กด “เริ่มใหม่”`, "rejected");
   const flow = new Flow(state);
   // An order sends data (the app shows “saving”), not a request to read.
-  flow.step(hop("browser", "server", `สั่ง${item}`), `ลองสั่ง${item}บนเว็บในเครื่อง`);
+  flow.step(hop("browser", "server", item), `ลองบันทึก ${item} บนเว็บในเครื่อง`);
   if (!state.keys.local) {
     flow.step(hop("envfile", "server", "ไม่มีกุญแจ", "blocked"), "เซิร์ฟเวอร์หากุญแจใน .env.local ไม่เจอ", undefined, [{ spot: "envfile", tone: "blocked" }]);
     flow.step(hop("server", "supabase", "ไม่มีกุญแจ", "blocked"), "ต่อฐานข้อมูลไม่ได้: ไม่มีกุญแจ ✗", undefined, [{ spot: "supabase", tone: "blocked" }]);
-    flow.step(hop("server", "browser", "เกิดข้อผิดพลาด", "blocked"), "เว็บในเครื่องบันทึกออเดอร์ไม่ได้ ✗",
+    flow.step(hop("server", "browser", "เกิดข้อผิดพลาด", "blocked"), "เว็บในเครื่องบันทึกรายการไม่ได้ ✗",
       (s) => ({ ...s, laptop: { lines: ["บันทึกไม่สำเร็จ ✗"] } }));
     return finish(state, flow, "failed", "ไม่มีกุญแจใน .env.local เว็บในเครื่องจึงต่อฐานข้อมูลไม่ได้");
   }
   flow.step(hop("envfile", "server", "กุญแจ"), "เซิร์ฟเวอร์อ่านกุญแจจาก .env.local", undefined, [{ spot: "envfile", tone: "allowed" }]);
-  flow.step(hop("server", "supabase", `${item} + กุญแจ`, "ok"), "ใช้กุญแจต่อฐานข้อมูล บันทึกออเดอร์ ✓",
+  flow.step(hop("server", "supabase", `${item} + กุญแจ`, "ok"), "ใช้กุญแจต่อฐานข้อมูล บันทึกรายการ ✓",
     (s) => ({ ...s, orders: [...s.orders, item] }), [{ spot: "supabase", tone: "new" }]);
-  flow.step(hop("supabase", "browser", "✓ สั่งแล้ว", "ok"), "เว็บในเครื่องบันทึกออเดอร์ได้ ✓",
-    (s) => ({ ...s, laptop: { lines: [`สั่ง${item}แล้ว ✓`] } }));
+  flow.step(hop("supabase", "browser", "✓ บันทึกแล้ว", "ok"), "เว็บในเครื่องบันทึกรายการได้ ✓",
+    (s) => ({ ...s, laptop: { lines: [`บันทึก ${item} แล้ว ✓`] } }));
   return finish(state, flow, "success", `ในเครื่องบันทึก “${item}” ได้ (มีกุญแจใน .env.local)`);
 }
 

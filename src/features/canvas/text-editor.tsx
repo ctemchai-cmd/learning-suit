@@ -7,6 +7,7 @@ import { worldToScreen } from "@/domain/document/camera";
 import { LIMITS } from "@/domain/document/limits";
 import { useEditorStore } from "@/features/editor/store";
 import { CANVAS_FONT } from "./font-metrics";
+import { BoldMarkerHint, useBoldSelection } from "./bold-selection";
 
 export type TextSession = { slideId: string; before: TextNode | null; draft: TextNode };
 
@@ -27,6 +28,8 @@ export function TextEditorOverlay({ session, camera, onChange, onFinish }: {
   const finishRef = useRef(onFinish);
   useLayoutEffect(() => { finishRef.current = onFinish; });
   const registerFlusher = useEditorStore((state) => state.registerFlusher);
+
+  const boldSelection = useBoldSelection(ref, session.draft.text);
 
   useEffect(() => registerFlusher(() => {
     // Flushing during IME composition would split a syllable; wait for compositionend.
@@ -51,7 +54,9 @@ export function TextEditorOverlay({ session, camera, onChange, onFinish }: {
 
   const { draft } = session;
   const origin = worldToScreen({ x: draft.x, y: draft.y }, camera);
-  return <textarea
+  return <>
+  <BoldMarkerHint text={draft.text} left={origin.x} top={origin.y} />
+  <textarea
     ref={ref}
     aria-label="แก้ข้อความบนกระดาน"
     className="absolute z-30 resize-none overflow-hidden border-0 bg-white/80 p-0 outline outline-2 outline-blue-500"
@@ -86,12 +91,18 @@ export function TextEditorOverlay({ session, camera, onChange, onFinish }: {
         if (!event.nativeEvent.isComposing && !composing.current) onFinish(true);
         return;
       }
-      // ⌘B: the whole text box bold / normal (kept in the same edit session).
-      if ((event.metaKey || event.ctrlKey) && event.code === "KeyB") { event.preventDefault(); onChange({ ...draft, bold: !draft.bold }); return; }
+      // ⌘B: the selected words bold / normal (`**…**` in the text); with nothing selected the whole text box (same edit session).
+      if ((event.metaKey || event.ctrlKey) && event.code === "KeyB") {
+        event.preventDefault();
+        if (event.nativeEvent.isComposing || composing.current) return;
+        if (!boldSelection((text) => onChange({ ...draft, text }))) onChange({ ...draft, bold: !draft.bold });
+        return;
+      }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
         if (!event.nativeEvent.isComposing && !composing.current && onFinish(true)) void useEditorStore.getState().save();
       }
     }}
-  />;
+  />
+  </>;
 }

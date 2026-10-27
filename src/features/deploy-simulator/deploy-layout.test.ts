@@ -10,11 +10,11 @@ import { CAPTION_BOX, DEPLOY_W, deployPartOfSpot, deployParts, deployPartsOfFram
 
 // Actions the panel offers in each lesson step. The places frames name come from running the reducer, not from the layout.
 const VIEWS: Record<DeployView, DeployAction[]> = {
-  local: [{ type: "local.start" }, { type: "local.stop" }, { type: "code.edit", title: "ร้านกาแฟ ใหม่", broken: false }, { type: "friend.localhost" }],
-  localEnv: [{ type: "local.start" }, { type: "local.stop" }, { type: "env.setLocal", on: false }, { type: "env.setLocal", on: true }, { type: "local.order", item: "ลาเต้" }],
-  vercel: [{ type: "code.edit", title: "ร้านกาแฟ ใหม่", broken: false }, { type: "code.edit", title: "ร้านกาแฟ พัง", broken: true }, { type: "push" }, { type: "friend.visit" }, { type: "rollback" }],
-  env: [{ type: "env.setVercel", on: true }, { type: "env.setVercel", on: false }, { type: "code.edit", title: "ร้านกาแฟ ใหม่", broken: false }, { type: "push" }, { type: "redeploy" }, { type: "friend.order", item: "ลาเต้" }, { type: "local.start" }, { type: "local.order", item: "ลาเต้" }],
-  overall: [{ type: "overall.prepare" }, { type: "friend.order", item: "ลาเต้" }, { type: "friend.visit" }],
+  local: [{ type: "local.start" }, { type: "local.stop" }, { type: "code.edit", title: "แอปรายรับรายจ่าย ใหม่", broken: false }, { type: "friend.localhost" }],
+  localEnv: [{ type: "local.start" }, { type: "local.stop" }, { type: "env.setLocal", on: false }, { type: "env.setLocal", on: true }, { type: "local.order", item: "ค่ากาแฟ 60 บาท" }],
+  vercel: [{ type: "code.edit", title: "แอปรายรับรายจ่าย ใหม่", broken: false }, { type: "code.edit", title: "แอปรายรับรายจ่าย พัง", broken: true }, { type: "push" }, { type: "friend.visit" }, { type: "rollback" }],
+  env: [{ type: "env.setVercel", on: true }, { type: "env.setVercel", on: false }, { type: "code.edit", title: "แอปรายรับรายจ่าย ใหม่", broken: false }, { type: "push" }, { type: "redeploy" }, { type: "friend.order", item: "ค่ากาแฟ 60 บาท" }, { type: "local.start" }, { type: "local.order", item: "ค่ากาแฟ 60 บาท" }],
+  overall: [{ type: "overall.prepare" }, { type: "friend.order", item: "ค่ากาแฟ 60 บาท" }, { type: "friend.visit" }],
 };
 const apply = (view: DeployView) => (state: DeployState, action: DeployAction) => applyDeployAction(state, action, view);
 const framesOf = (view: DeployView) => walkFrames(createInitialDeployState(), VIEWS[view], apply(view), 3);

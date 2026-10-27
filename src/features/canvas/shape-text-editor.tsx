@@ -7,6 +7,7 @@ import { LIMITS } from "@/domain/document/limits";
 import { SHAPE_TEXT, shapeTextBox, type Shape } from "@/domain/document/shape-text";
 import { useEditorStore } from "@/features/editor/store";
 import { CANVAS_FONT } from "./font-metrics";
+import { BoldMarkerHint, useBoldSelection } from "./bold-selection";
 
 export type ShapeSession = { slideId: string; before: Shape; draft: Shape };
 
@@ -28,6 +29,8 @@ export function ShapeTextEditorOverlay({ session, camera, onChange, onFinish }: 
   const finishRef = useRef(onFinish);
   useLayoutEffect(() => { finishRef.current = onFinish; });
   const registerFlusher = useEditorStore((state) => state.registerFlusher);
+
+  const boldSelection = useBoldSelection(ref, session.draft.text ?? "");
 
   useEffect(() => registerFlusher(() => {
     // Flushing during IME composition would split a syllable; wait for compositionend.
@@ -55,7 +58,9 @@ export function ShapeTextEditorOverlay({ session, camera, onChange, onFinish }: 
   }, [text, box.height, box.width, fontSize, draft.bold]);
 
   const origin = worldToScreen({ x: draft.x, y: draft.y }, camera);
-  return <div
+  return <>
+  <BoldMarkerHint text={text} left={origin.x} top={origin.y} />
+  <div
     className="pointer-events-none absolute z-30 outline outline-2 outline-blue-500"
     style={{
       left: origin.x, top: origin.y, width: draft.width, height: draft.height, borderRadius: draft.type === "ellipse" ? "50%" : 0,
@@ -68,7 +73,7 @@ export function ShapeTextEditorOverlay({ session, camera, onChange, onFinish }: 
         className="pointer-events-auto block w-full resize-none border-0 bg-transparent p-0 outline-none"
         style={{
           fontFamily: `"${CANVAS_FONT}", sans-serif`, fontSize, lineHeight: SHAPE_TEXT.lineHeight, fontWeight: draft.bold ? 700 : 400,
-          color: draft.color ?? SHAPE_TEXT.color, textAlign: "center", whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: box.height, overflowY: "auto",
+          color: draft.color ?? SHAPE_TEXT.color, textAlign: draft.align ?? "center", whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: box.height, overflowY: "auto",
         }}
         value={text}
         spellCheck={false}
@@ -94,8 +99,13 @@ export function ShapeTextEditorOverlay({ session, camera, onChange, onFinish }: 
             if (!event.nativeEvent.isComposing && !composing.current) onFinish(true);
             return;
           }
-          // ⌘B: all of the shape's text bold / normal (kept in the same edit session).
-          if ((event.metaKey || event.ctrlKey) && event.code === "KeyB") { event.preventDefault(); onChange({ ...draft, bold: !draft.bold }); return; }
+          // ⌘B: the selected words bold / normal (`**…**` in the text); with nothing selected all of the shape's text (same edit session).
+          if ((event.metaKey || event.ctrlKey) && event.code === "KeyB") {
+            event.preventDefault();
+            if (event.nativeEvent.isComposing || composing.current) return;
+            if (!boldSelection((next) => onChange({ ...draft, text: next }))) onChange({ ...draft, bold: !draft.bold });
+            return;
+          }
           if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
             event.preventDefault();
             if (!event.nativeEvent.isComposing && !composing.current && onFinish(true)) void useEditorStore.getState().save();
@@ -103,5 +113,6 @@ export function ShapeTextEditorOverlay({ session, camera, onChange, onFinish }: 
         }}
       />
     </div>
-  </div>;
+  </div>
+  </>;
 }

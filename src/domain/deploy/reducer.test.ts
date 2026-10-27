@@ -13,7 +13,7 @@ describe("step 1 — local", () => {
   it("the local server shows the site on the laptop and hot-reloads edits", () => {
     let state = play(createInitialDeployState(), "local", { type: "local.start" });
     expect(state.local).toEqual({ running: true, showing: 1 });
-    const edit = applyDeployAction(state, { type: "code.edit", title: "ร้านกาแฟ ใหม่", broken: false }, "local");
+    const edit = applyDeployAction(state, { type: "code.edit", title: "แอปรายรับรายจ่าย ใหม่", broken: false }, "local");
     expect(edit.frames.map((frame) => frame.hop?.to ?? null)).toEqual([null, "server", "browser"]);
     state = edit.nextState;
     expect(state.local.showing).toBe(2);
@@ -35,7 +35,7 @@ describe("step 2 — Vercel", () => {
     ]);
     expect(pushed.nextState).toMatchObject({ github: { rev: 1 }, production: 1, deployments: [{ id: 1, rev: 1, ok: true, hasKey: false }] });
     const visit = applyDeployAction(pushed.nextState, { type: "friend.visit" }, "vercel");
-    expect(visit.nextState.friend).toMatchObject({ title: "ร้านกาแฟ", tone: "ok" });
+    expect(visit.nextState.friend).toMatchObject({ title: "แอปรายรับรายจ่าย", tone: "ok" });
     expect(applyDeployAction(pushed.nextState, { type: "push" }, "vercel").outcome).toBe("noop");
   });
 
@@ -63,26 +63,26 @@ describe("step 3 — the secret key", () => {
     const pushed = applyDeployAction(createInitialDeployState(), { type: "push" }, "env");
     expect(pushed.frames[0]).toMatchObject({ hop: { from: "envfile", to: "gitignore", tone: "blocked" } });
     let state = pushed.nextState;
-    const broken = applyDeployAction(state, { type: "friend.order", item: "ลาเต้" }, "env");
+    const broken = applyDeployAction(state, { type: "friend.order", item: "ค่ากาแฟ 60 บาท" }, "env");
     expect(broken.nextState.orders).toEqual([]);
     expect(broken.nextState.friend.tone).toBe("error");
     // Locally it works thanks to .env.local.
-    state = play(state, "env", { type: "local.start" }, { type: "local.order", item: "มอคค่า" });
-    expect(state.orders).toEqual(["มอคค่า"]);
+    state = play(state, "env", { type: "local.start" }, { type: "local.order", item: "ค่าข้าวเที่ยง 80 บาท" });
+    expect(state.orders).toEqual(["ค่าข้าวเที่ยง 80 บาท"]);
     // Adding the key on Vercel alone is not enough: the live deployment was built without it.
     state = play(state, "env", { type: "env.setVercel", on: true });
-    expect(applyDeployAction(state, { type: "friend.order", item: "ลาเต้" }, "env").nextState.orders).toEqual(["มอคค่า"]);
-    state = play(state, "env", { type: "redeploy" }, { type: "friend.order", item: "ลาเต้" });
+    expect(applyDeployAction(state, { type: "friend.order", item: "ค่ากาแฟ 60 บาท" }, "env").nextState.orders).toEqual(["ค่าข้าวเที่ยง 80 บาท"]);
+    state = play(state, "env", { type: "redeploy" }, { type: "friend.order", item: "ค่ากาแฟ 60 บาท" });
     expect(state.deployments.at(-1)).toMatchObject({ id: 2, hasKey: true });
-    expect(state.orders).toEqual(["มอคค่า", "ลาเต้"]);
-    expect(state.friend).toMatchObject({ title: "สั่งสำเร็จ", tone: "ok" });
+    expect(state.orders).toEqual(["ค่าข้าวเที่ยง 80 บาท", "ค่ากาแฟ 60 บาท"]);
+    expect(state.friend).toMatchObject({ title: "บันทึกสำเร็จ", tone: "ok" });
   });
 });
 
 describe("step 4 — the whole system", () => {
-  it("an order travels computer → URL → Vercel → access rule → orders table → computer", () => {
+  it("a transaction travels computer → URL → Vercel → access rule → transactions table → computer", () => {
     const ready = play(createInitialDeployState(), "overall", { type: "env.setVercel", on: true }, { type: "push" });
-    expect(route(ready, { type: "friend.order", item: "ลาเต้" }, "overall")).toEqual([
+    expect(route(ready, { type: "friend.order", item: "ค่ากาแฟ 60 บาท" }, "overall")).toEqual([
       "friend→url:data", "url→vercel:request", "vercel→rls:request", "rls→orders:ok", "orders→friend:ok",
     ]);
   });
@@ -101,9 +101,9 @@ describe("document schema", () => {
     const node = (state: DeployState) => ({ id: "00000000-0000-4000-8000-000000000002", type: "deploy-simulator", x: 0, y: 0, rotation: 0, opacity: 1, locked: false, scale: 1, view: "env", state });
     let state = createInitialDeployState();
     const steps: [DeployAction, DeployView][] = [
-      [{ type: "local.start" }, "local"], [{ type: "friend.localhost" }, "local"], [{ type: "code.edit", title: "ร้านใหม่", broken: false }, "local"],
+      [{ type: "local.start" }, "local"], [{ type: "friend.localhost" }, "local"], [{ type: "code.edit", title: "แอปใหม่", broken: false }, "local"],
       [{ type: "push" }, "vercel"], [{ type: "friend.visit" }, "vercel"], [{ type: "code.edit", title: "พัง", broken: true }, "vercel"], [{ type: "push" }, "vercel"],
-      [{ type: "env.setVercel", on: true }, "env"], [{ type: "redeploy" }, "env"], [{ type: "friend.order", item: "ลาเต้" }, "env"], [{ type: "local.order", item: "มอคค่า" }, "env"],
+      [{ type: "env.setVercel", on: true }, "env"], [{ type: "redeploy" }, "env"], [{ type: "friend.order", item: "ค่ากาแฟ 60 บาท" }, "env"], [{ type: "local.order", item: "ค่าข้าวเที่ยง 80 บาท" }, "env"],
     ];
     for (const [action, view] of steps) {
       state = applyDeployAction(state, action, view).nextState;
@@ -122,22 +122,22 @@ describe("step 4 helper", () => {
     expect(live).toMatchObject({ ok: true, hasKey: true });
     expect(prepared.nextState.code.broken).toBe(false);
     expect(applyDeployAction(prepared.nextState, { type: "overall.prepare" }, "overall").outcome).toBe("noop");
-    const ordered = applyDeployAction(prepared.nextState, { type: "friend.order", item: "ลาเต้" }, "overall");
-    expect(ordered.nextState.orders).toEqual(["ลาเต้"]);
+    const ordered = applyDeployAction(prepared.nextState, { type: "friend.order", item: "ค่ากาแฟ 60 บาท" }, "overall");
+    expect(ordered.nextState.orders).toEqual(["ค่ากาแฟ 60 บาท"]);
   });
 });
 
 describe("step 2 — the key in .env.local", () => {
   it("the local server reads the key from .env.local; without it the database is out of reach", () => {
     const running = play(createInitialDeployState(), "localEnv", { type: "local.start" });
-    expect(route(running, { type: "local.order", item: "ลาเต้" }, "localEnv")).toEqual([
+    expect(route(running, { type: "local.order", item: "ค่ากาแฟ 60 บาท" }, "localEnv")).toEqual([
       "browser→server:data", "envfile→server:data", "server→supabase:ok", "supabase→browser:ok",
     ]);
     const noKey = play(running, "localEnv", { type: "env.setLocal", on: false });
-    expect(route(noKey, { type: "local.order", item: "ลาเต้" }, "localEnv")).toEqual([
+    expect(route(noKey, { type: "local.order", item: "ค่ากาแฟ 60 บาท" }, "localEnv")).toEqual([
       "browser→server:data", "envfile→server:blocked", "server→supabase:blocked", "server→browser:blocked",
     ]);
-    const failed = applyDeployAction(noKey, { type: "local.order", item: "ลาเต้" }, "localEnv").nextState;
+    const failed = applyDeployAction(noKey, { type: "local.order", item: "ค่ากาแฟ 60 บาท" }, "localEnv").nextState;
     expect(failed.orders).toEqual([]);
     expect(failed.laptop.lines).toEqual(["บันทึกไม่สำเร็จ ✗"]);
     expect(applyDeployAction(noKey, { type: "env.setLocal", on: false }, "localEnv").outcome).toBe("noop");
@@ -147,12 +147,41 @@ describe("step 2 — the key in .env.local", () => {
 describe("outcomes shown in red", () => {
   it("marks demonstrated failures as failed (not success) while keeping the error on screen", () => {
     const running = play(createInitialDeployState(), "localEnv", { type: "local.start" }, { type: "env.setLocal", on: false });
-    const noKey = applyDeployAction(running, { type: "local.order", item: "ลาเต้" }, "localEnv");
+    const noKey = applyDeployAction(running, { type: "local.order", item: "ค่ากาแฟ 60 บาท" }, "localEnv");
     expect(noKey).toMatchObject({ outcome: "failed", changed: true });
     expect(noKey.nextState.laptop.lines).toEqual(["บันทึกไม่สำเร็จ ✗"]);
     expect(applyDeployAction(createInitialDeployState(), { type: "friend.localhost" }, "local").outcome).toBe("failed");
     const broken = play(createInitialDeployState(), "vercel", { type: "code.edit", title: "พัง", broken: true });
     expect(applyDeployAction(broken, { type: "push" }, "vercel").outcome).toBe("failed");
     expect(applyDeployAction(createInitialDeployState(), { type: "push" }, "vercel").outcome).toBe("success");
+  });
+});
+
+describe("theme: income/expense tracker", () => {
+  it("starts as the money app, and an item-less order records the sample expense with messages in the new vocabulary", () => {
+    const initial = createInitialDeployState();
+    expect(initial).toMatchObject({ version: 2, code: { title: "แอปรายรับรายจ่าย" } });
+    const ready = play(initial, "overall", { type: "overall.prepare" });
+    const saved = applyDeployAction(ready, { type: "friend.order", item: " " }, "overall");
+    expect(saved.nextState.orders).toEqual(["ค่ากาแฟ 60 บาท"]);
+    expect(saved.message).toBe("บันทึกรายการ “ค่ากาแฟ 60 บาท” ผ่านเว็บจริงแล้ว");
+    expect(saved.nextState.friend.lines).toEqual(["ค่ากาแฟ 60 บาท ✓", "รายการที่ 1"]);
+    const texts = [saved.message, ...saved.frames.map((frame) => `${frame.caption} ${frame.hop?.label ?? ""}`)].join(" ");
+    expect(texts).not.toMatch(/กาแฟ(?! 60)|ลาเต้|ออเดอร์|ร้าน|coffee/);
+    expect(applyDeployAction(initial, { type: "friend.visit" }, "vercel").message).not.toMatch(/coffee/);
+  });
+
+  it("an old version-1 coffee-shop state is replaced by the new initial state; the node keeps its view, scale, position and reveal", async () => {
+    const { canvasNodeSchema } = await import("../document/schema");
+    const old = { ...createInitialDeployState(), version: 1, code: { rev: 3, title: "ร้านกาแฟ เมนูใหม่", broken: false }, orders: ["ลาเต้"] };
+    const node = (state: unknown, extra: Record<string, unknown> = {}) => ({ id: "00000000-0000-4000-8000-000000000001", type: "deploy-simulator", x: 0, y: 0, rotation: 0, opacity: 1, locked: false, scale: 1, view: "overall", state, ...extra });
+    const parsed = canvasNodeSchema.safeParse(node(old, { view: "env", scale: 1.5, x: 120, y: 80, reveal: 2 }));
+    if (!parsed.success) throw new Error(JSON.stringify(parsed.error.issues).slice(0, 400));
+    if (parsed.data.type !== "deploy-simulator") throw new Error("expected a deploy simulator node");
+    expect(parsed.data.state).toEqual(createInitialDeployState());
+    expect(parsed.data).toMatchObject({ view: "env", scale: 1.5, x: 120, y: 80, reveal: 2 });
+    // Only version 1 is migrated: other versions are still rejected, and the new version is accepted as is.
+    expect(canvasNodeSchema.safeParse(node({ ...createInitialDeployState(), version: 3 })).success).toBe(false);
+    expect(canvasNodeSchema.safeParse(node(createInitialDeployState())).success).toBe(true);
   });
 });

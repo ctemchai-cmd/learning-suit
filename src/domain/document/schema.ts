@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createInitialDataState } from "../data/initial";
 import { DATA_LIMITS } from "../data/model";
+import { createInitialDeployState } from "../deploy/initial";
 import { DEPLOY_LIMITS } from "../deploy/model";
 import { AI_LIMITS } from "../ai/model";
 import { LEGACY_SSH_VIEWS, SSH_LIMITS } from "../ssh/model";
@@ -38,6 +39,7 @@ const shapeText = {
   fontSize: z.number().finite().min(8).max(160).optional(),
   color: color.optional(),
   bold: z.boolean().optional(),
+  align: z.enum(["left", "center", "right"]).optional(),
 };
 const rectangle = z.strictObject({ ...base, ...stroke, ...shapeText, type: z.literal("rectangle"), width: size, height: size, fill });
 const ellipse = z.strictObject({ ...base, ...stroke, ...shapeText, type: z.literal("ellipse"), width: size, height: size, fill });
@@ -213,8 +215,8 @@ const dataSimulator = z.strictObject({
 
 // Deploy simulator (plan 07 §4).
 const deployTitle = z.string().refine((v) => v === v.trim() && codePoints(v) >= 1 && codePoints(v) <= DEPLOY_LIMITS.titleCodePoints);
-const deployState = z.strictObject({
-  version: z.literal(1),
+const deployStateV2 = z.strictObject({
+  version: z.literal(2),
   code: z.strictObject({ rev: rowId, title: deployTitle, broken: z.boolean() }),
   local: z.strictObject({ running: z.boolean(), showing: rowId.nullable() }),
   github: z.strictObject({ rev: rowId.nullable(), title: z.string().refine((v) => codePoints(v) <= DEPLOY_LIMITS.titleCodePoints), broken: z.boolean() }),
@@ -233,6 +235,9 @@ const deployState = z.strictObject({
   if (state.github.rev !== null && state.github.rev > state.code.rev) fail("GitHub cannot be ahead of the laptop");
   if (state.local.showing !== null && (!state.local.running || state.local.showing > state.code.rev)) fail("Local server state invalid");
 });
+// Version 1 was the coffee-shop demo (title “ร้านกาแฟ”, drink orders). It is demo data, so an old document gets the new
+// initial state instead (the node keeps its view, scale, position and reveal); anything else is checked as version 2.
+const deployState = z.preprocess((value) => (typeof value === "object" && value !== null && (value as { version?: unknown }).version === 1 ? createInitialDeployState() : value), deployStateV2);
 const deploySimulator = z.strictObject({
   ...base, type: z.literal("deploy-simulator"), rotation: z.literal(0),
   scale: z.number().finite().min(0.5).max(4), reveal, view: z.enum(["local", "localEnv", "vercel", "env", "overall"]), state: deployState,

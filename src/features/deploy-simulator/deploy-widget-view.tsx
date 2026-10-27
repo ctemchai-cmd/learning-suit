@@ -23,9 +23,9 @@ const C = {
 const IDLE: Record<DeployView, string> = {
   local: "กด “เปิดเว็บในเครื่อง” แล้วลองให้เพื่อนเปิด localhost",
   vercel: "กด “ส่งโค้ดขึ้น” แล้วให้เพื่อนเปิดเว็บจริง ลองทำโค้ดพังดูด้วย",
-  localEnv: "สั่งกาแฟบนเว็บในเครื่อง แล้วลองเอากุญแจออกจาก .env.local",
-  env: "ส่งโค้ดขึ้นแล้วให้เพื่อนสั่งกาแฟ ดูว่ากุญแจอยู่ที่ไหน",
-  overall: "ให้เพื่อนสั่งกาแฟบนเว็บจริง แล้วดูเส้นทางทั้งหมด",
+  localEnv: "บันทึกรายจ่ายบนเว็บในเครื่อง แล้วลองเอากุญแจออกจาก .env.local",
+  env: "ส่งโค้ดขึ้นแล้วให้เพื่อนบันทึกรายจ่าย ดูว่ากุญแจอยู่ที่ไหน",
+  overall: "ให้เพื่อนบันทึกรายจ่ายบนเว็บจริง แล้วดูเส้นทางทั้งหมด",
 };
 
 type Marks = Map<string, { tone: MarkTone }>;
@@ -59,7 +59,7 @@ function CodeCard({ box, state, view, mark, font }: { box: Box; state: DeploySta
   const { code, github } = state;
   const pushed = github.rev === code.rev;
   return <Card box={box} title="โค้ด" mark={mark} fill="#1E293B" stroke="#334155" dark font={font}>
-    <Label x={box.x + 12} y={box.y + 36} width={box.w - 24} text={code.title} size={box.w > 150 ? 17 : 14} bold color="#F8FAFC" font={font} />
+    <Label x={box.x + 12} y={box.y + 36} width={box.w - 24} text={code.title} size={box.w > 150 ? 17 : box.w > 120 ? 14 : 11} bold color="#F8FAFC" font={font} />
     <Label x={box.x + 12} y={box.y + 60} width={box.w - 24} text={`รุ่น ${code.rev}`} size={12} color="#93C5FD" font={font} />
     {code.broken && <Label x={box.x + 12} y={box.y + 78} width={box.w - 24} text="✗ มีข้อผิดพลาด" size={12} bold color="#FCA5A5" font={font} />}
     {view !== "local" && view !== "localEnv" && <Label x={box.x + 12} y={box.y + (code.broken ? 96 : 78)} width={box.w - 24} text={pushed ? "✓ ส่งขึ้นแล้ว" : "ยังไม่ได้ส่งขึ้น"} size={11} color={pushed ? "#86EFAC" : "#FCD34D"} font={font} />}
@@ -74,7 +74,7 @@ function BrowserCard({ box, state, mark, waiting, font }: { box: Box; state: Dep
     <Rect x={box.x} y={box.y} width={box.w} height={26} cornerRadius={[10, 10, 0, 0]} fill="#E2E8F0" />
     <Label x={box.x + 10} y={box.y} width={box.w - 20} text="localhost:3000" size={11} color={C.muted} font={font} lineHeight={26} />
     {shown ? <>
-      <Label x={box.x + 10} y={box.y + 38} width={box.w - 20} text={state.code.title} size={box.w > 150 ? 18 : 13} bold color={C.title} font={font} />
+      <Label x={box.x + 10} y={box.y + 38} width={box.w - 20} text={state.code.title} size={box.w > 150 ? 18 : 11} bold color={C.title} font={font} />
       <Label x={box.x + 10} y={box.y + 62} width={box.w - 20} text={`รุ่น ${state.local.showing}`} size={12} color={C.muted} font={font} />
       {state.code.broken && <IconLabel x={box.x + 10} y={box.y + 82} width={box.w - 20} icon="alert" text="โค้ดมีข้อผิดพลาด" size={11} bold color={C.bad} font={font} />}
       {state.laptop.lines.map((line, index) => <Label key={index} x={box.x + 10} y={box.y + box.h - 26 - index * 18} width={box.w - 20} text={line} size={12} bold color={line.includes("✗") ? C.bad : C.ok} font={font} />)}
@@ -94,7 +94,9 @@ function FriendComputer({ frame, screen, state, mark, waiting, font }: { frame: 
     {friend.tone === "empty"
       ? <Label x={screen.x + 10} y={screen.y + 40} width={screen.w - 20} text="ยังไม่ได้เปิดเว็บ" size={13} color={C.muted} font={font} />
       : <>
-        <Label x={screen.x + 10} y={screen.y + 40} width={screen.w - 20} text={friend.title} size={17} bold color={friend.tone === "error" ? C.bad : C.title} font={font} />
+        {friend.tone === "ok"
+          ? <IconLabel x={screen.x + 10} y={screen.y + 40} width={screen.w - 20} icon="wallet" text={friend.title} size={friend.title.length > 12 ? 14 : 17} bold color={C.title} iconColor="#0F766E" font={font} />
+          : <Label x={screen.x + 10} y={screen.y + 40} width={screen.w - 20} text={friend.title} size={17} bold color={friend.tone === "error" ? C.bad : C.title} font={font} />}
         {friend.lines.map((line, index) => <Label key={index} x={screen.x + 10} y={screen.y + 68 + index * 22} width={screen.w - 20} text={line} size={12} color={friend.tone === "error" ? C.bad : C.text} font={font} />)}
       </>}
     {waiting && <AppSpinner box={{ x: screen.x, y: screen.y + 32, w: screen.w, h: screen.h - 32 }} kind={waiting} font={font} />}
@@ -148,7 +150,7 @@ function Cylinder({ box, title, lines, mark, font }: { box: Box; title: string; 
     <Ellipse x={cx} y={box.y + ry} radiusX={rx} radiusY={ry} fill="#D1FAE5" stroke={stroke} strokeWidth={style ? 3 : 2} />
     <Label x={box.x + 10} y={box.y + ry + 26} width={box.w - 20} text={title} size={14} bold color={C.title} align="center" font={font} />
     {lines.length === 0
-      ? <Label x={box.x + 10} y={box.y + ry + 52} width={box.w - 20} text="ยังไม่มีออเดอร์" size={12} color={C.muted} align="center" font={font} />
+      ? <Label x={box.x + 10} y={box.y + ry + 52} width={box.w - 20} text="ยังไม่มีรายการ" size={12} color={C.muted} align="center" font={font} />
       : lines.slice(-5).map((line, index) => <Label key={index} x={box.x + 16} y={box.y + ry + 52 + index * 20} width={box.w - 32} text={`• ${line}`} size={12} color={C.text} font={font} />)}
   </Group>;
 }
@@ -208,9 +210,9 @@ export function DeployWidgetView({ node, play: playing, fontFamily: font }: { no
 
     {scene.supabase && show("supabase") && view !== "overall" && <Cylinder box={scene.supabase} title="ฐานข้อมูล (Supabase)" lines={state.orders} mark={toneOf(marks, "supabase")} font={font} />}
     {view === "overall" && scene.supabase && show("supabase") && <Card box={scene.supabase} title="ฐานข้อมูล (Supabase)" mark={toneOf(marks, "supabase")} fill="#ECFDF5" stroke={C.dbStroke} font={font}>
-      <Card box={scene.orders!} title="ตารางออเดอร์" mark={toneOf(marks, "orders")} font={font}>
+      <Card box={scene.orders!} title="ตารางรายการ (transactions)" mark={toneOf(marks, "orders")} font={font}>
         {state.orders.length === 0
-          ? <Label x={scene.orders!.x + 12} y={scene.orders!.y + 40} width={scene.orders!.w - 24} text="ยังไม่มีออเดอร์" size={12} color={C.muted} font={font} />
+          ? <Label x={scene.orders!.x + 12} y={scene.orders!.y + 40} width={scene.orders!.w - 24} text="ยังไม่มีรายการ" size={12} color={C.muted} font={font} />
           : state.orders.slice(-4).map((line, index) => <Label key={index} x={scene.orders!.x + 12} y={scene.orders!.y + 40 + index * 26} width={scene.orders!.w - 24}
             text={`#${Math.max(0, state.orders.length - 4) + index + 1} ${line}`} size={14} color={C.text} font={font} />)}
       </Card>

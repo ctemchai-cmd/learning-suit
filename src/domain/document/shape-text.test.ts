@@ -69,7 +69,7 @@ describe("SHP-02: where the text sits and what fits", () => {
     expect(shapeTextStyle(rect())).toBeNull();
     expect(shapeTextStyle(rect({ text: "  \n " }))).toBeNull();
     expect(shapeTextStyle({ ...rect(), type: "arrow" } as unknown as CanvasNode)).toBeNull();
-    expect(shapeTextStyle(ellipse({ text: "ก" }))).toEqual({ text: "ก", fontSize: SHAPE_TEXT.fontSize, color: SHAPE_TEXT.color, bold: false, lineHeight: SHAPE_TEXT.lineHeight });
+    expect(shapeTextStyle(ellipse({ text: "ก" }))).toEqual({ text: "ก", fontSize: SHAPE_TEXT.fontSize, color: SHAPE_TEXT.color, bold: false, align: "center", lineHeight: SHAPE_TEXT.lineHeight });
     expect(shapeTextStyle(rect({ text: "ก", fontSize: 30, color: "#16A34A", bold: true }))).toMatchObject({ fontSize: 30, color: "#16A34A", bold: true });
   });
   it("withShapeText sets the text, and removes it (only it) when blank", () => {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, type JSX } from "react";
-import { Bug, Coffee, Globe, History, KeyRound, Pencil, Power, Rocket, Monitor, Send, Wand2 } from "lucide-react";
+import { Bug, Globe, History, KeyRound, Pencil, Power, Rocket, Monitor, Send, Wallet, Wand2 } from "lucide-react";
 import type { DocumentTransaction } from "@/domain/document/commands";
 import type { DeploySimulatorNode } from "@/domain/document/model";
 import type { DeployAction, DeployState, DeployView } from "@/domain/deploy/model";
@@ -22,11 +22,12 @@ function latestNode(slideId: string, nodeId: string): DeploySimulatorNode | null
 const ACTION_LABEL: Record<DeployAction["type"], string> = {
   "local.start": "เปิดเว็บในเครื่อง", "local.stop": "ปิดเว็บในเครื่อง", "code.edit": "แก้โค้ด", "friend.localhost": "เพื่อนเปิด localhost",
   push: "ส่งโค้ดขึ้น", "friend.visit": "เพื่อนเปิดเว็บ", rollback: "ย้อนรุ่น", "env.setVercel": "กุญแจบน Vercel", "env.setLocal": "กุญแจใน .env.local",
-  redeploy: "Deploy ใหม่", "friend.order": "เพื่อนสั่งกาแฟ", "local.order": "สั่งกาแฟในเครื่อง", "overall.prepare": "เตรียมเว็บให้พร้อม", reset: "เริ่มใหม่",
+  redeploy: "Deploy ใหม่", "friend.order": "เพื่อนบันทึกรายจ่าย", "local.order": "บันทึกรายจ่ายในเครื่อง", "overall.prepare": "เตรียมเว็บให้พร้อม", reset: "เริ่มใหม่",
 };
 /** Page titles for “แก้โค้ด” (never a revision number: the board shows “รุ่น N” separately). */
-const HEADLINES = ["ร้านกาแฟ เปิดแล้ว", "ร้านกาแฟ เมนูใหม่", "ร้านกาแฟ ลด 10%", "ร้านกาแฟ"];
-const MENU = ["ลาเต้", "อเมริกาโน่", "ชาเขียว", "มอคค่า"];
+const HEADLINES = ["รายรับรายจ่าย: มีกราฟ", "รายรับรายจ่าย: ธีมมืด", "รายรับรายจ่าย: สรุปเดือน", "แอปรายรับรายจ่าย"];
+/** Expense lines the buttons record, one after another (same vocabulary as the data simulator). */
+const EXPENSES = ["ค่ากาแฟ 60 บาท", "ค่าข้าวเที่ยง 80 บาท", "ค่ารถไฟฟ้า 45 บาท", "ค่าหนังสือ 250 บาท"];
 
 /** Small DOM panel of a deploy widget (plan 07 §4). Render with `key={node.id}`. */
 export function DeployPanel({ node, slideId, writable, transact }: {
@@ -94,7 +95,7 @@ export function DeployPanel({ node, slideId, writable, transact }: {
 type Props = { state: DeployState; writable: boolean; run: (action: DeployAction) => void };
 
 const nextHeadline = (state: DeployState) => HEADLINES.find((item) => item !== state.code.title) ?? HEADLINES[0];
-const nextItem = (state: DeployState) => MENU[state.orders.length % MENU.length];
+const nextItem = (state: DeployState) => EXPENSES[state.orders.length % EXPENSES.length];
 
 function ServerToggle({ state, writable, run }: Props) {
   return state.local.running
@@ -124,7 +125,7 @@ function LocalEnvControls(props: Props) {
     <Section title="ลองกด">
       <div className="space-y-1.5">
         {!state.local.running && <ServerToggle {...props} />}
-        <Action primary={state.local.running} icon={<Coffee size={14} />} disabled={!writable || !state.local.running} onClick={() => run({ type: "local.order", item })}>สั่ง{item}บนเว็บในเครื่อง</Action>
+        <Action primary={state.local.running} icon={<Wallet size={14} />} disabled={!writable || !state.local.running} onClick={() => run({ type: "local.order", item })}>บันทึก {item} บนเว็บในเครื่อง</Action>
       </div>
     </Section>
   </>;
@@ -172,8 +173,8 @@ function EnvControls(props: Props) {
         {state.github.rev === null || state.github.rev !== state.code.rev
           ? <Action primary icon={<Send size={14} />} disabled={!writable} onClick={() => run({ type: "push" })}>ส่งโค้ดขึ้น (Deploy)</Action>
           : <Action icon={<Rocket size={14} />} disabled={!writable} onClick={() => run({ type: "redeploy" })}>Deploy ใหม่</Action>}
-        <Action primary={state.github.rev !== null} icon={<Coffee size={14} />} disabled={!writable} onClick={() => run({ type: "friend.order", item })}>เพื่อนสั่ง{item}บนเว็บจริง</Action>
-        {state.local.running && <Action icon={<KeyRound size={14} />} disabled={!writable} onClick={() => run({ type: "local.order", item })}>สั่งบนเว็บในเครื่อง</Action>}
+        <Action primary={state.github.rev !== null} icon={<Wallet size={14} />} disabled={!writable} onClick={() => run({ type: "friend.order", item })}>เพื่อนบันทึก {item} บนเว็บจริง</Action>
+        {state.local.running && <Action icon={<KeyRound size={14} />} disabled={!writable} onClick={() => run({ type: "local.order", item })}>บันทึกบนเว็บในเครื่อง</Action>}
       </div>
     </Section>
   </>;
@@ -188,7 +189,7 @@ function OverallControls(props: Props) {
     <Section title="ลองกด">
       <div className="space-y-1.5">
         {!ready && <Action icon={<Wand2 size={14} />} disabled={!writable} onClick={() => run({ type: "overall.prepare" })}>เตรียมเว็บให้พร้อม</Action>}
-        <Action primary icon={<Coffee size={14} />} disabled={!writable} onClick={() => run({ type: "friend.order", item })}>เพื่อนสั่ง{item}บนเว็บจริง</Action>
+        <Action primary icon={<Wallet size={14} />} disabled={!writable} onClick={() => run({ type: "friend.order", item })}>เพื่อนบันทึก {item} บนเว็บจริง</Action>
       </div>
     </Section>
     <Section title="อัปเดตเว็บ">

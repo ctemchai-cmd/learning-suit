@@ -289,7 +289,7 @@ export default function PropertiesPanel({ slide, selected, writable, lockSelecte
         </div>;
       })()}
     </>}
-    {common("align") && <>
+    {common("align") && selected.every((node) => node.type === "text") && <>
       <p className="muted text-xs">ดับเบิลคลิกข้อความบนกระดานเพื่อแก้เนื้อหา · ลากจุดจับด้านข้างเพื่อปรับความกว้าง</p>
       <ColorField label="สีข้อความ" value={String(valueOf("color").value)} mixed={valueOf("color").mixed} disabled={!writable} onPreview={(value) => preview("color", value)} onCommit={(value) => commit("color", value)} onCancel={() => setPropertyPreview(null)} />
       <NumberField label="ขนาดตัวอักษร" value={Number(valueOf("fontSize").value)} mixed={valueOf("fontSize").mixed} min={LIMITS.fontSizeMin} max={LIMITS.fontSizeMax} step={1} disabled={!writable} onCommit={(value) => commit("fontSize", value)} />
@@ -299,17 +299,20 @@ export default function PropertiesPanel({ slide, selected, writable, lockSelecte
       {(() => {
         const bold = selected.filter((node) => node.type === "text").every((node) => node.type === "text" && node.bold);
         return <button type="button" className={`app-button w-full ${bold ? "!border-slate-800 !bg-slate-900 !text-white" : ""}`} aria-pressed={bold} disabled={!writable}
-          title="ตัวหนาทั้งกล่อง (⌘B)" onClick={() => commit("bold", !bold)}><Bold size={15} /> ตัวหนา</button>;
+          title="ตัวหนาทั้งกล่อง (⌘B ตอนไม่ได้เลือกข้อความ) · ตัวหนาเฉพาะคำ: เลือกคำตอนแก้ข้อความแล้วกด ⌘B" onClick={() => commit("bold", !bold)}><Bold size={15} /> ตัวหนา</button>;
       })()}
     </>}
-    {!common("align") && common("bold") && <>
+    {!(common("align") && selected.every((node) => node.type === "text")) && common("bold") && <>
       <p className="muted text-xs">ดับเบิลคลิกรูปทรง (หรือกด Enter) เพื่อแก้ข้อความข้างใน · ลบข้อความให้ว่างเพื่อเอาออก</p>
       <ColorField label="สีข้อความ" value={String(valueOf("color").value)} mixed={valueOf("color").mixed} disabled={!writable} onPreview={(value) => preview("color", value)} onCommit={(value) => commit("color", value)} onCancel={() => setPropertyPreview(null)} />
       <NumberField label="ขนาดตัวอักษร" value={Number(valueOf("fontSize").value)} mixed={valueOf("fontSize").mixed} min={LIMITS.fontSizeMin} max={LIMITS.fontSizeMax} step={1} disabled={!writable} onCommit={(value) => commit("fontSize", value)} />
+      {common("align") && <Segmented label="จัดแนว" value={valueOf("align").mixed ? null : valueOf("align").value as "left" | "center" | "right"} disabled={!writable}
+        options={[{ value: "left", label: "ชิดซ้าย", icon: <AlignLeft size={15} /> }, { value: "center", label: "กึ่งกลาง", icon: <AlignCenter size={15} /> }, { value: "right", label: "ชิดขวา", icon: <AlignRight size={15} /> }]}
+        onChange={(value) => commit("align", value)} />}
       {(() => {
         const bold = selected.every((node) => Boolean(read(node, "bold")));
         return <button type="button" className={`app-button w-full ${bold ? "!border-slate-800 !bg-slate-900 !text-white" : ""}`} aria-pressed={bold} disabled={!writable}
-          title="ตัวหนา" onClick={() => commit("bold", !bold)}><Bold size={15} /> ตัวหนา</button>;
+          title="ตัวหนาทั้งข้อความ · ตัวหนาเฉพาะคำ: เลือกคำตอนแก้ข้อความแล้วกด ⌘B" onClick={() => commit("bold", !bold)}><Bold size={15} /> ตัวหนา</button>;
       })()}
     </>}
     {common("rotation") && <NumberField label="มุมหมุน (องศา)" value={Number(rotation.value)} mixed={rotation.mixed} min={-360} max={360} step={1} disabled={!writable || selected.length > 1}

@@ -36,7 +36,7 @@ import { useLiveStore } from "@/features/live/live-store";
 import { movedViewMyself } from "@/features/live/live-session";
 import { tableCellAt } from "@/domain/document/table";
 import { expandToGroups } from "@/domain/document/groups";
-import { snapMove, type Guide } from "@/domain/document/snap";
+import { snapMove, snapPoint, snappingBypassed, type Guide } from "@/domain/document/snap";
 import { TransformOverlay } from "./transform-overlay";
 
 type Gesture =
@@ -56,7 +56,8 @@ type Gesture =
    */
   | { kind: "click"; pointerId: number; screen: Point; start: Point; hadPending: boolean };
 
-type StepDraft = { slideId: string; tool: StepTool; toolVersion: number; start: Point; current: Point };
+/** `guides`: the pink alignment guides of the point being placed (they live and die with the draft). */
+type StepDraft = { slideId: string; tool: StepTool; toolVersion: number; start: Point; current: Point; guides: Guide[] };
 type MovePreview = { ids: string[]; dx: number; dy: number; clone: boolean } | null;
 
 const boundsCache = new WeakMap<CanvasNode, Bounds>();
@@ -333,6 +334,9 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     return { x: topLeft.x - margin, y: topLeft.y - margin, width: size.width / camera.zoom + 2 * margin, height: size.height / camera.zoom + 2 * margin };
   }, [camera, size]);
 
+  /** Snapping targets for drawing shapes: every object in view (nothing is being moved, so nothing is excluded). */
+  const drawTargets = useMemo(() => slide.nodes.map(cachedBounds).filter((bounds) => intersects(bounds, viewportWorld)).slice(0, 400), [slide.nodes, viewportWorld]);
+
   const selectable = tool === "select" && !spaceDown;
   const hitWidth = 8 / camera.zoom;
   const selectedNodes = useMemo(() => displayNodes.filter((node) => selectedIds.includes(node.id) && !node.locked), [displayNodes, selectedIds]);
@@ -495,8 +499,19 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     let dx = world.x - current.world.x, dy = world.y - current.world.y;
     let lockX = false, lockY = false;
     if (event.shiftKey) { if (Math.abs(dx) >= Math.abs(dy)) { dy = 0; lockY = true; } else { dx = 0; lockX = true; } }
-    if (event.metaKey || event.ctrlKey || !current.moving) return { dx, dy, guides: [] as Guide[] };
+    if (snappingBypassed(event) || !current.moving) return { dx, dy, guides: [] as Guide[] };
     return snapMove(current.moving, current.others, dx, dy, { threshold: 6 / camera.zoom, grid: gridSpacing(camera.zoom).minor, lockX, lockY });
+  };
+
+  /**
+   * The point a shape tool places (first click, preview, second click): with Shift the constrained point (square /
+   * 45°) is used as is — snapping would break it; otherwise it snaps to other objects' edges/centres (pink guides) or the
+   * grid. Holding ⌘/Ctrl places it exactly.
+   */
+  const placedPoint = (stepTool: StepTool, start: Point | null, world: Point, event: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }): { point: Point; guides: Guide[] } => {
+    if (event.shiftKey && start) return { point: constrainPoint(stepTool, start, world), guides: [] };
+    if (snappingBypassed(event)) return { point: world, guides: [] };
+    return snapPoint(world, drawTargets, { threshold: 6 / camera.zoom, grid: gridSpacing(camera.zoom).minor });
   };
 
   /**
@@ -596,7 +611,8 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       return;
     }
     const pending = stepDraft && stepDraft.slideId === slide.id && stepDraft.tool === tool && stepDraft.toolVersion === toolVersion ? stepDraft : null;
-    beginGesture({ kind: "click", pointerId: event.pointerId, screen, start: pending?.start ?? world, hadPending: Boolean(pending) }, event);
+    const start = pending?.start ?? (isStepTool(tool) ? placedPoint(tool, null, world, event).point : world);
+    beginGesture({ kind: "click", pointerId: event.pointerId, screen, start, hadPending: Boolean(pending) }, event);
   };
 
   const lastCursorSent = useRef(0);
@@ -619,8 +635,8 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     if (!current) {
       if (stepDraft && stepDraft.slideId === slide.id && stepDraft.tool === tool && stepDraft.toolVersion === toolVersion) {
         const world = screenToWorld(screen, camera);
-        const point = event.shiftKey ? constrainPoint(stepDraft.tool, stepDraft.start, world) : world;
-        schedule(() => setStepDraft((draft) => draft ? { ...draft, current: point } : draft));
+        const { point, guides } = placedPoint(stepDraft.tool, stepDraft.start, world, event);
+        schedule(() => setStepDraft((draft) => draft ? { ...draft, current: point, guides } : draft));
       }
       return;
     }
@@ -687,8 +703,8 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       case "click": {
         // Pressed for the second click: the preview keeps following until the release.
         if (!isStepTool(tool) || !current.hadPending) return;
-        const point = event.shiftKey ? constrainPoint(tool, current.start, world) : world;
-        schedule(() => setStepDraft((draft) => draft ? { ...draft, current: point } : draft));
+        const { point, guides } = placedPoint(tool, current.start, world, event);
+        schedule(() => setStepDraft((draft) => draft ? { ...draft, current: point, guides } : draft));
         return;
       }
     }
@@ -757,12 +773,12 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       case "click": {
         const moved = Math.hypot(screen.x - current.screen.x, screen.y - current.screen.y);
         if (isStepTool(tool)) {
-          const point = event.shiftKey ? constrainPoint(tool, current.start, world) : world;
+          const { point } = placedPoint(tool, current.start, world, event);
           // Movement while pressed never matters (trackpads wobble; a habit of dragging still works):
           // the first click places the start, the second one finishes.
           if (current.hadPending) { finishStep(tool, current.start, point); return; }
           setSelectedIds([]);
-          setStepDraft({ slideId: slide.id, tool, toolVersion, start: current.start, current: world });
+          setStepDraft({ slideId: slide.id, tool, toolVersion, start: current.start, current: current.start, guides: [] });
           return;
         }
         if (moved > 6) return;
@@ -974,7 +990,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
               stroke="#2563EB" strokeWidth={1.5 / camera.zoom} dash={[5 / camera.zoom, 4 / camera.zoom]} />
           </Group>;
         })}
-        {guides.map((guide, index) => <Line key={`guide-${index}`} stroke="#EC4899" strokeWidth={1 / camera.zoom}
+        {[...guides, ...(activeStep?.guides ?? [])].map((guide, index) => <Line key={`guide-${index}`} stroke="#EC4899" strokeWidth={1 / camera.zoom}
           points={guide.axis === "x" ? [guide.at, guide.from, guide.at, guide.to] : [guide.from, guide.at, guide.to, guide.at]} />)}
         {marquee && <Rect x={Math.min(marquee.start.x, marquee.current.x)} y={Math.min(marquee.start.y, marquee.current.y)}
           width={Math.abs(marquee.current.x - marquee.start.x)} height={Math.abs(marquee.current.y - marquee.start.y)}
@@ -983,6 +999,15 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     </Stage>}
     {showHandles && <TransformOverlay nodes={handleNodes} camera={camera} metrics={konvaFontMetrics} containerRef={containerRef}
       onPreview={setTransformPreview} onGesture={setGestureActive}
+      snap={{
+        others: () => slide.nodes.filter((node) => !selectedIds.includes(node.id)).map(cachedBounds).filter((bounds) => intersects(bounds, viewportWorld)).slice(0, 400),
+        grid: gridSpacing(camera.zoom).minor,
+        attaches: (node, handle, world) => {
+          const other = node.type === "line" || node.type === "arrow" ? (handle === "start" ? node.endBinding : node.startBinding)?.nodeId : undefined;
+          return Boolean(dropTarget(slide.nodes, world, camera.zoom, other).target);
+        },
+        onGuides: setGuides,
+      }}
       onCommit={(nodes) => transact({ label: "ปรับขนาด/หมุนวัตถุ", affectedSlideId: slide.id, commands: [{ type: "nodes.replace", slideId: slide.id, nodes: nodes.map(rebindDraggedEnds) }] })} />}
     {showHandles && tool === "select" && !transformPreview && !nudgePreview && selectedNodes.length === 1 && CONNECTABLE.has(selectedNodes[0].type) && (() => {
       const stored = slide.nodes.find((node) => node.id === selectedNodes[0].id);

@@ -10,7 +10,9 @@ import { SshWidgetView } from "@/features/ssh-simulator/ssh-widget-view";
 import type { FlowPlay } from "@/features/flow/flow-session";
 import { GitWidgetView } from "@/features/git-simulator/git-widget-view";
 import type { GitPreview, GitTab, GitTransferAnimation } from "@/features/git-simulator/session-store";
-import { CANVAS_FONT, displayLines } from "./font-metrics";
+import { CANVAS_FONT, displayLines, richDisplayLines, usesRichLines } from "./font-metrics";
+import { RichTextBody } from "./rich-text-view";
+import { plainText } from "@/domain/document/rich-text";
 import { useAssetImage } from "./image-cache";
 import { StencilBody } from "./stencil-view";
 import { TableBody } from "./table-view";
@@ -47,9 +49,16 @@ function ShapeLabel({ node }: { node: Shape }) {
   const style = shapeTextStyle(node);
   if (!style) return null;
   const box = shapeTextBox(node);
-  const lines = displayLines(style.text, box.width, style.fontSize, style.bold, box.height / (style.fontSize * style.lineHeight));
+  const maxLines = box.height / (style.fontSize * style.lineHeight);
+  if (usesRichLines(style.text, style.bold)) {
+    // some words bold: drawn run by run, vertically centred like the plain label
+    const lines = richDisplayLines(style.text, box.width, style.fontSize, maxLines);
+    const top = box.y + (box.height - lines.length * style.fontSize * style.lineHeight) / 2;
+    return <RichTextBody lines={lines} x={box.x} y={top} width={box.width} fontSize={style.fontSize} lineHeight={style.lineHeight} color={style.color} align={style.align} />;
+  }
+  const lines = displayLines(plainText(style.text), box.width, style.fontSize, style.bold, maxLines);
   return <Text x={box.x} y={box.y} width={box.width} height={box.height} text={lines.join("\n")} fontSize={style.fontSize} fontFamily={CANVAS_FONT}
-    fontStyle={style.bold ? "bold" : "normal"} lineHeight={style.lineHeight} fill={style.color} align="center" verticalAlign="middle" wrap="none" listening={false} />;
+    fontStyle={style.bold ? "bold" : "normal"} lineHeight={style.lineHeight} fill={style.color} align={style.align} verticalAlign="middle" wrap="none" listening={false} />;
 }
 
 /** Body of a node in its local coordinate frame (the caller positions/rotates the Group). */
@@ -79,7 +88,10 @@ export function NodeBody({ node, hitWidth = 8, git, flow }: { node: CanvasNode; 
       return <Line points={flat(node.points)} stroke={node.stroke} strokeWidth={node.strokeWidth} dash={dashFor(node.strokeStyle, node.strokeWidth)}
         tension={0} lineCap="round" lineJoin="round" hitStrokeWidth={Math.max(node.strokeWidth, hitWidth)} />;
     case "text":
-      return <Text text={displayLines(node.text, node.width, node.fontSize, Boolean(node.bold)).join("\n")} width={node.width} fontSize={node.fontSize} fontFamily={CANVAS_FONT}
+      if (usesRichLines(node.text, node.bold)) {
+        return <RichTextBody lines={richDisplayLines(node.text, node.width, node.fontSize)} width={node.width} fontSize={node.fontSize} lineHeight={node.lineHeight} color={node.color} align={node.align} hit />;
+      }
+      return <Text text={displayLines(plainText(node.text), node.width, node.fontSize, Boolean(node.bold)).join("\n")} width={node.width} fontSize={node.fontSize} fontFamily={CANVAS_FONT}
         fontStyle={node.bold ? "bold" : "normal"} lineHeight={node.lineHeight} fill={node.color} align={node.align} wrap="none" />;
     case "image":
       return <ImageBody node={node} hitWidth={hitWidth} />;

@@ -2,6 +2,7 @@ import { isWidgetNode, widgetNodeSize, type Bounds, type CanvasNode, type Point,
 import { tableLayout } from "./table";
 import { codeLayout } from "./code";
 import { connectorPath } from "./connector-route";
+import { plainText } from "./rich-text";
 
 export interface FontMetrics {
   measureText(node: TextNode): { width: number; height: number };
@@ -10,7 +11,7 @@ export interface FontMetrics {
 }
 export const fallbackFontMetrics: FontMetrics = {
   measureText(node) {
-    const lines = node.text.split("\n");
+    const lines = plainText(node.text).split("\n");
     const charactersPerLine = Math.max(1, Math.floor(node.width / (node.fontSize * 0.65)));
     const wrapped = lines.reduce((count, line) => count + Math.max(1, Math.ceil([...line].length / charactersPerLine)), 0);
     return { width: node.width, height: wrapped * node.fontSize * node.lineHeight };

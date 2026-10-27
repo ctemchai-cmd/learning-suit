@@ -1,7 +1,7 @@
 import type { FontMetrics } from "./geometry";
 import type { CanvasNode, EllipseNode, Point, RectNode, TextNode } from "./model";
 
-// Text inside a rectangle or ellipse (plan 03 §shape text): centred, wrapped to the shape's inner box, vertically
+// Text inside a rectangle or ellipse (plan 03 §shape text): centred by default (or left / right), wrapped to the shape's inner box, vertically
 // centred. A rectangle's box is the shape less a padding; an ellipse's is the rectangle inscribed in it (about 70%
 // of each side — the true inscribed square is 70.7%), so the text never leaves the curve.
 // Longer text than fits is cut with "…" on the board (the editor shows all of it while typing).
@@ -33,9 +33,9 @@ export function shapeTextBox(node: Pick<Shape, "type" | "width" | "height" | "st
 }
 
 /** The text a shape shows and how (defaults for what was never set); null when it has none. */
-export function shapeTextStyle(node: CanvasNode): { text: string; fontSize: number; color: string; bold: boolean; lineHeight: number } | null {
+export function shapeTextStyle(node: CanvasNode): { text: string; fontSize: number; color: string; bold: boolean; align: "left" | "center" | "right"; lineHeight: number } | null {
   if (!isShape(node) || !node.text || !node.text.trim()) return null;
-  return { text: node.text, fontSize: node.fontSize ?? SHAPE_TEXT.fontSize, color: node.color ?? SHAPE_TEXT.color, bold: Boolean(node.bold), lineHeight: SHAPE_TEXT.lineHeight };
+  return { text: node.text, fontSize: node.fontSize ?? SHAPE_TEXT.fontSize, color: node.color ?? SHAPE_TEXT.color, bold: Boolean(node.bold), align: node.align ?? "center", lineHeight: SHAPE_TEXT.lineHeight };
 }
 
 /** The shape with `text` set (or, when it is blank, removed — the other text settings stay for next time). */
@@ -52,7 +52,7 @@ export function measureShapeText(node: Shape, metrics: FontMetrics): { lineBox: 
   const box = shapeTextBox(node);
   const probe: TextNode = {
     id: node.id, type: "text", x: 0, y: 0, rotation: 0, opacity: 1, locked: false, text: style.text, width: box.width, fontFamily: "Noto Sans Thai",
-    fontSize: style.fontSize, lineHeight: style.lineHeight, color: style.color, align: "center", bold: style.bold,
+    fontSize: style.fontSize, lineHeight: style.lineHeight, color: style.color, align: style.align, bold: style.bold,
   };
   const { height } = metrics.measureText(probe);
   return { lineBox: box, textHeight: height, overflow: height > box.height + 0.5 };

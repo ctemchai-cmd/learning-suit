@@ -9,7 +9,7 @@ import { konvaFontMetrics } from "@/features/canvas/font-metrics";
 
 export type Field = "opacity" | "stroke" | "strokeWidth" | "strokeStyle" | "fill" | "headLength" | "headWidth" | "color" | "fontSize" | "align" | "rotation" | "label" | "headerFill" | "header" | "bold" | "language" | "theme" | "lineNumbers" | "route";
 
-/** A rectangle / ellipse that has text in it: it also has the text settings (size, colour, bold). */
+/** A rectangle / ellipse that has text in it: it also has the text settings (size, colour, bold, alignment). */
 const hasShapeText = (node: CanvasNode) => shapeTextStyle(node) !== null;
 const STROKED = new Set(["rectangle", "ellipse", "line", "arrow", "pen", "highlighter"]);
 export const supports = (node: CanvasNode, field: Field): boolean => {
@@ -24,7 +24,7 @@ export const supports = (node: CanvasNode, field: Field): boolean => {
     case "color": return node.type === "text" || node.type === "stencil" || node.type === "table" || hasShapeText(node);
     case "fontSize": return node.type === "text" || node.type === "table" || node.type === "code" || hasShapeText(node);
     case "language": case "theme": case "lineNumbers": return node.type === "code";
-    case "align": return node.type === "text";
+    case "align": return node.type === "text" || hasShapeText(node);
     case "bold": return node.type === "text" || hasShapeText(node);
     case "label": return node.type === "stencil";
     case "headerFill": return node.type === "table";
@@ -35,7 +35,7 @@ export const supports = (node: CanvasNode, field: Field): boolean => {
 export function fieldValue(node: CanvasNode, field: Field): unknown {
   const stored = (node as unknown as Record<string, unknown>)[field];
   if (stored !== undefined || (node.type !== "rectangle" && node.type !== "ellipse")) return stored;
-  return field === "fontSize" ? SHAPE_TEXT.fontSize : field === "color" ? SHAPE_TEXT.color : field === "bold" ? false : stored;
+  return field === "fontSize" ? SHAPE_TEXT.fontSize : field === "color" ? SHAPE_TEXT.color : field === "bold" ? false : field === "align" ? "center" : stored;
 }
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 

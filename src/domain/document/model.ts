@@ -27,7 +27,7 @@ export type NodeBase = {
  * Optional text inside a rectangle or ellipse (double-click to type): centred, wrapped to the shape's inner box.
  * Missing = no text; size/colour/bold missing = the defaults of shape text (plan 03 §shape text).
  */
-export type ShapeText = { text?: string; fontSize?: number; color?: string; bold?: boolean };
+export type ShapeText = { text?: string; fontSize?: number; color?: string; bold?: boolean; /** Missing = centred. */ align?: "left" | "center" | "right" };
 export type RectNode = NodeBase & StrokeStyle & ShapeText & {
   type: "rectangle";
   width: number;
@@ -85,7 +85,7 @@ export type TextNode = NodeBase & {
   lineHeight: number;
   color: string;
   align: "left" | "center" | "right";
-  /** Whole text box in bold (missing in older documents = normal). */
+  /** Whole text box in bold (missing in older documents = normal). Single words can be bold too: `**word**` inside `text` (plan 03). */
   bold?: boolean;
 };
 export type ImageNode = NodeBase & {

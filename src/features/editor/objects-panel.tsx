@@ -7,10 +7,11 @@ import type { DocumentTransaction } from "@/domain/document/commands";
 import { hasZOrderChange, type ZOrderAction } from "@/domain/document/z-order";
 import { stencilSpec } from "@/domain/document/stencils";
 import { STENCIL_DOM_ICON } from "./stencil-picker";
+import { plainText } from "@/domain/document/rich-text";
 import { CODE_LABEL } from "@/domain/document/code";
 
 export function nodeLabel(node: CanvasNode): string {
-  if (node.type === "text") return `text: ${[...(node.text.split("\n")[0] ?? "")].slice(0, 28).join("")}`;
+  if (node.type === "text") return `text: ${[...(plainText(node.text).split("\n")[0] ?? "")].slice(0, 28).join("")}`;
   if (node.type === "git-simulator") return "git-simulator";
   if (node.type === "data-simulator") return "data-simulator";
   if (node.type === "deploy-simulator") return "deploy-simulator";

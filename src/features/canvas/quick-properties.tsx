@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
-import { Bold, Code2, GripVertical, Lock, Minus, Plus, Trash2 } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, Bold, Code2, GripVertical, Lock, Minus, Plus, Trash2 } from "lucide-react";
 import type { Bounds, CanvasNode } from "@/domain/document/model";
 import { liveRole, useEditorStore } from "@/features/editor/store";
 import { applyField, fieldValue, supports, type Field } from "@/features/editor/property-fields";
@@ -13,7 +13,12 @@ import { applyField, fieldValue, supports, type Field } from "@/features/editor/
 
 const COLOURS = ["#1F2937", "#DC2626", "#EA580C", "#CA8A04", "#16A34A", "#0891B2", "#2563EB", "#7C3AED", "#DB2777", "#FFFFFF"];
 const WIDTHS = [1, 2, 3, 5, 8];
-type Popover = "stroke" | "fill" | "color" | "headerFill" | "width" | "route";
+type Popover = "stroke" | "fill" | "color" | "headerFill" | "width" | "route" | "align";
+const ALIGNS = [
+  { value: "left", label: "ชิดซ้าย", icon: <AlignLeft size={15} /> },
+  { value: "center", label: "กึ่งกลาง", icon: <AlignCenter size={15} /> },
+  { value: "right", label: "ชิดขวา", icon: <AlignRight size={15} /> },
+] as const;
 const ROUTES = [
   { value: "straight", label: "เส้นตรง", path: "M3 15L15 3" },
   { value: "elbow", label: "เส้นหักฉาก", path: "M3 15H9V3H15" },
@@ -202,6 +207,15 @@ export function QuickProperties({ nodes, slideId, selection, viewport }: {
       <BarButton label="ตัวอักษรเล็กลง" onClick={() => stepFont(-1)}><span className="flex items-center text-xs font-bold">A<Minus size={10} /></span></BarButton>
       <BarButton label="ตัวอักษรใหญ่ขึ้น" onClick={() => stepFont(1)}><span className="flex items-center text-sm font-bold">A<Plus size={10} /></span></BarButton>
     </>}
+    {all("align") && (() => {
+      const current = ALIGNS.find((option) => option.value === (value("align") || "center")) ?? ALIGNS[1];
+      return <div className="relative">
+        <BarButton label={`จัดแนวข้อความ: ${current.label}`} active={popover === "align"} onClick={() => setPopover(popover === "align" ? null : "align")}>{current.icon}</BarButton>
+        {pop("align", <div className="flex gap-1">{ALIGNS.map((option) => <button key={option.value} type="button" aria-label={option.label} title={option.label} aria-pressed={option.value === current.value}
+          className={`grid h-8 w-8 place-items-center rounded-md text-slate-700 ${option.value === current.value ? "bg-slate-900 text-white" : "hover:bg-slate-100"}`}
+          onClick={() => { commit("align", option.value); setPopover(null); }}>{option.icon}</button>)}</div>)}
+      </div>;
+    })()}
     {all("bold") && <BarButton label="ตัวหนา (⌘B)" active={nodes.every((node) => Boolean(fieldValue(node, "bold")))}
       onClick={() => commit("bold", !nodes.every((node) => Boolean(fieldValue(node, "bold"))))}><Bold size={15} /></BarButton>}
     {all("theme") && <BarButton label={value("theme") === "dark" ? "ธีมโค้ด: มืด (กดเป็นสว่าง)" : "ธีมโค้ด: สว่าง (กดเป็นมืด)"} active={value("theme") === "dark"}

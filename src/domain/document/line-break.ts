@@ -18,14 +18,14 @@ export const defaultSegment: Segment = (() => {
 })();
 
 /** Characters of a word that may be cut apart (a mark stays with the letter before it). */
-const clusters = (word: string): string[] => {
+export const clusters = (word: string): string[] => {
   const out: string[] = [];
   for (const char of word) {
     if (out.length && /^\p{M}$/u.test(char)) out[out.length - 1] += char; else out.push(char);
   }
   return out;
 };
-const blank = (text: string) => /^\s+$/.test(text);
+export const blank = (text: string) => /^\s+$/.test(text);
 
 /** Breaks `text` into lines no wider than `maxWidth`: at word boundaries, a single word wider than that by character. Explicit "\n" kept. */
 export function breakLines(text: string, maxWidth: number, measure: Measure, segment: Segment = defaultSegment): string[] {

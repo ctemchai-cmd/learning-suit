@@ -856,3 +856,80 @@ test("CAN-30: a pointer release that never reached the board does not make the n
   await page.mouse.click(box.cx + 220, box.cy + 120);
   await expect.poll(async () => ((await readDraft(page))!.content.document.slides[0].nodes as { type: string }[]).filter((node) => node.type === "rectangle").length).toBe(1);
 });
+
+type SnapRect = { x: number; y: number; width: number; height: number; strokeWidth: number };
+const snapRects = async (page: import("playwright/test").Page) =>
+  ((await readDraft(page))!.content.document.slides[0].nodes as unknown as (SnapRect & { type: string })[]).filter((node) => node.type === "rectangle");
+const pinkGuides = (page: import("playwright/test").Page) => page.evaluate(() => {
+  const stage = (window as unknown as { Konva: { stages: { find: (selector: string) => { attrs: { stroke?: string } }[] }[] } }).Konva.stages[0];
+  return stage.find("Line").filter((line) => line.attrs.stroke === "#EC4899").length;
+});
+
+test("CAN-34: drawing snaps the point being placed — the second click lands on another object's edge (pink guide while moving), otherwise on the grid; ⌘ held places it exactly", async ({ page }) => {
+  await createProject(page, "วาดแล้วดึงเข้าแนว");
+  const box = await stageBox(page);
+  await drawRect(page, box.cx - 200, box.cy - 60, box.cx - 100, box.cy + 20);
+  const [a] = await snapRects(page);
+  const aRight = a.x + a.width + a.strokeWidth / 2; // the object's outer edge, what others line up with
+
+  // Second click 3 px short of A's right edge: it lands exactly on it, a guide shows while the pointer is still down-free.
+  await page.getByRole("button", { name: "สี่เหลี่ยม", exact: true }).click();
+  await page.mouse.click(box.cx + 300, box.cy + 100);
+  await page.mouse.move(box.cx + aRight - 40, box.cy + 220, { steps: 4 });
+  await page.mouse.move(box.cx + Math.round(aRight) + 3, box.cy + 223, { steps: 3 });
+  await expect.poll(() => pinkGuides(page)).toBeGreaterThan(0);
+  await page.mouse.click(box.cx + Math.round(aRight) + 3, box.cy + 223);
+  await expect.poll(async () => (await snapRects(page)).length).toBe(2);
+  await expect.poll(() => pinkGuides(page)).toBe(0);
+  const b = (await snapRects(page))[1];
+  expect(b.x).toBeCloseTo(aRight, 5);
+  // Far from any object the corner lands on the grid (10 units).
+  for (const value of [b.y, b.y + b.height, b.x + b.width]) expect(Math.abs(Math.round(value / 10) * 10 - value)).toBeLessThan(1e-6);
+
+  // ⌘ held: exactly where the pointer is, no guide.
+  await page.getByRole("button", { name: "สี่เหลี่ยม", exact: true }).click();
+  await page.mouse.click(box.cx + 300, box.cy - 200);
+  await page.keyboard.down("Meta");
+  await page.mouse.move(box.cx + Math.round(aRight) + 3, box.cy - 143, { steps: 4 });
+  expect(await pinkGuides(page)).toBe(0);
+  await page.mouse.click(box.cx + Math.round(aRight) + 3, box.cy - 143);
+  await page.keyboard.up("Meta");
+  await expect.poll(async () => (await snapRects(page)).length).toBe(3);
+  const c = (await snapRects(page))[2];
+  expect(c.x).toBeCloseTo(Math.round(aRight) + 3, 5);
+  expect(c.y + c.height - (box.cy - 143 - box.cy)).toBeCloseTo(0, 5);
+});
+
+test("CAN-35: resizing snaps the moved edge to another object's edge (pink guide) or the grid; ⌘ held resizes freely", async ({ page }) => {
+  await createProject(page, "ปรับขนาดแล้วดึงเข้าแนว");
+  const box = await stageBox(page);
+  await drawRect(page, box.cx + 250, box.cy - 60, box.cx + 350, box.cy + 20); // the other box (A)
+  await drawRect(page, box.cx - 150, box.cy + 100, box.cx - 50, box.cy + 160); // the one resized (B), selected afterwards
+  const [a, b0] = await snapRects(page);
+  const aLeft = a.x - a.strokeWidth / 2;
+  const east = page.getByRole("button", { name: "ปรับขนาด ด้านขวา" });
+  const grab = async () => { const rect = (await east.boundingBox())!; return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; };
+
+  let from = await grab();
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(box.cx + aLeft - 60, from.y, { steps: 5 });
+  await page.mouse.move(box.cx + Math.round(aLeft) - 3, from.y, { steps: 4 });
+  await expect.poll(() => pinkGuides(page)).toBeGreaterThan(0);
+  await page.mouse.up();
+  await expect.poll(() => pinkGuides(page)).toBe(0);
+  await expect.poll(async () => { const b = (await snapRects(page))[1]; return b.x + b.width; }).toBeCloseTo(aLeft, 5);
+  expect((await snapRects(page))[1].x).toBeCloseTo(b0.x, 5);
+
+  // ⌘/Ctrl held after the press: the edge follows the pointer exactly (no grid, no guide).
+  from = await grab();
+  const before = (await snapRects(page))[1];
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.keyboard.down("Meta");
+  await page.mouse.move(from.x - 53, from.y, { steps: 4 });
+  expect(await pinkGuides(page)).toBe(0);
+  await page.mouse.up();
+  await page.keyboard.up("Meta");
+  await expect.poll(async () => (await snapRects(page))[1].width).toBeCloseTo(before.width - 53, 5);
+});

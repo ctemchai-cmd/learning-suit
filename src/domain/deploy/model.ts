@@ -1,7 +1,7 @@
 import type { FlowFrame } from "../data/model";
 
 // Deploy teaching simulator (plan 07 §4). Pure types: no React, no Konva, no network.
-// The coffee-shop website travels: laptop → (local server) → GitHub → Vercel → public URL → a friend's computer,
+// The income/expense tracker website travels: laptop → (local server) → GitHub → Vercel → public URL → a friend's computer,
 // and in the last steps the live site talks to the database with a secret key.
 
 /** Lesson steps: open locally → the key in .env.local → deploy on Vercel → the key on Vercel → the whole system. */
@@ -11,7 +11,7 @@ export type DeployView = "local" | "localEnv" | "vercel" | "env" | "overall";
 export type Deployment = { id: number; rev: number; title: string; ok: boolean; hasKey: boolean };
 
 export type DeployState = {
-  version: 1;
+  version: 2;
   /** The code on the teacher's laptop. `rev` grows on every edit; `broken` = contains a mistake the build will catch. */
   code: { rev: number; title: string; broken: boolean };
   /** The local development server (localhost). `showing` = code revision the laptop browser shows. */
@@ -28,7 +28,7 @@ export type DeployState = {
   friend: { title: string; lines: string[]; tone: "empty" | "ok" | "error" };
   /** What the laptop browser shows when the site talks to the database locally. */
   laptop: { lines: string[] };
-  /** Orders saved in the database through the site. */
+  /** Transactions (income/expense lines, e.g. “ค่ากาแฟ 60 บาท”) saved in the database through the site; the field keeps its old name `orders`. */
   orders: string[];
 };
 
@@ -62,4 +62,4 @@ export type DeployTransition = {
 
 export const DEPLOY_LIMITS = { titleCodePoints: 40, deployments: 12, orders: 10 } as const;
 /** Public address of the simulated site (display only). */
-export const SITE_URL = "coffee-shop.vercel.app";
+export const SITE_URL = "money-app.vercel.app";
