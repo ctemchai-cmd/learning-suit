@@ -194,6 +194,7 @@ function recoveryStillApplies(edit: PendingEdit, content: ProjectContent): boole
     if (!edit.before) return !node;
     return Boolean(node && !node.locked && JSON.stringify(node) === JSON.stringify(edit.before));
   }
+  if (edit.kind === "shape") return Boolean(node && !node.locked && JSON.stringify(node) === JSON.stringify(edit.before));
   if (edit.kind === "code") return Boolean(node && !node.locked && JSON.stringify(node) === JSON.stringify(edit.before));
   if (!node || node.type !== "git-simulator" || node.locked) return false;
   const working = node.state.machines[edit.machine].working;

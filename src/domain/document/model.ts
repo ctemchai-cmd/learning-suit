@@ -23,13 +23,18 @@ export type NodeBase = {
   /** Objects sharing a group ID are selected, moved and scaled together (one level, no nesting). */
   groupId?: string;
 };
-export type RectNode = NodeBase & StrokeStyle & {
+/**
+ * Optional text inside a rectangle or ellipse (double-click to type): centred, wrapped to the shape's inner box.
+ * Missing = no text; size/colour/bold missing = the defaults of shape text (plan 03 §shape text).
+ */
+export type ShapeText = { text?: string; fontSize?: number; color?: string; bold?: boolean };
+export type RectNode = NodeBase & StrokeStyle & ShapeText & {
   type: "rectangle";
   width: number;
   height: number;
   fill: string;
 };
-export type EllipseNode = NodeBase & StrokeStyle & {
+export type EllipseNode = NodeBase & StrokeStyle & ShapeText & {
   type: "ellipse";
   width: number;
   height: number;
@@ -105,7 +110,7 @@ export type StencilNode = NodeBase & {
   color: string;
   label: string;
 };
-export const CODE_LANGUAGES = ["python", "javascript", "sql", "html", "plain"] as const;
+export const CODE_LANGUAGES = ["python", "javascript", "sql", "html", "terminal", "plain"] as const;
 export type CodeLanguage = (typeof CODE_LANGUAGES)[number];
 /** Code block (plan 03 §code): monospace, coloured by language; its size follows the code and the font size. */
 export type CodeNode = NodeBase & {

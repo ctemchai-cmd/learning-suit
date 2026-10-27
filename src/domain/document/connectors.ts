@@ -20,8 +20,11 @@ const rotate = (point: Point, degrees: number): Point => {
 
 const SIDE_AT: Record<ConnectorSide, Point> = { n: { x: 0.5, y: 0 }, e: { x: 1, y: 0.5 }, s: { x: 0.5, y: 1 }, w: { x: 0, y: 0.5 } };
 
-/** A connection point: `x`/`y` 0–1 across the object's frame; `row` = the table row it belongs to. */
-export type ConnectionSpot = Point & { row?: number };
+/**
+ * A connection point: `x`/`y` 0–1 across the object's frame; `row` = the table row it belongs to; `minor` = one of the
+ * extra points between the main ones (eighths of a side, 15° steps round an ellipse) — small objects show only the main ones.
+ */
+export type ConnectionSpot = Point & { row?: number; minor?: true };
 
 /** Left (x 0) or right (x 1) end of a table row, `row` clamped to the rows there are. */
 function rowSpot(node: Extract<CanvasNode, { type: "table" }>, row: number, x: number, metrics: FontMetrics): ConnectionSpot {
@@ -31,24 +34,50 @@ function rowSpot(node: Extract<CanvasNode, { type: "table" }>, row: number, x: n
   return { x: x >= 0.5 ? 1 : 0, y: Math.min(1, Math.max(0, y)), row: index };
 }
 
+/** Points per side of a box (every 1/8 of the side; the quarter points and the middle are the main ones). */
+export const POINTS_PER_SIDE = 7;
+/** Points round an ellipse (every 15°; every second one — the 30° points — is a main one). */
+export const ELLIPSE_POINTS = 24;
+/** On-screen distance below which the extra points of a selected object are not offered (drop targets use them all). */
+export const MIN_POINT_GAP_PX = 16;
+
 /**
- * Connection points of an object: three per side (quarter, middle, three quarters) for boxes, every 30° round an
- * ellipse; a table or class box has one at each end of every row (draw.io style) plus three on top and bottom.
- * Dragging from one / dropping on one attaches there.
+ * Connection points of an object: seven per side (every 1/8) for boxes, every 15° round an ellipse; a table or class box
+ * has one at each end of every row (draw.io style) plus seven on top and bottom. The quarter points, the middles and
+ * the 30° points are the ones older documents were bound to (they stay valid). Dragging from one / dropping on one attaches there.
  */
 export function connectionPoints(node: CanvasNode, metrics: FontMetrics): ConnectionSpot[] {
-  if (node.type === "ellipse") return Array.from({ length: 12 }, (_, index) => {
-    const angle = index * Math.PI / 6;
-    return { x: 0.5 + 0.5 * Math.cos(angle), y: 0.5 + 0.5 * Math.sin(angle) };
+  if (node.type === "ellipse") return Array.from({ length: ELLIPSE_POINTS }, (_, index) => {
+    const angle = index * 2 * Math.PI / ELLIPSE_POINTS;
+    const spot: ConnectionSpot = { x: 0.5 + 0.5 * Math.cos(angle), y: 0.5 + 0.5 * Math.sin(angle) };
+    if (index % 2) spot.minor = true;
+    return spot;
   });
-  const steps = [0.25, 0.5, 0.75];
+  const steps = Array.from({ length: POINTS_PER_SIDE }, (_, index) => (index + 1) / (POINTS_PER_SIDE + 1));
+  const along = (t: number, spot: (t: number) => Point): ConnectionSpot => {
+    const point: ConnectionSpot = spot(t);
+    if (Math.abs(t * 4 - Math.round(t * 4)) > 1e-9) point.minor = true;
+    return point;
+  };
+  const side = (spot: (t: number) => Point) => steps.map((t) => along(t, spot));
   if (node.type === "table") return [
-    ...steps.map((t) => ({ x: t, y: 0 })),
+    ...side((t) => ({ x: t, y: 0 })),
     ...node.rows.map((_, row) => rowSpot(node, row, 1, metrics)),
-    ...steps.map((t) => ({ x: 1 - t, y: 1 })),
+    ...side((t) => ({ x: 1 - t, y: 1 })),
     ...node.rows.map((_, row) => rowSpot(node, row, 0, metrics)).reverse(),
   ];
-  return [...steps.map((t) => ({ x: t, y: 0 })), ...steps.map((t) => ({ x: 1, y: t })), ...steps.map((t) => ({ x: 1 - t, y: 1 })), ...steps.map((t) => ({ x: 0, y: 1 - t }))];
+  return [...side((t) => ({ x: t, y: 0 })), ...side((t) => ({ x: 1, y: t })), ...side((t) => ({ x: 1 - t, y: 1 })), ...side((t) => ({ x: 0, y: 1 - t }))];
+}
+
+/**
+ * The points offered as draggable dots on a selected object at this zoom: the extra points are left out where they
+ * would sit closer than `minGap` screen pixels to the next point (small objects keep the quarters and the middles).
+ */
+export function offeredConnectionPoints(node: CanvasNode, metrics: FontMetrics, zoom: number, minGap = MIN_POINT_GAP_PX): ConnectionSpot[] {
+  const all = connectionPoints(node, metrics);
+  const world = all.map((spot) => connectionPoint(node, spot, metrics));
+  const apart = (i: number, j: number) => Math.hypot(world[i].x - world[j].x, world[i].y - world[j].y) * zoom >= minGap;
+  return all.filter((spot, index) => !spot.minor || (apart(index, (index + all.length - 1) % all.length) && apart(index, (index + 1) % all.length)));
 }
 
 /** The binding for a connector end attached at a connection point. */

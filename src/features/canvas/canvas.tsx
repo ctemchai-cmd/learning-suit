@@ -22,6 +22,8 @@ import { constrainPoint, freehandNode, isStepTool, stepNode, type StepTool } fro
 import { GitCanvasOverlay } from "./git-overlay";
 import { LaserPointer, type LaserHandle } from "./laser-pointer";
 import { TextEditorOverlay, type TextSession } from "./text-editor";
+import { ShapeTextEditorOverlay, type ShapeSession } from "./shape-text-editor";
+import { isShape, topShapeAt, withShapeText, type Shape as ShapeNode } from "@/domain/document/shape-text";
 import { TableCellEditor, TableColumnHandles } from "./table-editor";
 import { CodeEditorOverlay } from "./code-editor";
 import { QuickProperties } from "./quick-properties";
@@ -175,6 +177,11 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   const [nudgePreview, setNudgePreview] = useState<CanvasNode[] | null>(null);
   const [textSession, setTextSession] = useState<TextSession | null>(null);
   const textSessionRef = useRef<TextSession | null>(null);
+  const [shapeSession, setShapeSession] = useState<ShapeSession | null>(null);
+  const shapeSessionRef = useRef<ShapeSession | null>(null);
+  const startShapeEditRef = useRef<(node: ShapeNode) => void>(() => {});
+  /** Where the last press on the board (Select tool) was: a double-click that moved since is a drag, not a double-click. */
+  const lastDown = useRef<Point | null>(null);
   const [fontsVersion, setFontsVersion] = useState(0);
 
   const tool = useEditorStore((state) => state.tool);
@@ -351,7 +358,10 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   };
   const beginGesture = (next: Gesture, event: ReactPointerEvent<HTMLDivElement>) => {
     gesture.current = next;
-    event.currentTarget.setPointerCapture(event.pointerId);
+    // Capture keeps the stream coming when the pointer leaves the board. It can be refused (the pointer is no
+    // longer active, a remote-desktop/screen-sharing app replays events): the gesture must still start cleanly,
+    // never be left half-registered (`gesture.current` set while the store says "idle").
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { trace("setPointerCapture refused"); }
     setGestureActive(true);
   };
   const endGesture = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -401,16 +411,51 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     return true;
   };
 
+  /** Typing inside a rectangle / ellipse: the same session flow as a text box (pending edit, one transaction, one Undo). */
+  const openShape = (session: ShapeSession) => {
+    shapeSessionRef.current = session;
+    setShapeSession(session);
+    setPendingEdit({ kind: "shape", slideId: session.slideId, nodeId: session.draft.id, before: session.before, draft: session.draft });
+  };
+  const finishShape = (commit: boolean): boolean => {
+    const session = shapeSessionRef.current;
+    if (!session) return true;
+    // Claim the session first (selection changes below flush pending edits, which must not commit it twice).
+    shapeSessionRef.current = null;
+    const state = useEditorStore.getState();
+    if (commit && state.writable) {
+      const found = state.history?.content.document.slides.find((item) => item.id === session.slideId)?.nodes.find((node) => node.id === session.before.id);
+      const current = found && isShape(found) && !found.locked ? found : null;
+      const { text = "", fontSize, color } = session.draft;
+      const bold = session.draft.bold || undefined;
+      if (current && (text !== (current.text ?? "") || bold !== (current.bold || undefined) || fontSize !== current.fontSize || color !== current.color)) {
+        const next = withShapeText({ ...current, bold, fontSize, color }, text);
+        for (const key of ["bold", "fontSize", "color"] as const) if (next[key] === undefined) delete next[key];
+        const removed = !text.trim() && Boolean(current.text);
+        const ok = state.transact({ label: removed ? "ลบข้อความในรูปทรง" : "แก้ข้อความในรูปทรง", affectedSlideId: session.slideId, commands: [{ type: "nodes.replace", slideId: session.slideId, nodes: [next] }] });
+        if (!ok) { shapeSessionRef.current = session; return false; }
+      }
+    }
+    setShapeSession(null);
+    state.setPendingEdit(null);
+    return true;
+  };
+
   // Recovered pending text draft after reload (PST-03 / TXT-03).
   const recoveredEdit = useEditorStore((state) => state.recoveredEdit);
   useEffect(() => {
-    if (!recoveredEdit || (recoveredEdit.kind !== "text" && recoveredEdit.kind !== "code") || recoveredEdit.slideId !== slide.id || textSessionRef.current) return;
+    if (!recoveredEdit || (recoveredEdit.kind !== "text" && recoveredEdit.kind !== "code" && recoveredEdit.kind !== "shape") || recoveredEdit.slideId !== slide.id || textSessionRef.current || shapeSessionRef.current) return;
     const edit = useEditorStore.getState().consumeRecoveredEdit();
     // A code draft reopens its code block with the typed text.
     if (edit?.kind === "code") { useEditorStore.getState().setCodeEdit({ slideId: edit.slideId, nodeId: edit.nodeId, draft: edit.draft.code }); return; }
+    if (edit?.kind === "shape") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      openShape({ slideId: edit.slideId, before: edit.before, draft: edit.draft });
+      useEditorStore.getState().setSelectedIds([edit.nodeId]);
+      return;
+    }
     if (edit?.kind !== "text") return;
     // Opening the recovered editor is the purpose of this effect.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     openText({ slideId: edit.slideId, before: edit.before, draft: edit.draft });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recoveredEdit, slide.id]);
@@ -427,6 +472,15 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     if (!cell || !setSelectedIds([node.id])) return;
     setTableEdit({ slideId: slide.id, nodeId: node.id, ...cell, selectAll });
   };
+  const startEditingShape = (node: ShapeNode) => {
+    if (!writable || node.locked || shapeSessionRef.current?.draft.id === node.id) return;
+    // Inside a group the first double-click only picks the piece; the next one (piece already alone) types in it.
+    const alone = selectedIds.length === 1 && selectedIds[0] === node.id;
+    if (node.groupId && !alone) { setSelectedIds([node.id]); return; }
+    setSelectedIds([node.id]);
+    openShape({ slideId: slide.id, before: node, draft: structuredClone(node) });
+  };
+  useLayoutEffect(() => { startShapeEditRef.current = startEditingShape; });
   const startEditingText = (node: TextNode) => {
     if (!writable || node.locked || textSessionRef.current?.draft.id === node.id) return;
     setSelectedIds([node.id]);
@@ -467,6 +521,10 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     trace(`down ${event.pointerType} b${event.button} ${tool}${gesture.current ? ` (busy: ${gesture.current.kind})` : ""}${event.target !== event.currentTarget && !(event.target instanceof HTMLCanvasElement) ? " (on overlay)" : ""}`);
     if (event.target !== event.currentTarget && !(event.target instanceof HTMLCanvasElement)) return;
+    // The same pointer pressing again means the release of its previous gesture never reached the board (released
+    // over another window, a screen-sharing app, an OS gesture): finish that one (what was drawn is kept) instead of
+    // swallowing this press as "busy", which made the next click do nothing.
+    if (gesture.current && gesture.current.pointerId === event.pointerId) { trace(`down while ${gesture.current.kind} never released`); interruptGesture(); }
     if (gesture.current || (event.button !== 0 && event.button !== 1)) return;
     // Ctrl+click is the Mac right-click: it opens the board menu, it must not draw a dot.
     if (event.button === 0 && event.ctrlKey) return;
@@ -497,6 +555,7 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       // deliver dblclick to the viewport, so the second press on the same text node opens the editor.
       const previous = lastPress.current;
       lastPress.current = hit ? { id: hit.id, time: event.timeStamp, x: screen.x, y: screen.y } : null;
+      lastDown.current = screen;
       if (hit?.type === "text" && previous?.id === hit.id && event.timeStamp - previous.time < 450 && Math.hypot(screen.x - previous.x, screen.y - previous.y) < 6) {
         lastPress.current = null;
         // Suppress the compatibility mousedown so its default focus change cannot blur the new editor.
@@ -566,6 +625,8 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       return;
     }
     if (current.pointerId !== event.pointerId) return;
+    // A mouse moving with no button down while a gesture is open: its release was lost (see onPointerDown).
+    if (event.pointerType === "mouse" && event.buttons === 0) { trace("move with no button: release was lost"); interruptGesture(); return; }
     const world = screenToWorld(screen, camera);
     switch (current.kind) {
       case "panning": {
@@ -748,6 +809,16 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     // Pointer capture retargets the click/dblclick to the viewport container.
     if (tool !== "select" || !(event.target instanceof HTMLCanvasElement || event.target === event.currentTarget)) return;
     const hit = nodeAt(pointerOf(event));
+    // A rectangle / ellipse (also unfilled, inside its outline, unless something above it is hit first): type in it.
+    // (Not when the press moved — a click followed at once by a drag — nor while another editor is open.)
+    const screen = pointerOf(event);
+    const inside = topShapeAt(slide.nodes, screenToWorld(screen, camera));
+    const shapeHit = hit && isShape(hit) ? hit : inside && (!hit || slide.nodes.indexOf(inside) > slide.nodes.indexOf(hit)) ? inside : null;
+    if (shapeHit) {
+      const still = !lastDown.current || Math.hypot(screen.x - lastDown.current.x, screen.y - lastDown.current.y) < 6;
+      if (still && !textSessionRef.current && !shapeSessionRef.current) startEditingShape(shapeHit);
+      return;
+    }
     // Inside a group, a double-click picks just that piece.
     if (hit?.groupId && !hit.locked) setSelectedIds([hit.id]);
     if (hit?.type === "text") startEditingText(hit);
@@ -796,6 +867,16 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     const down = (event: KeyboardEvent) => {
       if (!canvasOwnsKeys(event) || event.metaKey || event.ctrlKey) return;
       if (event.code === "Space") { if (!event.repeat) setSpaceDown(true); event.preventDefault(); return; }
+      // Enter on one selected rectangle / ellipse starts typing in it (e.g. right after drawing it).
+      if (event.key === "Enter" && !event.repeat && !event.shiftKey && !event.altKey) {
+        const state = useEditorStore.getState();
+        const picked = state.selectedIds.length === 1 ? slide.nodes.find((node) => node.id === state.selectedIds[0]) : undefined;
+        if (picked && isShape(picked) && !picked.locked && state.writable && state.tool === "select" && !gesture.current) {
+          event.preventDefault();
+          startShapeEditRef.current(picked);
+        }
+        return;
+      }
       if (event.key === "Escape") {
         if (gesture.current || stepDraft || nudge.current) {
           event.preventDefault(); event.stopImmediatePropagation();
@@ -837,10 +918,10 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
   // ------------------------------------------------------------------ render
   const stepPreview = activeStep ? stepNode(activeStep.tool, activeStep.start, activeStep.current, camera.zoom, "preview", toolDefaults) : null;
   const clonePreview = movePreview?.clone ? displayNodes.filter((node) => movePreview.ids.includes(node.id)).map((node) => ({ ...node, x: node.x + movePreview.dx, y: node.y + movePreview.dy } as CanvasNode)) : [];
-  const showHandles = selectable && writable && !movePreview && !textSession && !tableEdit && !codeEdit && selectedNodes.length > 0;
+  const showHandles = selectable && writable && !movePreview && !textSession && !shapeSession && !tableEdit && !codeEdit && selectedNodes.length > 0;
   // File editor and commit buttons of the one selected Git widget (hidden while it is being moved/resized).
   const selectedGit = tool === "select" && selectedNodes.length === 1 && selectedNodes[0].type === "git-simulator" && !selectedNodes[0].locked
-    && !movePreview && !transformPreview && !nudgePreview && !textSession ? selectedNodes[0] : null;
+    && !movePreview && !transformPreview && !nudgePreview && !textSession && !shapeSession ? selectedNodes[0] : null;
   const handleNodes = transformPreview ?? selectedNodes;
   const freehandStyle = freehandPreview ? (freehandPreview.tool === "pen" ? toolDefaults.pen : toolDefaults.highlighter) : null;
   const cursor = spaceDown || tool === "hand" ? "grab" : tool === "laser" ? "none" : tool === "select" ? "default" : tool === "text" ? "text" : tool === "eraser" ? "cell" : "crosshair";
@@ -861,8 +942,10 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
     {size.width > 0 && <Stage ref={stageRef} width={size.width} height={size.height}>
       <GridLayer camera={camera} size={size} />
       <Layer x={camera.x} y={camera.y} scaleX={camera.zoom} scaleY={camera.zoom}>
-        {displayNodes.map((node) => {
-          if (textSession?.draft.id === node.id || erasing?.has(node.id)) return null;
+        {displayNodes.map((original) => {
+          if (textSession?.draft.id === original.id || erasing?.has(original.id)) return null;
+          // The shape being typed in is shown without its text (the editor shows it).
+          const node = shapeSession?.draft.id === original.id && isShape(original) ? withShapeText(original, "") : original;
           const moving = movePreview?.ids.includes(node.id);
           if (!moving && !selectedIds.includes(node.id) && !intersects(cachedBounds(node), viewportWorld)) return null;
           const git = node.type === "git-simulator";
@@ -958,6 +1041,14 @@ export default function Canvas({ slide, favorites, onFavoritesReorder, toolbarPo
       return table?.type === "table" && !table.locked
         ? <TableCellEditor key={`${table.id}:${tableEdit.row}:${tableEdit.col}`} node={table} edit={tableEdit} camera={camera} /> : null;
     })()}
+    {shapeSession && <ShapeTextEditorOverlay session={shapeSession} camera={camera}
+      onChange={(draft) => {
+        const next = { ...shapeSession, draft };
+        shapeSessionRef.current = next;
+        setShapeSession(next);
+        setPendingEdit({ kind: "shape", slideId: next.slideId, nodeId: draft.id, before: next.before, draft });
+      }}
+      onFinish={finishShape} />}
     {textSession && <TextEditorOverlay session={textSession} camera={camera}
       onChange={(draft) => {
         const next = { ...textSession, draft };

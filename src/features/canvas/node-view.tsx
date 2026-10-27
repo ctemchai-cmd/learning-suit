@@ -10,12 +10,13 @@ import { SshWidgetView } from "@/features/ssh-simulator/ssh-widget-view";
 import type { FlowPlay } from "@/features/flow/flow-session";
 import { GitWidgetView } from "@/features/git-simulator/git-widget-view";
 import type { GitPreview, GitTab, GitTransferAnimation } from "@/features/git-simulator/session-store";
-import { CANVAS_FONT } from "./font-metrics";
+import { CANVAS_FONT, displayLines } from "./font-metrics";
 import { useAssetImage } from "./image-cache";
 import { StencilBody } from "./stencil-view";
 import { TableBody } from "./table-view";
 import { CodeBody } from "./code-view";
 import { connectorPath } from "@/domain/document/connector-route";
+import { shapeTextBox, shapeTextStyle, type Shape } from "@/domain/document/shape-text";
 
 // Shared node renderer (ADR 0002): the editor and the offscreen export draw the same views
 // from Drawing info. Selection chrome is never drawn here.
@@ -41,15 +42,31 @@ function ImageBody({ node, hitWidth }: { node: ImageNode; hitWidth: number }) {
   </>;
 }
 
+/** Text inside a rectangle / ellipse: centred in the shape's inner box, cut with "…" when it does not fit. Never hit-tested. */
+function ShapeLabel({ node }: { node: Shape }) {
+  const style = shapeTextStyle(node);
+  if (!style) return null;
+  const box = shapeTextBox(node);
+  const lines = displayLines(style.text, box.width, style.fontSize, style.bold, box.height / (style.fontSize * style.lineHeight));
+  return <Text x={box.x} y={box.y} width={box.width} height={box.height} text={lines.join("\n")} fontSize={style.fontSize} fontFamily={CANVAS_FONT}
+    fontStyle={style.bold ? "bold" : "normal"} lineHeight={style.lineHeight} fill={style.color} align="center" verticalAlign="middle" wrap="none" listening={false} />;
+}
+
 /** Body of a node in its local coordinate frame (the caller positions/rotates the Group). */
 export function NodeBody({ node, hitWidth = 8, git, flow }: { node: CanvasNode; hitWidth?: number; git?: GitViewOptions; flow?: FlowPlay | null }) {
   switch (node.type) {
     case "rectangle":
-      return <Rect width={node.width} height={node.height} stroke={node.stroke} strokeWidth={node.strokeWidth}
-        dash={dashFor(node.strokeStyle, node.strokeWidth)} fill={node.fill === "transparent" ? undefined : node.fill} hitStrokeWidth={Math.max(node.strokeWidth, hitWidth)} />;
+      return <>
+        <Rect width={node.width} height={node.height} stroke={node.stroke} strokeWidth={node.strokeWidth}
+          dash={dashFor(node.strokeStyle, node.strokeWidth)} fill={node.fill === "transparent" ? undefined : node.fill} hitStrokeWidth={Math.max(node.strokeWidth, hitWidth)} />
+        <ShapeLabel node={node} />
+      </>;
     case "ellipse":
-      return <Ellipse x={node.width / 2} y={node.height / 2} radiusX={node.width / 2} radiusY={node.height / 2} stroke={node.stroke} strokeWidth={node.strokeWidth}
-        dash={dashFor(node.strokeStyle, node.strokeWidth)} fill={node.fill === "transparent" ? undefined : node.fill} hitStrokeWidth={Math.max(node.strokeWidth, hitWidth)} />;
+      return <>
+        <Ellipse x={node.width / 2} y={node.height / 2} radiusX={node.width / 2} radiusY={node.height / 2} stroke={node.stroke} strokeWidth={node.strokeWidth}
+          dash={dashFor(node.strokeStyle, node.strokeWidth)} fill={node.fill === "transparent" ? undefined : node.fill} hitStrokeWidth={Math.max(node.strokeWidth, hitWidth)} />
+        <ShapeLabel node={node} />
+      </>;
     case "line":
       return <Line points={flat(connectorPath(node).points)} bezier={node.route === "curved"} stroke={node.stroke} strokeWidth={node.strokeWidth} dash={dashFor(node.strokeStyle, node.strokeWidth)}
         lineCap="round" lineJoin="round" hitStrokeWidth={Math.max(node.strokeWidth, hitWidth)} />;
@@ -62,8 +79,8 @@ export function NodeBody({ node, hitWidth = 8, git, flow }: { node: CanvasNode; 
       return <Line points={flat(node.points)} stroke={node.stroke} strokeWidth={node.strokeWidth} dash={dashFor(node.strokeStyle, node.strokeWidth)}
         tension={0} lineCap="round" lineJoin="round" hitStrokeWidth={Math.max(node.strokeWidth, hitWidth)} />;
     case "text":
-      return <Text text={node.text} width={node.width} fontSize={node.fontSize} fontFamily={CANVAS_FONT} fontStyle={node.bold ? "bold" : "normal"}
-        lineHeight={node.lineHeight} fill={node.color} align={node.align} wrap="word" />;
+      return <Text text={displayLines(node.text, node.width, node.fontSize, Boolean(node.bold)).join("\n")} width={node.width} fontSize={node.fontSize} fontFamily={CANVAS_FONT}
+        fontStyle={node.bold ? "bold" : "normal"} lineHeight={node.lineHeight} fill={node.color} align={node.align} wrap="none" />;
     case "image":
       return <ImageBody node={node} hitWidth={hitWidth} />;
     case "stencil":

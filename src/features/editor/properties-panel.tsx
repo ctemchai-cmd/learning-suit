@@ -7,12 +7,12 @@ import { DEFAULTS, LIMITS } from "@/domain/document/limits";
 import { useEditorStore, type EditorTool } from "./store";
 import type { ToolDefaults } from "./tool-defaults";
 import { insertColumn, insertRow } from "@/domain/document/table";
-import { CODE_LABEL } from "@/domain/document/code";
+import { CODE_LABEL, DEFAULT_CODE } from "@/domain/document/code";
 import { CODE_LANGUAGES, type CodeLanguage } from "@/domain/document/model";
 
-import { applyField, supports, type Field } from "./property-fields";
+import { applyField, fieldValue, supports, type Field } from "./property-fields";
 
-const read = (node: CanvasNode, field: Field): unknown => (node as unknown as Record<string, unknown>)[field];
+const read = fieldValue;
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 /** Range / color inputs: preview on `input`, commit once on native `change` (release / picker close). */
@@ -216,6 +216,16 @@ export default function PropertiesPanel({ slide, selected, writable, lockSelecte
     if (!nodes.length) return;
     transact({ label: "แก้คุณสมบัติวัตถุ", affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes }] });
   };
+  // Picking a language swaps the code too, but only while it is still the untouched sample of the old language.
+  const changeLanguage = (language: CodeLanguage) => {
+    const current = useEditorStore.getState().history?.content.document.slides.find((item) => item.id === slideId);
+    const fresh = current?.nodes.filter((node) => targetIds.includes(node.id) && !node.locked) ?? [];
+    const untouched = fresh.length > 0 && fresh.every((node) => node.type === "code" && node.code === DEFAULT_CODE[node.language]);
+    if (!untouched) { commit("language", language); return; }
+    setPropertyPreview(null);
+    const nodes = fresh.map((node) => ({ ...node, language, code: DEFAULT_CODE[language] }) as typeof node);
+    transact({ label: "แก้คุณสมบัติวัตถุ", affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes }] });
+  };
   const opacity = valueOf("opacity");
   const stroke = valueOf("stroke");
   const strokeWidth = valueOf("strokeWidth");
@@ -252,7 +262,7 @@ export default function PropertiesPanel({ slide, selected, writable, lockSelecte
       <p className="muted text-xs">ดับเบิลคลิกเพื่อแก้โค้ด · Tab เยื้อง (⇧Tab ถอย) · Enter ขึ้นบรรทัดพร้อมเยื้องให้ · ลากมุมเพื่อย่อ/ขยาย</p>
       <label className="block">ภาษา{valueOf("language").mixed && <span className="ml-1 text-xs muted">(หลายค่า)</span>}
         <select className="field mt-2" aria-label="ภาษาของโค้ด" value={valueOf("language").mixed ? "" : String(valueOf("language").value)} disabled={!writable}
-          onChange={(event) => commit("language", event.target.value as CodeLanguage)}>
+          onChange={(event) => changeLanguage(event.target.value as CodeLanguage)}>
           {valueOf("language").mixed && <option value="" disabled>หลายค่า</option>}
           {CODE_LANGUAGES.map((language) => <option key={language} value={language}>{CODE_LABEL[language]}</option>)}
         </select>
@@ -290,6 +300,16 @@ export default function PropertiesPanel({ slide, selected, writable, lockSelecte
         const bold = selected.filter((node) => node.type === "text").every((node) => node.type === "text" && node.bold);
         return <button type="button" className={`app-button w-full ${bold ? "!border-slate-800 !bg-slate-900 !text-white" : ""}`} aria-pressed={bold} disabled={!writable}
           title="ตัวหนาทั้งกล่อง (⌘B)" onClick={() => commit("bold", !bold)}><Bold size={15} /> ตัวหนา</button>;
+      })()}
+    </>}
+    {!common("align") && common("bold") && <>
+      <p className="muted text-xs">ดับเบิลคลิกรูปทรง (หรือกด Enter) เพื่อแก้ข้อความข้างใน · ลบข้อความให้ว่างเพื่อเอาออก</p>
+      <ColorField label="สีข้อความ" value={String(valueOf("color").value)} mixed={valueOf("color").mixed} disabled={!writable} onPreview={(value) => preview("color", value)} onCommit={(value) => commit("color", value)} onCancel={() => setPropertyPreview(null)} />
+      <NumberField label="ขนาดตัวอักษร" value={Number(valueOf("fontSize").value)} mixed={valueOf("fontSize").mixed} min={LIMITS.fontSizeMin} max={LIMITS.fontSizeMax} step={1} disabled={!writable} onCommit={(value) => commit("fontSize", value)} />
+      {(() => {
+        const bold = selected.every((node) => Boolean(read(node, "bold")));
+        return <button type="button" className={`app-button w-full ${bold ? "!border-slate-800 !bg-slate-900 !text-white" : ""}`} aria-pressed={bold} disabled={!writable}
+          title="ตัวหนา" onClick={() => commit("bold", !bold)}><Bold size={15} /> ตัวหนา</button>;
       })()}
     </>}
     {common("rotation") && <NumberField label="มุมหมุน (องศา)" value={Number(rotation.value)} mixed={rotation.mixed} min={-360} max={360} step={1} disabled={!writable || selected.length > 1}

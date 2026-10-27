@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent, type R
 import { Bold, Code2, GripVertical, Lock, Minus, Plus, Trash2 } from "lucide-react";
 import type { Bounds, CanvasNode } from "@/domain/document/model";
 import { liveRole, useEditorStore } from "@/features/editor/store";
-import { applyField, supports, type Field } from "@/features/editor/property-fields";
+import { applyField, fieldValue, supports, type Field } from "@/features/editor/property-fields";
 
 // Quick properties (plan 03 §quick properties): a small bar like the favorites toolbar that appears with a
 // selection — colours, width, line style, text size/bold, then Lock and Delete. It sits above the selection
@@ -114,7 +114,7 @@ export function QuickProperties({ nodes, slideId, selection, viewport }: {
   /** A−/A+: each object steps from its own size. */
   const stepFont = (direction: 1 | -1) => {
     const next = latest().filter((node) => supports(node, "fontSize")).flatMap((node) => {
-      const size = (node as unknown as { fontSize: number }).fontSize;
+      const size = Number(fieldValue(node, "fontSize"));
       return applyField([node], "fontSize", Math.round(size * (direction > 0 ? 1.15 : 1 / 1.15)));
     });
     if (next.length) useEditorStore.getState().transact({ label: "เปลี่ยนขนาดตัวอักษร", affectedSlideId: slideId, commands: [{ type: "nodes.replace", slideId, nodes: next }] });
@@ -129,7 +129,7 @@ export function QuickProperties({ nodes, slideId, selection, viewport }: {
   };
 
   const all = (field: Field) => nodes.length > 0 && nodes.every((node) => supports(node, field));
-  const value = (field: Field) => String((nodes.find((node) => supports(node, field)) as unknown as Record<string, unknown> | undefined)?.[field] ?? "");
+  const value = (field: Field) => { const node = nodes.find((item) => supports(item, field)); return String((node && fieldValue(node, field)) ?? ""); };
   const pick = (field: Field) => (colour: string) => { commit(field, colour); setPopover(null); };
 
   // ---- moving the bar by its grip
@@ -202,8 +202,8 @@ export function QuickProperties({ nodes, slideId, selection, viewport }: {
       <BarButton label="ตัวอักษรเล็กลง" onClick={() => stepFont(-1)}><span className="flex items-center text-xs font-bold">A<Minus size={10} /></span></BarButton>
       <BarButton label="ตัวอักษรใหญ่ขึ้น" onClick={() => stepFont(1)}><span className="flex items-center text-sm font-bold">A<Plus size={10} /></span></BarButton>
     </>}
-    {all("bold") && <BarButton label="ตัวหนา (⌘B)" active={nodes.every((node) => node.type === "text" && node.bold)}
-      onClick={() => commit("bold", !nodes.every((node) => node.type === "text" && node.bold))}><Bold size={15} /></BarButton>}
+    {all("bold") && <BarButton label="ตัวหนา (⌘B)" active={nodes.every((node) => Boolean(fieldValue(node, "bold")))}
+      onClick={() => commit("bold", !nodes.every((node) => Boolean(fieldValue(node, "bold"))))}><Bold size={15} /></BarButton>}
     {all("theme") && <BarButton label={value("theme") === "dark" ? "ธีมโค้ด: มืด (กดเป็นสว่าง)" : "ธีมโค้ด: สว่าง (กดเป็นมืด)"} active={value("theme") === "dark"}
       onClick={() => commit("theme", value("theme") === "dark" ? "light" : "dark")}><Code2 size={15} /></BarButton>}
     <span aria-hidden className="mx-0.5 h-5 w-px bg-slate-200" />

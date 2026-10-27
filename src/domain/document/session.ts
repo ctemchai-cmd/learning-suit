@@ -1,10 +1,11 @@
 import type { FileSnapshot, MachineId } from "../git/model";
-import type { CodeNode, ProjectContent, TextNode } from "./model";
+import type { CodeNode, EllipseNode, ProjectContent, RectNode, TextNode } from "./model";
 
 export type Camera = { x: number; y: number; zoom: number };
 
 export type PendingEdit =
   | { kind: "text"; slideId: string; nodeId: string; before: TextNode | null; draft: TextNode }
+  | { kind: "shape"; slideId: string; nodeId: string; before: RectNode | EllipseNode; draft: RectNode | EllipseNode }
   | { kind: "git-file"; slideId: string; nodeId: string; machine: MachineId; before: FileSnapshot; draft: FileSnapshot }
   | { kind: "code"; slideId: string; nodeId: string; before: CodeNode; draft: CodeNode };
 

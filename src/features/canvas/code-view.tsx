@@ -12,11 +12,13 @@ type Theme = { bg: string; header: string; border: string; label: string; gutter
 export const CODE_THEMES: Record<CodeNode["theme"], Theme> = {
   dark: {
     bg: "#0F172A", header: "#1E293B", border: "#1E293B", label: "#94A3B8", gutter: "#475569",
-    colors: { plain: "#E2E8F0", keyword: "#C084FC", string: "#86EFAC", comment: "#64748B", number: "#FDBA74", function: "#7DD3FC", builtin: "#67E8F9", tag: "#F87171", attr: "#FCD34D" },
+    colors: { plain: "#E2E8F0", keyword: "#C084FC", string: "#86EFAC", comment: "#64748B", number: "#FDBA74", function: "#7DD3FC", builtin: "#67E8F9", tag: "#F87171", attr: "#FCD34D",
+      prompt: "#7C8AA5", command: "#7DD3FC", flag: "#FCD34D", variable: "#F0ABFC", operator: "#FB923C", path: "#5EEAD4", output: "#94A3B8", error: "#F87171", warning: "#FBBF24", success: "#4ADE80" },
   },
   light: {
     bg: "#F8FAFC", header: "#EEF2F7", border: "#CBD5E1", label: "#64748B", gutter: "#94A3B8",
-    colors: { plain: "#0F172A", keyword: "#7C3AED", string: "#15803D", comment: "#94A3B8", number: "#C2410C", function: "#2563EB", builtin: "#0E7490", tag: "#DC2626", attr: "#B45309" },
+    colors: { plain: "#0F172A", keyword: "#7C3AED", string: "#15803D", comment: "#94A3B8", number: "#C2410C", function: "#2563EB", builtin: "#0E7490", tag: "#DC2626", attr: "#B45309",
+      prompt: "#7B8798", command: "#1D4ED8", flag: "#9A6700", variable: "#A21CAF", operator: "#C2410C", path: "#0F766E", output: "#475569", error: "#DC2626", warning: "#B45309", success: "#15803D" },
   },
 };
 

@@ -820,3 +820,39 @@ test("CAN-29: every line of a class box has its own connection points; an arrow 
   await page.getByRole("menuitem", { name: "เพิ่มบรรทัดด้านล่าง" }).click();
   await expect.poll(async () => (await nodes()).find((node) => node.type === "arrow")!.startBinding!.row).toBe(3);
 });
+
+test("CAN-30: a pointer release that never reached the board does not make the next click do nothing", async ({ page }) => {
+  await createProject(page, "ปล่อยเมาส์หาย");
+  const box = await stageBox(page);
+  await page.getByRole("button", { name: "ปากกา", exact: true }).click();
+  const viewport = page.getByTestId("canvas-viewport");
+  // Plays a pointer stream straight into the board (no real device), so the release can be left out.
+  const send = (type: string, x: number, y: number, init: { id: number; kind: "mouse" | "pen"; buttons: number }) => viewport.evaluate((element, args) => {
+    element.dispatchEvent(new PointerEvent(args.type, { bubbles: true, cancelable: true, pointerId: args.id, pointerType: args.kind, button: 0, buttons: args.buttons, clientX: args.x, clientY: args.y }));
+  }, { type, x, y, ...init });
+  const pens = async () => ((await readDraft(page))!.content.document.slides[0].nodes as { type: string }[]).filter((node) => node.type === "pen").length;
+
+  // A pen presses, draws, and its release is lost; pressing again must finish that stroke and start a new one.
+  const pen = { id: 41, kind: "pen" as const };
+  await send("pointerdown", box.cx - 200, box.cy - 100, { ...pen, buttons: 1 });
+  await send("pointermove", box.cx - 150, box.cy - 80, { ...pen, buttons: 1 });
+  await send("pointermove", box.cx - 100, box.cy - 100, { ...pen, buttons: 1 });
+  await send("pointerdown", box.cx, box.cy - 100, { ...pen, buttons: 1 });
+  await send("pointermove", box.cx + 50, box.cy - 80, { ...pen, buttons: 1 });
+  await send("pointermove", box.cx + 100, box.cy - 100, { ...pen, buttons: 1 });
+  await send("pointerup", box.cx + 100, box.cy - 100, { ...pen, buttons: 0 });
+  await expect.poll(pens).toBe(2);
+
+  // A mouse that moves with no button down while a stroke is open: the release was lost, the stroke is kept.
+  const mouse = { id: 42, kind: "mouse" as const };
+  await send("pointerdown", box.cx - 200, box.cy + 60, { ...mouse, buttons: 1 });
+  await send("pointermove", box.cx - 150, box.cy + 80, { ...mouse, buttons: 1 });
+  await send("pointermove", box.cx - 100, box.cy + 60, { ...mouse, buttons: 1 });
+  await send("pointermove", box.cx - 90, box.cy + 60, { ...mouse, buttons: 0 });
+  await expect.poll(pens).toBe(3);
+  // …and the board is free for a normal click-click rectangle straight away.
+  await page.getByRole("button", { name: "สี่เหลี่ยม", exact: true }).click();
+  await page.mouse.click(box.cx + 100, box.cy + 40);
+  await page.mouse.click(box.cx + 220, box.cy + 120);
+  await expect.poll(async () => ((await readDraft(page))!.content.document.slides[0].nodes as { type: string }[]).filter((node) => node.type === "rectangle").length).toBe(1);
+});

@@ -314,7 +314,7 @@ export default function Editor({ ownerId, projectId, opener, resolveRemoteAsset,
   const activeIndex = slide ? slides.findIndex((item) => item.id === slide.id) : -1;
   const canRevealMore = Boolean(writable && slide && pickRevealTarget(slide.nodes, selectedIds));
   const selectedWidget = selected.length === 1 && isWidgetNode(selected[0]) ? selected[0] : null;
-  const editingText = pendingEdit?.kind === "text" || pendingEdit?.kind === "code";
+  const editingText = pendingEdit?.kind === "text" || pendingEdit?.kind === "code" || pendingEdit?.kind === "shape";
   // A retryable Cloud error usually clears on the automatic retry: show the banner only if it lasts (the header says it at once).
   const cloudErrorLasting = useLingering(cloudStatus?.kind === "error" && cloudStatus.retryable, 3000);
   const cloudErrorShown = cloudStatus?.kind === "error" && (!cloudStatus.retryable || cloudErrorLasting);

@@ -4,14 +4,15 @@ import { useRef, useState, type PointerEvent } from "react";
 import type { ArrowNode, CanvasNode, ConnectorBinding, ConnectorSide, Point } from "@/domain/document/model";
 import type { Camera } from "@/domain/document/session";
 import { screenToWorld, worldToScreen } from "@/domain/document/camera";
-import { bindingAt, connectableAt, connectionPoint, connectionPoints, nearestConnectionPoint, sideOf, withLiveConnectors, type ConnectionSpot } from "@/domain/document/connectors";
+import { bindingAt, connectableAt, connectionPoint, connectionPoints, nearestConnectionPoint, offeredConnectionPoints, sideOf, withLiveConnectors, type ConnectionSpot } from "@/domain/document/connectors";
 import { connectorPath } from "@/domain/document/connector-route";
 import { getNodeFrame } from "@/domain/document/transform";
 import { useEditorStore } from "@/features/editor/store";
 import { konvaFontMetrics } from "./font-metrics";
 
 // Connection points (plan 03 §connectors), draw.io style: a selected object shows small dots just outside its
-// outline — three per side (every 30° round an ellipse), all alike and at the same distance. Dragging one draws an
+// outline — seven per side (every 15° round an ellipse; the extra ones only where there is room for them, about
+// 16 px apart), all alike and at the same distance. Dragging one draws an
 // arrow from exactly there; released on another object, it attaches to the dot near the pointer (it lights up) or,
 // anywhere else on the object, to the side facing it; released on empty board it ends there. The dots stay off the
 // outline itself, which is where an unfilled shape is grabbed to move it. New arrows are right-angled (elbow); the
@@ -112,13 +113,15 @@ export function ConnectorHandles({ node, nodes, slideId, camera, containerRef }:
 
   const toScreen = (point: Point) => worldToScreen(point, camera);
   const preview = drag ? arrowOf(drag) : null;
+  const everyPoint = connectionPoints(node, konvaFontMetrics);
   return <>
-    {connectionPoints(node, konvaFontMetrics).map((point, index) => {
+    {offeredConnectionPoints(node, konvaFontMetrics, camera.zoom).map((point, shown) => {
+      const index = everyPoint.findIndex((item) => item.x === point.x && item.y === point.y && item.row === point.row);
       const at = toScreen(connectionPoint(node, point, konvaFontMetrics, POINT_OUT_PX / camera.zoom));
-      const key = `point-${index}`;
+      const key = `point-${index}`; // numbered in the full list, so it does not change with the zoom
       const middle = Math.abs(point.x - 0.5) < 1e-9 || Math.abs(point.y - 0.5) < 1e-9;
       const label = point.row !== undefined ? `แถว ${point.row + 1} ${point.x >= 0.5 ? "ด้านขวา" : "ด้านซ้าย"}`
-        : middle ? LABELS[sideOf(node, point, konvaFontMetrics)] : `จุดเชื่อม ${index + 1}`;
+        : middle ? LABELS[sideOf(node, point, konvaFontMetrics)] : `จุดเชื่อม ${shown + 1}`;
       return <button key={key} type="button" data-board-chrome aria-label={`ลากลูกศรเชื่อมจาก${label}`} title="ลากไปที่วัตถุอื่นเพื่อเชื่อมด้วยลูกศร"
         className={`group absolute z-30 grid h-3 w-3 -translate-x-1/2 -translate-y-1/2 cursor-crosshair touch-none place-items-center rounded-full ${drag && drag.key !== key ? "invisible" : ""}`}
         style={{ left: at.x, top: at.y }}

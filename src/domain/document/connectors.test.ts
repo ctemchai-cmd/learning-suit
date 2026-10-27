@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyDocumentCommand, type DocumentTransaction } from "./commands";
-import { anchorPoint, bindingAt, connectableAt, connectionPoint, connectionPoints, nearestAnchor, nearestConnectionPoint, sideOf, withConnectorUpdates, withLiveConnectors } from "./connectors";
+import { anchorPoint, bindingAt, connectableAt, connectionPoint, connectionPoints, nearestAnchor, offeredConnectionPoints, nearestConnectionPoint, sideOf, withConnectorUpdates, withLiveConnectors } from "./connectors";
 import { connectorPath, elbowLayout } from "./connector-route";
 import { getNodeBounds } from "./geometry";
 import { remapBindings } from "./copy";
@@ -91,15 +91,81 @@ describe("CON-01: connectors follow the objects they are attached to", () => {
 });
 
 describe("CON-02: connection points and elbow / curved routes", () => {
-  it("offers three points per side on boxes (12 round an ellipse) and attaches to the one near a point", () => {
+  it("offers seven points per side on boxes (24 round an ellipse) and attaches to the one near a point", () => {
     const box = rect(1, 0, 0);
-    expect(connectionPoints(box, metrics)).toHaveLength(12);
-    expect(connectionPoints({ ...box, type: "ellipse" } as CanvasNode, metrics)).toHaveLength(12);
+    expect(connectionPoints(box, metrics)).toHaveLength(28);
+    expect(connectionPoints({ ...box, type: "ellipse" } as CanvasNode, metrics)).toHaveLength(24);
     expect(connectionPoint(box, { x: 0.25, y: 1 }, metrics)).toEqual({ x: 25, y: 50 });
     expect(connectionPoint(box, { x: 1, y: 0.25 }, metrics, 6)).toEqual({ x: 106, y: 12.5 }); // pushed straight out of its side
     expect(nearestConnectionPoint(box, { x: 27, y: 53 }, metrics, 10)).toEqual({ x: 0.25, y: 1 });
+    expect(nearestConnectionPoint(box, { x: 14, y: 2 }, metrics, 5)).toEqual({ x: 0.125, y: 0, minor: true }); // an eighth
     expect(nearestConnectionPoint(box, { x: 50, y: 25 }, metrics, 10)).toBeNull();
     expect(sideOf(box, { x: 0.75, y: 0 }, metrics)).toBe("n");
+  });
+
+  it("puts the points every 1/8 of each side, going round clockwise from the top left, the quarters and middle being the main ones", () => {
+    const spots = connectionPoints(rect(1, 0, 0), metrics);
+    const top = spots.slice(0, 7);
+    expect(top.map((spot) => spot.x)).toEqual([1 / 8, 2 / 8, 3 / 8, 4 / 8, 5 / 8, 6 / 8, 7 / 8]);
+    expect(top.every((spot) => spot.y === 0)).toBe(true);
+    expect(spots.slice(7, 14).map((spot) => spot.y)).toEqual([1 / 8, 2 / 8, 3 / 8, 4 / 8, 5 / 8, 6 / 8, 7 / 8]);
+    expect(spots.slice(14, 21).map((spot) => spot.x)).toEqual([7 / 8, 6 / 8, 5 / 8, 4 / 8, 3 / 8, 2 / 8, 1 / 8]);
+    expect(spots.slice(21).map((spot) => spot.y)).toEqual([7 / 8, 6 / 8, 5 / 8, 4 / 8, 3 / 8, 2 / 8, 1 / 8]);
+    expect(spots.filter((spot) => !spot.minor)).toHaveLength(12);
+    // every point the old layout had (quarter, middle, three quarters of each side) is still there
+    const old = [0.25, 0.5, 0.75].flatMap((t) => [{ x: t, y: 0 }, { x: 1, y: t }, { x: t, y: 1 }, { x: 0, y: t }]);
+    for (const point of old) expect(spots.some((spot) => spot.x === point.x && spot.y === point.y && !spot.minor)).toBe(true);
+    expect(new Set(spots.map((spot) => `${spot.x},${spot.y}`)).size).toBe(28);
+    // planted omission: the same check must notice a layout that lost the middle of the top side
+    const lacking = spots.filter((spot) => !(spot.x === 0.5 && spot.y === 0));
+    expect(old.every((point) => lacking.some((spot) => spot.x === point.x && spot.y === point.y))).toBe(false);
+  });
+
+  it("puts an ellipse's points every 15 degrees, the old 30 degree ones being the main ones", () => {
+    const spots = connectionPoints({ ...rect(1, 0, 0), type: "ellipse" } as CanvasNode, metrics);
+    expect(spots).toHaveLength(24);
+    spots.forEach((spot, index) => {
+      expect(spot.x).toBeCloseTo(0.5 + 0.5 * Math.cos(index * Math.PI / 12), 9);
+      expect(spot.y).toBeCloseTo(0.5 + 0.5 * Math.sin(index * Math.PI / 12), 9);
+      expect(Boolean(spot.minor)).toBe(index % 2 === 1);
+    });
+    // the old twelve (every 30 degrees, computed the old way) all coincide with a main point
+    for (let index = 0; index < 12; index++) {
+      const x = 0.5 + 0.5 * Math.cos(index * Math.PI / 6), y = 0.5 + 0.5 * Math.sin(index * Math.PI / 6);
+      expect(spots.some((spot) => !spot.minor && Math.abs(spot.x - x) < 1e-9 && Math.abs(spot.y - y) < 1e-9)).toBe(true);
+    }
+  });
+
+  it("offers the extra points as dots only where they are at least 16 px apart on screen (the quarters and middles always)", () => {
+    const big = rect(1, 0, 0, { width: 400, height: 240 });
+    expect(offeredConnectionPoints(big, metrics, 1)).toHaveLength(28);
+    const medium = rect(1, 0, 0, { width: 120, height: 80 }); // 15 px / 10 px between eighths: only the main ones
+    expect(offeredConnectionPoints(medium, metrics, 1)).toHaveLength(12);
+    expect(offeredConnectionPoints(medium, metrics, 1).every((spot) => !spot.minor)).toBe(true);
+    expect(offeredConnectionPoints(medium, metrics, 1.5)).toHaveLength(20); // zoomed in: top and bottom (22.5 px) get theirs, the sides (15 px) not yet
+    expect(offeredConnectionPoints(medium, metrics, 2)).toHaveLength(28);
+    expect(offeredConnectionPoints(rect(1, 0, 0, { width: 20, height: 10 }), metrics, 1)).toHaveLength(12); // tiny: still the quarters and middles
+    const circle = { ...rect(1, 0, 0, { width: 300, height: 300 }), type: "ellipse" } as CanvasNode;
+    expect(offeredConnectionPoints(circle, metrics, 1)).toHaveLength(24);
+    expect(offeredConnectionPoints({ ...circle, width: 100, height: 100 } as CanvasNode, metrics, 1)).toHaveLength(12);
+  });
+
+  it("keeps an end bound by an older document (quarter / 30 degree points) exactly where it was", () => {
+    const a = rect(1, 0, 0), b = { ...rect(2, 300, 0), type: "ellipse" } as CanvasNode;
+    const start = withNodes([a, b, arrow({
+      route: "elbow",
+      startBinding: { nodeId: uuid(1), anchor: "fixed", at: { x: 1, y: 0.25 } },
+      endBinding: { nodeId: uuid(2), anchor: "fixed", at: { x: 0.5 + 0.5 * Math.cos(Math.PI * 5 / 6), y: 0.5 + 0.5 * Math.sin(Math.PI * 5 / 6) } },
+    })]);
+    expect(() => parseProjectContent(start)).not.toThrow();
+    const s = start.document.slides[0].id;
+    const moved = commit(start, { label: "x", affectedSlideId: null, commands: [{ type: "nodes.replace", slideId: s, nodes: [{ ...a, y: 10 }] }] });
+    const connector = moved.document.slides[0].nodes.find((node) => node.type === "arrow") as ArrowNode;
+    expect(connector.startBinding?.at).toEqual({ x: 1, y: 0.25 });
+    expect(ends(moved)[0]).toEqual({ x: 106, y: 22.5 });
+    const target = connectionPoint(b, connector.endBinding!.at!, metrics, 6);
+    expect(ends(moved)[1].x).toBeCloseTo(target.x, 6);
+    expect(ends(moved)[1].y).toBeCloseTo(target.y, 6);
   });
 
   it("keeps a fixed end on its connection point when the object moves, and records the side each end leaves from", () => {
@@ -150,10 +216,10 @@ describe("CON-03: every row of a table / class box has its own connection points
     headerFill: "#DBEAFE", stroke: "#1F2937", color: "#1F2937", fontSize: 16,
   });
 
-  it("puts one point at each end of every row (plus three on top and bottom)", () => {
+  it("puts one point at each end of every row (plus seven on top and bottom)", () => {
     const node = table(["User", "+ name: string", "+ age: number"]);
     const spots = connectionPoints(node, metrics);
-    expect(spots).toHaveLength(3 + 3 + 3 + 3);
+    expect(spots).toHaveLength(7 + 3 + 7 + 3);
     const rows = spots.filter((spot) => spot.row !== undefined);
     expect(rows.map((spot) => `${spot.row}${spot.x}`).sort()).toEqual(["00", "01", "10", "11", "20", "21"]);
     const layout = tableLayout(node, metrics);

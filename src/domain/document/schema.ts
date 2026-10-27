@@ -32,8 +32,15 @@ const stroke = {
   strokeWidth: z.number().finite().min(0.5).max(64),
   strokeStyle: z.enum(["solid", "dashed"]),
 };
-const rectangle = z.strictObject({ ...base, ...stroke, type: z.literal("rectangle"), width: size, height: size, fill });
-const ellipse = z.strictObject({ ...base, ...stroke, type: z.literal("ellipse"), width: size, height: size, fill });
+// Optional text inside a rectangle / ellipse: bounded like a text node.
+const shapeText = {
+  text: z.string().refine((v) => codePoints(v) <= LIMITS.textCodePoints, "Shape text is too long").optional(),
+  fontSize: z.number().finite().min(8).max(160).optional(),
+  color: color.optional(),
+  bold: z.boolean().optional(),
+};
+const rectangle = z.strictObject({ ...base, ...stroke, ...shapeText, type: z.literal("rectangle"), width: size, height: size, fill });
+const ellipse = z.strictObject({ ...base, ...stroke, ...shapeText, type: z.literal("ellipse"), width: size, height: size, fill });
 const unit = z.number().finite().min(0).max(1);
 const side = z.enum(["n", "e", "s", "w"]);
 const binding = z.strictObject({
